@@ -81,4 +81,5 @@ Content/YI_TankCollection/Textures/Ignore/
 /Plugins/Monolith
 *.pyc
 *.py
-/Content/YI_TankCollection
+/Content/YI_TankCollection/Textures
+/Content/YI_TankCollection/Maps
