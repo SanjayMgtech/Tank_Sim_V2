@@ -120,6 +120,8 @@ void ATSVRPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 	if (IA_Recenter) EIC->BindAction(IA_Recenter, ETriggerEvent::Started, this, &ATSVRPawn::Input_Recenter);
 	if (IA_Interact) EIC->BindAction(IA_Interact, ETriggerEvent::Started, this, &ATSVRPawn::Input_Interact);
 	if (IA_Grab) EIC->BindAction(IA_Grab, ETriggerEvent::Started, this, &ATSVRPawn::Input_Grab);
+	if (IA_Primary) EIC->BindAction(IA_Primary, ETriggerEvent::Started, this, &ATSVRPawn::Input_Primary);
+	if (IA_Secondary) EIC->BindAction(IA_Secondary, ETriggerEvent::Started, this, &ATSVRPawn::Input_Secondary);
 	if (IA_Menu) EIC->BindAction(IA_Menu, ETriggerEvent::Started, this, &ATSVRPawn::Input_Menu);
 
 	if (IA_Drive) EIC->BindAction(IA_Drive, ETriggerEvent::Triggered, this, &ATSVRPawn::Input_Drive);
@@ -141,6 +143,16 @@ void ATSVRPawn::Input_Recenter(const FInputActionValue& Value)
 void ATSVRPawn::Input_Interact(const FInputActionValue& Value)
 {
 	OnInteractPressed();
+}
+
+void ATSVRPawn::Input_Primary(const FInputActionValue& Value)
+{
+	OnPrimaryPressed();
+}
+
+void ATSVRPawn::Input_Secondary(const FInputActionValue& Value)
+{
+	OnSecondaryPressed();
 }
 
 void ATSVRPawn::Input_Grab(const FInputActionValue& Value)
