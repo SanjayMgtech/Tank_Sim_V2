@@ -68,6 +68,12 @@ protected:
 	TObjectPtr<UInputAction> IA_Grab;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_Primary;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_Secondary;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputAction> IA_Menu;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
@@ -99,12 +105,20 @@ protected:
 	void OnGrabPressed();
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|VR")
+	void OnPrimaryPressed();
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|VR")
+	void OnSecondaryPressed();
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|VR")
 	void OnMenuPressed();
 
 private:
 	void Input_Recenter(const FInputActionValue& Value);
 	void Input_Interact(const FInputActionValue& Value);
 	void Input_Grab(const FInputActionValue& Value);
+	void Input_Primary(const FInputActionValue& Value);
+	void Input_Secondary(const FInputActionValue& Value);
 	void Input_Menu(const FInputActionValue& Value);
 	void Input_Drive(const FInputActionValue& Value);
 	void Input_AimTurret(const FInputActionValue& Value);

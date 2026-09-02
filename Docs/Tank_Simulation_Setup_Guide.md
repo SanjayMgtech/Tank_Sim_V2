@@ -160,7 +160,8 @@ visible until they do.
    `GlobalDefaultGameMode` (`DefaultGame.ini`) at it once ready — not changed automatically, to avoid
    overwriting your current demo-map default.
 2. **Enhanced Input assets** (`ATSVRPawn`'s `EditDefaultsOnly` slots, Section 12):
-   - Input Actions: `IA_Interact`, `IA_Grab`, `IA_Menu`, `IA_Recenter` (shared);
+   - Input Actions: `IA_Interact`, `IA_Grab`, `IA_Primary`, `IA_Secondary`, `IA_Menu`, `IA_Recenter`
+     (shared — matches Section 12's exact list);
      `IA_Drive` (Axis2D), `IA_AimTurret` (Axis2D), `IA_FireMainCannon`, `IA_FireMachineGun`,
      `IA_ReloadWeapon`, `IA_RequestIntel` (role-specific).
    - Input Mapping Contexts: `IMC_Shared` (binds the 4 shared actions to VR controller inputs),
