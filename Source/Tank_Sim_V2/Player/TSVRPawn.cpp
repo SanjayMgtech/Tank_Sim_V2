@@ -1,0 +1,204 @@
+#include "Player/TSVRPawn.h"
+
+#include "Camera/CameraComponent.h"
+#include "Engine/Engine.h"
+#include "EnhancedInputComponent.h"
+#include "EnhancedInputSubsystems.h"
+#include "IXRTrackingSystem.h"
+#include "InputAction.h"
+#include "InputMappingContext.h"
+#include "MotionControllerComponent.h"
+#include "Player/TSTankPlayerController.h"
+#include "Player/TSTankPlayerState.h"
+
+ATSVRPawn::ATSVRPawn()
+{
+	PrimaryActorTick.bCanEverTick = false;
+	bReplicates = true;
+
+	VROrigin = CreateDefaultSubobject<USceneComponent>(TEXT("VROrigin"));
+	SetRootComponent(VROrigin);
+
+	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
+	Camera->SetupAttachment(VROrigin);
+
+	LeftHand = CreateDefaultSubobject<UMotionControllerComponent>(TEXT("LeftHand"));
+	LeftHand->SetupAttachment(VROrigin);
+	LeftHand->MotionSource = FName(TEXT("Left"));
+
+	RightHand = CreateDefaultSubobject<UMotionControllerComponent>(TEXT("RightHand"));
+	RightHand->SetupAttachment(VROrigin);
+	RightHand->MotionSource = FName(TEXT("Right"));
+}
+
+ATSTankPlayerController* ATSVRPawn::GetTankController() const
+{
+	return Cast<ATSTankPlayerController>(GetController());
+}
+
+void ATSVRPawn::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+
+	if (ATSTankPlayerState* PS = NewController ? NewController->GetPlayerState<ATSTankPlayerState>() : nullptr)
+	{
+		ApplyRoleMappingContext(PS->GetCrewRole());
+		PS->OnAssignmentChanged.AddDynamic(this, &ATSVRPawn::ApplyRoleMappingContext_FromPlayerState);
+	}
+}
+
+void ATSVRPawn::ApplyRoleMappingContext_FromPlayerState()
+{
+	if (const ATSTankPlayerState* PS = GetController() ? GetController()->GetPlayerState<ATSTankPlayerState>() : nullptr)
+	{
+		ApplyRoleMappingContext(PS->GetCrewRole());
+	}
+}
+
+void ATSVRPawn::ApplyRoleMappingContext(ETSCrewRole NewRole)
+{
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	ULocalPlayer* LocalPlayer = PC ? PC->GetLocalPlayer() : nullptr;
+	if (!LocalPlayer)
+	{
+		return;
+	}
+
+	UEnhancedInputLocalPlayerSubsystem* Subsystem = LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>();
+	if (!Subsystem)
+	{
+		return;
+	}
+
+	for (UInputMappingContext* RoleContext : { DriverMappingContext, GunnerMappingContext, CommanderMappingContext })
+	{
+		if (RoleContext)
+		{
+			Subsystem->RemoveMappingContext(RoleContext);
+		}
+	}
+
+	UInputMappingContext* ContextToAdd = nullptr;
+	switch (NewRole)
+	{
+	case ETSCrewRole::Driver: ContextToAdd = DriverMappingContext; break;
+	case ETSCrewRole::Gunner: ContextToAdd = GunnerMappingContext; break;
+	case ETSCrewRole::Commander: ContextToAdd = CommanderMappingContext; break;
+	default: break;
+	}
+
+	if (ContextToAdd)
+	{
+		Subsystem->AddMappingContext(ContextToAdd, 1);
+	}
+}
+
+void ATSVRPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+	Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		if (ULocalPlayer* LocalPlayer = PC->GetLocalPlayer())
+		{
+			if (UEnhancedInputLocalPlayerSubsystem* Subsystem = LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
+			{
+				if (SharedMappingContext)
+				{
+					Subsystem->AddMappingContext(SharedMappingContext, 0);
+				}
+			}
+		}
+	}
+
+	UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent);
+	if (!EIC)
+	{
+		return;
+	}
+
+	if (IA_Recenter) EIC->BindAction(IA_Recenter, ETriggerEvent::Started, this, &ATSVRPawn::Input_Recenter);
+	if (IA_Interact) EIC->BindAction(IA_Interact, ETriggerEvent::Started, this, &ATSVRPawn::Input_Interact);
+	if (IA_Grab) EIC->BindAction(IA_Grab, ETriggerEvent::Started, this, &ATSVRPawn::Input_Grab);
+	if (IA_Menu) EIC->BindAction(IA_Menu, ETriggerEvent::Started, this, &ATSVRPawn::Input_Menu);
+
+	if (IA_Drive) EIC->BindAction(IA_Drive, ETriggerEvent::Triggered, this, &ATSVRPawn::Input_Drive);
+	if (IA_AimTurret) EIC->BindAction(IA_AimTurret, ETriggerEvent::Triggered, this, &ATSVRPawn::Input_AimTurret);
+	if (IA_FireMainCannon) EIC->BindAction(IA_FireMainCannon, ETriggerEvent::Started, this, &ATSVRPawn::Input_FireMainCannon);
+	if (IA_FireMachineGun) EIC->BindAction(IA_FireMachineGun, ETriggerEvent::Triggered, this, &ATSVRPawn::Input_FireMachineGun);
+	if (IA_ReloadWeapon) EIC->BindAction(IA_ReloadWeapon, ETriggerEvent::Started, this, &ATSVRPawn::Input_ReloadWeapon);
+	if (IA_RequestIntel) EIC->BindAction(IA_RequestIntel, ETriggerEvent::Started, this, &ATSVRPawn::Input_RequestIntel);
+}
+
+void ATSVRPawn::Input_Recenter(const FInputActionValue& Value)
+{
+	if (GEngine && GEngine->XRSystem.IsValid())
+	{
+		GEngine->XRSystem->ResetOrientationAndPosition();
+	}
+}
+
+void ATSVRPawn::Input_Interact(const FInputActionValue& Value)
+{
+	OnInteractPressed();
+}
+
+void ATSVRPawn::Input_Grab(const FInputActionValue& Value)
+{
+	OnGrabPressed();
+}
+
+void ATSVRPawn::Input_Menu(const FInputActionValue& Value)
+{
+	OnMenuPressed();
+}
+
+void ATSVRPawn::Input_Drive(const FInputActionValue& Value)
+{
+	const FVector2D Axis = Value.Get<FVector2D>();
+	if (ATSTankPlayerController* PC = GetTankController())
+	{
+		PC->ServerSetDriveInput(Axis.Y, Axis.X);
+	}
+}
+
+void ATSVRPawn::Input_AimTurret(const FInputActionValue& Value)
+{
+	const FVector2D Axis = Value.Get<FVector2D>();
+	if (ATSTankPlayerController* PC = GetTankController())
+	{
+		PC->ServerAimTurret(FVector_NetQuantize(Axis.X, Axis.Y, 0.f));
+	}
+}
+
+void ATSVRPawn::Input_FireMainCannon(const FInputActionValue& Value)
+{
+	if (ATSTankPlayerController* PC = GetTankController())
+	{
+		PC->ServerFireMainCannon();
+	}
+}
+
+void ATSVRPawn::Input_FireMachineGun(const FInputActionValue& Value)
+{
+	if (ATSTankPlayerController* PC = GetTankController())
+	{
+		PC->ServerFireMachineGun();
+	}
+}
+
+void ATSVRPawn::Input_ReloadWeapon(const FInputActionValue& Value)
+{
+	if (ATSTankPlayerController* PC = GetTankController())
+	{
+		PC->ServerRequestReload();
+	}
+}
+
+void ATSVRPawn::Input_RequestIntel(const FInputActionValue& Value)
+{
+	if (ATSTankPlayerController* PC = GetTankController())
+	{
+		PC->ServerRequestCommanderIntelRefresh();
+	}
+}
