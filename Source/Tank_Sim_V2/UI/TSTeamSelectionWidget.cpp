@@ -8,6 +8,6 @@ void UTSTeamSelectionWidget::NotifyTeamSelected(ETSTeamId TeamId)
 
 	if (ATSTankPlayerController* PC = GetOwningPlayer<ATSTankPlayerController>())
 	{
-		PC->ServerRequestTeam(TeamId);
+		PC->ServerRequestTeamChange(TeamId);
 	}
 }
