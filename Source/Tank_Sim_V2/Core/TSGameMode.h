@@ -9,6 +9,7 @@
 #include "TSGameMode.generated.h"
 
 class ATSTankPlayerController;
+class ATSTank;
 
 UCLASS()
 class ATSGameMode : public AGameModeBase
@@ -21,13 +22,24 @@ public:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void Logout(AController* Exiting) override;
 
-	// Server only. Called from ATSTankPlayerController::ServerRequestTeam. Returns false if the team
-	// is full or invalid; on success the player's previous role (if any) is released.
-	bool RequestTeamAssignment(ATSTankPlayerController* Controller, ETSTeamId RequestedTeam);
+	// Server only. Called from ATSTankPlayerController::ServerRequestTeamChange. Returns false if the
+	// team is full or invalid; on success the player's previous role (if any) is released. Takes
+	// APlayerController (not the ATS-specific subclass) to match the Developer 1 shared contract
+	// (Tank_Simulation_Developer_Documentation.pdf Section 3 "Suggested API").
+	bool TryAssignTeam(APlayerController* Player, ETSTeamId Team);
 
-	// Server only. Called from ATSTankPlayerController::ServerRequestRole. Requires a team to already
-	// be assigned. Spawns the team's tank on first role request if it does not exist yet.
-	bool RequestRoleAssignment(ATSTankPlayerController* Controller, ETSCrewRole RequestedRole);
+	// Server only. Called from ATSTankPlayerController::ServerRequestRoleChange. Requires a team to
+	// already be assigned. Spawns the team's tank on first role request if it does not exist yet.
+	// Parameter named RequestedRole rather than the DevDoc's literal "Role" - AActor already declares
+	// a (deprecated) member called Role (legacy ENetRole), which C4458 correctly flags as shadowing.
+	bool TryAssignRole(APlayerController* Player, ETSCrewRole RequestedRole);
+
+	// Convenience typed accessor matching the Developer 1 "Suggested API" exactly. Returns null for a
+	// team whose tank was integrated via Path B (implements ITSTankInterface without deriving from
+	// ATSTank) - use ATSGameState::FindTankForTeam for the untyped, always-correct accessor instead
+	// (it's also the one that's actually reachable from clients, since this GameMode instance is not).
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
+	ATSTank* GetTankForTeam(ETSTeamId Team) const;
 
 protected:
 	// Tank Blueprint to spawn per team. Must implement ITSTankInterface - either by deriving from

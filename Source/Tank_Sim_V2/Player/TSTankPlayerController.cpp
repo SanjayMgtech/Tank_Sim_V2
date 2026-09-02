@@ -20,30 +20,30 @@ APawn* ATSTankPlayerController::GetAssignedTank() const
 
 // --- Team / role selection ------------------------------------------------------------------
 
-void ATSTankPlayerController::ServerRequestTeam_Implementation(ETSTeamId RequestedTeam)
+void ATSTankPlayerController::ServerRequestTeamChange_Implementation(ETSTeamId NewTeam)
 {
 	if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
 	{
-		GM->RequestTeamAssignment(this, RequestedTeam);
+		GM->TryAssignTeam(this, NewTeam);
 	}
 }
 
-bool ATSTankPlayerController::ServerRequestTeam_Validate(ETSTeamId RequestedTeam)
+bool ATSTankPlayerController::ServerRequestTeamChange_Validate(ETSTeamId NewTeam)
 {
-	return RequestedTeam != ETSTeamId::None;
+	return NewTeam != ETSTeamId::None;
 }
 
-void ATSTankPlayerController::ServerRequestRole_Implementation(ETSCrewRole RequestedRole)
+void ATSTankPlayerController::ServerRequestRoleChange_Implementation(ETSCrewRole NewRole)
 {
 	if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
 	{
-		GM->RequestRoleAssignment(this, RequestedRole);
+		GM->TryAssignRole(this, NewRole);
 	}
 }
 
-bool ATSTankPlayerController::ServerRequestRole_Validate(ETSCrewRole RequestedRole)
+bool ATSTankPlayerController::ServerRequestRoleChange_Validate(ETSCrewRole NewRole)
 {
-	return RequestedRole != ETSCrewRole::None;
+	return NewRole != ETSCrewRole::None;
 }
 
 // --- Tank gameplay requests ------------------------------------------------------------------

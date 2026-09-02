@@ -21,12 +21,14 @@ public:
 	APawn* GetAssignedTank() const;
 
 	// --- Team / role selection (validated by ATSGameMode) ---------------------------------------
+	// Named to match the Developer 1 shared contract (Tank_Simulation_Developer_Documentation.pdf
+	// Section 3 "Suggested API").
 
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
-	void ServerRequestTeam(ETSTeamId RequestedTeam);
+	void ServerRequestTeamChange(ETSTeamId NewTeam);
 
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
-	void ServerRequestRole(ETSCrewRole RequestedRole);
+	void ServerRequestRoleChange(ETSCrewRole NewRole);
 
 	// --- Tank gameplay requests (validated by the tank's components) ----------------------------
 	// Drive/aim are Unreliable: they are sent every frame of input and a dropped packet is

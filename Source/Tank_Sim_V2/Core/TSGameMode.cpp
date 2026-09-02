@@ -6,6 +6,7 @@
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Player/TSVRPawn.h"
+#include "Tank/TSTank.h"
 #include "Tank/TSTankCrewComponent.h"
 
 namespace
@@ -84,26 +85,26 @@ bool ATSGameMode::IsTeamFull(ETSTeamId TeamId) const
 	return CountPlayersOnTeam(TeamId) >= 3;
 }
 
-bool ATSGameMode::RequestTeamAssignment(ATSTankPlayerController* Controller, ETSTeamId RequestedTeam)
+bool ATSGameMode::TryAssignTeam(APlayerController* Player, ETSTeamId Team)
 {
-	if (!Controller)
+	if (!Player)
 	{
 		return false;
 	}
 
-	ATSTankPlayerState* PS = Controller->GetPlayerState<ATSTankPlayerState>();
-	if (!PS || RequestedTeam == ETSTeamId::None)
+	ATSTankPlayerState* PS = Player->GetPlayerState<ATSTankPlayerState>();
+	if (!PS || Team == ETSTeamId::None)
 	{
 		return false;
 	}
 
-	const int32 RequestedTeamIndex = AllTeams.IndexOfByKey(RequestedTeam);
+	const int32 RequestedTeamIndex = AllTeams.IndexOfByKey(Team);
 	if (RequestedTeamIndex == INDEX_NONE || RequestedTeamIndex >= MaxTeams)
 	{
 		return false;
 	}
 
-	if (IsTeamFull(RequestedTeam))
+	if (IsTeamFull(Team))
 	{
 		return false;
 	}
@@ -117,21 +118,21 @@ bool ATSGameMode::RequestTeamAssignment(ATSTankPlayerController* Controller, ETS
 		}
 	}
 
-	PS->SetTeamId(RequestedTeam);
+	PS->SetTeamId(Team);
 	PS->SetCrewRole(ETSCrewRole::None);
 	PS->SetAssignedTank(nullptr);
 
 	return true;
 }
 
-bool ATSGameMode::RequestRoleAssignment(ATSTankPlayerController* Controller, ETSCrewRole RequestedRole)
+bool ATSGameMode::TryAssignRole(APlayerController* Player, ETSCrewRole RequestedRole)
 {
-	if (!Controller)
+	if (!Player)
 	{
 		return false;
 	}
 
-	ATSTankPlayerState* PS = Controller->GetPlayerState<ATSTankPlayerState>();
+	ATSTankPlayerState* PS = Player->GetPlayerState<ATSTankPlayerState>();
 	if (!PS || PS->GetTeamId() == ETSTeamId::None || RequestedRole == ETSCrewRole::None)
 	{
 		return false;
@@ -161,6 +162,12 @@ bool ATSGameMode::RequestRoleAssignment(ATSTankPlayerController* Controller, ETS
 	}
 
 	return true;
+}
+
+ATSTank* ATSGameMode::GetTankForTeam(ETSTeamId Team) const
+{
+	const ATSGameState* GS = GetGameState<ATSGameState>();
+	return GS ? Cast<ATSTank>(GS->FindTankForTeam(Team)) : nullptr;
 }
 
 bool ATSGameMode::AreAllActiveTeamsFullyCrewed() const

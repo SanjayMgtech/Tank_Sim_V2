@@ -195,8 +195,8 @@ each player's own controller, which always has one.
 
 | RPC | Reliability | Validates | Result |
 |---|---|---|---|
-| `ServerRequestTeam` | Reliable | Team is a real team, not already full | `ATSGameMode::RequestTeamAssignment` |
-| `ServerRequestRole` | Reliable | Player has a team; seat free | `ATSGameMode::RequestRoleAssignment`, spawns the team's tank on first request |
+| `ServerRequestTeamChange` | Reliable | Team is a real team, not already full | `ATSGameMode::TryAssignTeam` |
+| `ServerRequestRoleChange` | Reliable | Player has a team; seat free | `ATSGameMode::TryAssignRole`, spawns the team's tank on first request |
 | `ServerSetDriveInput` | Unreliable | Finite floats in range; sender is the tank's Driver | `UTSTankControlComponent::TryApplyDriveInput` |
 | `ServerAimTurret` | Unreliable | Non-NaN vector; sender is the Gunner | `UTSTankWeaponComponent::TryAimTurret` |
 | `ServerFireMainCannon` | Reliable | Sender is the Gunner; ammo > 0; fire-rate cooldown | `UTSTankWeaponComponent::TryFireMainCannon` |
@@ -281,7 +281,7 @@ no code changes on the framework side.
 | # | Item | How to verify |
 |---|---|---|
 | 1 | Host creates a session, clients join | `WBP_SessionBrowser` → Create, then Join from a second client/PIE instance |
-| 2 | Teams/roles are server-authoritative | Try `ServerRequestRole` from a client with no team assigned — `ATSGameMode::RequestRoleAssignment` returns false |
+| 2 | Teams/roles are server-authoritative | Try `ServerRequestRoleChange` from a client with no team assigned — `ATSGameMode::TryAssignRole` returns false |
 | 3 | Each team has one tank | `ATSGameState::GetTeamTankEntries` has ≤1 entry per `ETSTeamId` |
 | 4 | 3 clients occupy Driver/Gunner/Commander on the same tank | 3 PIE clients pick the same team, different roles; `UTSTankCrewComponent`'s 3 seats fill |
 | 5 | Each role can only do its allowed actions | Have a Driver call `ServerFireMainCannon` — `TryFireMainCannon` returns false (not the Gunner) |
@@ -293,24 +293,30 @@ no code changes on the framework side.
 ## 11. Developer 1 (Multiplayer) contract mapping
 
 `Tank_Simulation_Developer_Documentation.pdf` (the three-developer delivery plan) assigns a specific
-ownership area and "Suggested API" to Developer 1: sessions, GameMode/GameState/PlayerState, teams,
-roles, tank assignment, and authority/security. Everything in that scope was already delivered in §1-§7
-above. This table reconciles that document's suggested names with what's actually implemented, since
-they differ in a couple of deliberate places:
+ownership area and "Suggested API" (its Section 3) to Developer 1: sessions, GameMode/GameState/
+PlayerState, teams, roles, tank assignment, and authority/security. Every responsibility in that scope
+was already delivered in §1-§7 above; this pass renamed the public entry points to match the DevDoc's
+suggested contract exactly, since it's meant to be frozen and shared:
 
-| Suggested (DevDoc) | Actual | Why |
-|---|---|---|
-| `ServerRequestTeamChange(ETSTeamId)` | `ATSTankPlayerController::ServerRequestTeam` | Same contract, different name — nothing calls the suggested name, so adding it would just be a second RPC doing the same thing. |
-| `ServerRequestRoleChange(ETSCrewRole)` | `ATSTankPlayerController::ServerRequestRole` | Same reasoning. |
-| `GameMode::TryAssignTeam` / `TryAssignRole` | `ATSGameMode::RequestTeamAssignment` / `RequestRoleAssignment` | Same signature shape (`Controller`, requested value, returns `bool`); named to match the "Request" verb used everywhere else in this codebase's RPC chain. |
-| `GameMode::GetTankForTeam(ETSTeamId) const` | `ATSGameState::FindTankForTeam(ETSTeamId) const` | Deliberately on GameState, not GameMode: GameMode only exists on the server and clients can never reach it, whereas GameState replicates to everyone — so this lives where Developer-3-style UI code can actually call it. |
-| `ATSTank* GetAssignedTank() const` | `APawn* ATSTankPlayerState::GetAssignedTank() const` | Not a naming choice — a real constraint. Your actual tank Blueprint (`YI_TankCollection`) almost certainly derives from a Chaos vehicle pawn already (§4's Path B), so it can never *be* an `ATSTank`. Typing this as `APawn*` (validated via `ITSTankInterface` at the call sites) is what makes Path B possible at all; typing it as `ATSTank*` would silently break for every tank that doesn't use Path A. |
+- `ATSTankPlayerController::ServerRequestTeam` → **`ServerRequestTeamChange(ETSTeamId NewTeam)`**
+- `ATSTankPlayerController::ServerRequestRole` → **`ServerRequestRoleChange(ETSCrewRole NewRole)`**
+- `ATSGameMode::RequestTeamAssignment(ATSTankPlayerController*, ETSTeamId)` → **`TryAssignTeam(APlayerController* Player, ETSTeamId Team)`** — also widened the parameter from the `ATS`-specific subclass to the plain `APlayerController*` the DevDoc specifies, since the function only ever calls `Player->GetPlayerState<ATSTankPlayerState>()`, which is available on the base `AController` class.
+- `ATSGameMode::RequestRoleAssignment(ATSTankPlayerController*, ETSCrewRole)` → **`TryAssignRole(APlayerController* Player, ETSCrewRole RequestedRole)`** — the parameter is `RequestedRole`, not the DevDoc's literal `Role`: `AActor` already declares a (deprecated) member called `Role` (legacy `ENetRole`), and MSVC's C4458 correctly flags naming a parameter identically as shadowing it. This is the one place the suggested name couldn't be used verbatim.
+- Added **`ATSGameMode::GetTankForTeam(ETSTeamId Team) const`**, returning `ATSTank*` exactly as suggested — it's a thin `Cast<ATSTank>` over `ATSGameState::FindTankForTeam`, the actual single source of truth. It returns `nullptr` for a Path B tank (one that implements `ITSTankInterface` without deriving from `ATSTank`), which is inherent to asking for a specific C++ type that a given tank might not be. `ATSGameState::FindTankForTeam` (returning `APawn*`) is still the one to use from anywhere that needs to work with either integration path — and the only one of the two reachable from clients at all, since `ATSGameMode` only exists on the server.
+
+One thing deliberately **not** changed: `ATSTankPlayerState::GetAssignedTank()` still returns `APawn*`,
+not the DevDoc's suggested `ATSTank*`. This isn't a naming choice — C++ doesn't allow two methods with
+the same name differing only by return type, so it's a straight either/or, and your actual tank
+Blueprint (`YI_TankCollection`) almost certainly derives from a Chaos vehicle pawn already (§4's Path
+B), so it can never legally *be* an `ATSTank`. Returning `ATSTank*` here would silently return `nullptr`
+for every tank integrated via Path B, which is the path this project actually needs. `GetTankForTeam`
+above gives you the typed pointer where it's actually safe to want one (Path A tanks, or generic tools
+that only care about Path A).
 
 All 9 of Developer 1's acceptance tests (host creates session; clients join; PlayerState initializes;
 team assignment is server-authoritative; duplicate roles rejected; a player structurally cannot target
-another team's tank — `ServerRequestRole` takes no team parameter at all, it's always derived from the
-caller's own `PlayerState` server-side; `AssignedTank` replicates; disconnect releases the role; late
-joiners receive current state via ordinary Unreal actor-relevancy replication) trace directly onto the
-RPC reference in §6 and the `ATSGameMode`/`ATSGameState` implementations in
-[TSGameMode.cpp](../Source/Tank_Sim_V2/Core/TSGameMode.cpp) — no additional code was needed to satisfy
-them.
+another team's tank — `ServerRequestRoleChange` takes no team parameter at all, it's always derived from
+the caller's own `PlayerState` server-side; `AssignedTank` replicates; disconnect releases the role;
+late joiners receive current state via ordinary Unreal actor-relevancy replication) trace directly onto
+the RPC reference in §6 and the `ATSGameMode`/`ATSGameState` implementations in
+[TSGameMode.cpp](../Source/Tank_Sim_V2/Core/TSGameMode.cpp).
