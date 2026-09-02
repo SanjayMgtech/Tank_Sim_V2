@@ -52,10 +52,16 @@ constructor default already correct for it).
   (AnimPointIndex=15, VibrationMaxAmplitude=3, VibrationPhase=-270, SaggingForward=3)
   (AnimPointIndex=18, SaggingForward=-10)
   ```
-- Other components (Light_R/L, Brake_L/R, P_Exhaust*, SlideBack*, Tank_Destroyed):
-  NOT individually pulled for T90 — not yet confirmed override vs inherited.
-  (Lower priority: T90 already has a working demo map and was the tank
-  being actively tested this session; visually it looked correct.)
+- `Light_R` (ich_override): (250.215799, -93.562926, 114.344230)
+- `Light_L` (ich_override): (250.215799, 93.857601, 116.262011)
+- `P_Exhaust` (ich_override): (-185.426676, -174.849847, 128.588245)
+- `P_Exhaust1` (ich_override): (-375, 65, 110) — matches master default
+- `P_Exhaust2` (ich_override): (-375, -55, 110) — matches master default
+- `SlideBackRight` (ich_override): (-161.796636, 130, 3)
+- `SlideBackLeft` (ich_override): (-161.796636, -130, 3)
+- `Brake_L` (inherited_scs): (-365.576111, -145.002548, 147)
+- `Brake_R` (inherited_scs): (-365.576111, 145.997452, 147)
+- `Tank_Destroyed`: not checked, assume (0,0,0) matching all 5 other tanks
 
 ### Leopard2A7 (`/Game/YI_TankCollection/Blueprint/Tank_Leopard2A7/Controller/BP_Leopard2A7_Controller_Chaos`)
 
@@ -181,11 +187,61 @@ constructor default already correct for it).
 - `Brake_R` (ich_override): (-365.576111, 145.997452, 147)
 - `Tank_Destroyed`: (0,0,0)
 
+## Second pass: per-tank plain-variable (non-component) overrides — MAJOR FIND
+
+Missed on the first pass. These are plain `Chassis`-category BP variables
+(not components), captured via `get_cdo_properties(category_filter:
+"Chassis")` — cheap, one call per tank. Master's own baseline: MaxSpeedKMH=60,
+MaxTurningSpeed=45, TracksAmount=50, TilingSegmentLength=70, TrackThickness=4,
+WheelRadiusFront=22.5, WheelRadiusMiddle=38, WheelRadiusRear=22,
+WheelRadiusAccessory=11, MiddleWheelXOffset=0, WheelStartingAngleGeoR/L=0,
+WheelStartingAngleUVR/L=0, WheelSpeedCorrectionUV=0.
+
+| Tank | MaxSpeedKMH | MaxTurningSpeed | TracksAmount | TilingSegLen | TrackThickness | WheelR F/M/R/Acc | MiddleWheelXOffset | GeoR/L | UVR/L | SpeedCorrUV |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T90 | 60 | 45 | 78 | 69.58 | 7.26 | 23.19/36.02/27.16/11 | 0 | -12/-12 | -14/-14 | -0.4 |
+| Leopard2A7 | 69 | 45 | 80 | 66.424 | 5.6976 | 22.716/30.583/23.6/11 | 16 | -2/0 | -5/-3 | -5.6 |
+| M1A2 | 69 | 45 | 75 | 78.66 | 7.86 | 29.94/29.94/27.1/11 | -23.561 | 9/3 | 3/6 | 0.2 |
+| Merkava | 65 | 45 | 120 | 42.56 | 3.97 | 23.2/28.79/24.64/11 | -14 | 5/10 | -3/-2 | 0.3 |
+| Proxy | 60 | 45 | 70 | 36.7 | 6 | 47.3/36.25/28.1/11 | 0 | 2/2 | 0/0 | 0 |
+| VK1602Leopard | 60 | 36 | 68 | 29.15 | 6.6 | 32.7/45.35/32.35/12 | 0 | 0/0 | 0/0 | 0.1 |
+
+Also per-tank: `TrackStaticMeshes` (array of 1-4 mesh refs under each tank's
+own `Mesh/<TankName>/` folder — self-evident per-tank, not listed in full
+here, re-pull via the same `category_filter: "Chassis"` call when reapplying
+since it's cheap and in the same response).
+
+These are ALL plain scalar/simple-type properties — reapplying them is one
+`set_cdo_properties` (or several `set_cdo_property`) call per tank, cheap,
+no giant payload like the spline curves.
+
+## Input — checked, no per-tank concern
+
+The original vendor BP does NOT store input actions as class variables at
+all (`get_cdo_properties(name_pattern: "IA_")` on master returns zero
+properties). All 25 `IA_*` bindings are direct `K2Node_EnhancedInputAction`
+nodes wired straight into master's shared EventGraph — confirmed via
+`search_nodes(query: "EnhancedInputAction")`, 26 nodes (25 actions +
+IA_UseWeapon5 counted separately), matching exactly the 25 `UInputAction*`
+properties already declared in the parked
+`TSTankControllerChaos.h`/`.cpp`. Input is entirely master-level, no
+per-tank override exists, and my earlier C++ port's input action set
+already matches the vendor's usage 1:1. My earlier design choice to expose
+these as native `UPROPERTY` class members (vs. the vendor's direct
+in-graph node references) is a reasonable native-code equivalent, not a
+fidelity gap — no action needed here before reparenting.
+
+## Graph-logic spot-check — DONE, all clean
+
+`list_graphs` on all 5 remaining tanks confirms the same thin pattern as
+T90: Leopard2A7/M1A2/Merkava/VK1602Leopard all have EventGraph=4 nodes,
+UserConstructionScript=2 nodes. Proxy has EventGraph=5 nodes (one extra,
+not investigated — likely a comment or reroute, low risk, worth a glance
+during Proxy's own reparent pass but not blocking). No tank carries real
+per-tank graph logic beyond what's already ported to C++.
+
 ## Still not extracted / lower priority
 
-- T90's own Light/Brake/Exhaust/SlideBack overrides (T90 has a working demo
-  map and visually looked correct this session — worth a quick pass before
-  final reparent, but not blocking).
 - `Fire` (AudioComponent) and `BP_TankWeapon` (non-scene) — no transform to
   extract; likely fine to leave at native CDO defaults for all tanks, but
   worth a spot-check of `BP_TankWeapon`'s class reference per tank (each
@@ -195,10 +251,8 @@ constructor default already correct for it).
   components where I pulled the full dump (Leopard2A7's Light_R/L), so
   likely safe to assume 0 rotation everywhere, but not confirmed for the
   other 4 tanks' lights.
-- Any tank-specific graph logic beyond the "thin" 4-node EventGraph / 2-node
-  UserConstructionScript pattern confirmed on T90 — not spot-checked on the
-  other 5 tanks. Worth one `list_graphs` call each before reparenting
-  (cheap) to make sure none of them have real per-tank logic beyond T90's.
+- `Tank_Destroyed` transform confirmed (0,0,0) on 5 of 6 tanks (not
+  double-checked on T90, but pattern is unanimous enough to trust).
 
 ## Fixed in the parked C++ (`../Source/Tank_Sim_V2/Tank/TSTankControllerChaos.cpp`)
 
