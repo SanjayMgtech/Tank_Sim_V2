@@ -1,0 +1,86 @@
+// Create/find/join/destroy session wrapper (Section 4/6). Talks to whichever IOnlineSubsystem is
+// configured for the project (OnlineSubsystemNull by default - see Config/DefaultEngine.ini and the
+// setup guide for swapping in Steam/EOS). Gameplay and UI code never touch IOnlineSubsystem directly.
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Interfaces/OnlineSessionInterface.h"
+#include "Subsystems/GameInstanceSubsystem.h"
+#include "TSSessionSubsystem.generated.h"
+
+USTRUCT(BlueprintType)
+struct FTSSessionSearchResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Session")
+	FString HostUserName;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Session")
+	int32 CurrentPlayers = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Session")
+	int32 MaxPlayers = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Session")
+	int32 PingMs = 0;
+};
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FTSOnCreateSessionComplete, bool, bWasSuccessful);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FTSOnFindSessionsComplete, bool, bWasSuccessful, const TArray<FTSSessionSearchResult>&, Results);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FTSOnJoinSessionComplete, bool, bWasSuccessful);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FTSOnDestroySessionComplete, bool, bWasSuccessful);
+
+UCLASS()
+class UTSSessionSubsystem : public UGameInstanceSubsystem
+{
+	GENERATED_BODY()
+
+public:
+	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+	virtual void Deinitialize() override;
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
+	void CreateSession(int32 MaxPlayers = 12, bool bIsLAN = true, bool bIsPresence = false);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
+	void FindSessions(bool bIsLAN = true, bool bIsPresence = false);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
+	void JoinSession(int32 SearchResultIndex);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
+	void DestroySession();
+
+	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Session")
+	FTSOnCreateSessionComplete OnCreateSessionComplete;
+
+	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Session")
+	FTSOnFindSessionsComplete OnFindSessionsComplete;
+
+	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Session")
+	FTSOnJoinSessionComplete OnJoinSessionComplete;
+
+	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Session")
+	FTSOnDestroySessionComplete OnDestroySessionComplete;
+
+private:
+	IOnlineSessionPtr GetSessionInterface() const;
+
+	void HandleCreateSessionComplete(FName SessionName, bool bWasSuccessful);
+	void HandleFindSessionsComplete(bool bWasSuccessful);
+	void HandleJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result);
+	void HandleDestroySessionComplete(FName SessionName, bool bWasSuccessful);
+
+	TSharedPtr<class FOnlineSessionSearch> SessionSearch;
+
+	FDelegateHandle CreateSessionCompleteHandle;
+	FDelegateHandle FindSessionsCompleteHandle;
+	FDelegateHandle JoinSessionCompleteHandle;
+	FDelegateHandle DestroySessionCompleteHandle;
+
+	bool bDestroyThenCreatePending = false;
+	int32 PendingMaxPlayers = 12;
+	bool bPendingIsLAN = true;
+	bool bPendingIsPresence = false;
+};

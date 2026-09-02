@@ -1,0 +1,266 @@
+#include "Core/TSGameMode.h"
+
+#include "Core/TSGameState.h"
+#include "EngineUtils.h"
+#include "Kismet/GameplayStatics.h"
+#include "Player/TSTankPlayerController.h"
+#include "Player/TSTankPlayerState.h"
+#include "Player/TSVRPawn.h"
+#include "Tank/TSTankCrewComponent.h"
+
+namespace
+{
+	const TArray<ETSTeamId> AllTeams = { ETSTeamId::TeamA, ETSTeamId::TeamB, ETSTeamId::TeamC, ETSTeamId::TeamD };
+
+	FName SpawnTagForTeam(ETSTeamId TeamId)
+	{
+		switch (TeamId)
+		{
+		case ETSTeamId::TeamA: return FName(TEXT("TSTeamSpawn_TeamA"));
+		case ETSTeamId::TeamB: return FName(TEXT("TSTeamSpawn_TeamB"));
+		case ETSTeamId::TeamC: return FName(TEXT("TSTeamSpawn_TeamC"));
+		case ETSTeamId::TeamD: return FName(TEXT("TSTeamSpawn_TeamD"));
+		default: return NAME_None;
+		}
+	}
+}
+
+ATSGameMode::ATSGameMode()
+{
+	DefaultPawnClass = ATSVRPawn::StaticClass();
+	PlayerControllerClass = ATSTankPlayerController::StaticClass();
+	GameStateClass = ATSGameState::StaticClass();
+	PlayerStateClass = ATSTankPlayerState::StaticClass();
+}
+
+void ATSGameMode::PostLogin(APlayerController* NewPlayer)
+{
+	Super::PostLogin(NewPlayer);
+
+	if (ATSGameState* GS = GetGameState<ATSGameState>())
+	{
+		if (GS->GetMatchState() == ETSMatchState::WaitingForPlayers)
+		{
+			GS->SetMatchState(ETSMatchState::TeamAndRoleSelection);
+		}
+	}
+}
+
+void ATSGameMode::Logout(AController* Exiting)
+{
+	if (ATSTankPlayerState* PS = Exiting ? Exiting->GetPlayerState<ATSTankPlayerState>() : nullptr)
+	{
+		if (APawn* Tank = PS->GetAssignedTank())
+		{
+			if (UTSTankCrewComponent* Crew = Tank->FindComponentByClass<UTSTankCrewComponent>())
+			{
+				Crew->ReleaseRole(PS);
+			}
+		}
+	}
+
+	Super::Logout(Exiting);
+}
+
+int32 ATSGameMode::CountPlayersOnTeam(ETSTeamId TeamId) const
+{
+	int32 Count = 0;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		if (const ATSTankPlayerState* PS = It->Get() ? It->Get()->GetPlayerState<ATSTankPlayerState>() : nullptr)
+		{
+			if (PS->GetTeamId() == TeamId)
+			{
+				++Count;
+			}
+		}
+	}
+	return Count;
+}
+
+bool ATSGameMode::IsTeamFull(ETSTeamId TeamId) const
+{
+	// Three crew seats per team (Driver/Gunner/Commander) - Section 1.
+	return CountPlayersOnTeam(TeamId) >= 3;
+}
+
+bool ATSGameMode::RequestTeamAssignment(ATSTankPlayerController* Controller, ETSTeamId RequestedTeam)
+{
+	if (!Controller)
+	{
+		return false;
+	}
+
+	ATSTankPlayerState* PS = Controller->GetPlayerState<ATSTankPlayerState>();
+	if (!PS || RequestedTeam == ETSTeamId::None)
+	{
+		return false;
+	}
+
+	const int32 RequestedTeamIndex = AllTeams.IndexOfByKey(RequestedTeam);
+	if (RequestedTeamIndex == INDEX_NONE || RequestedTeamIndex >= MaxTeams)
+	{
+		return false;
+	}
+
+	if (IsTeamFull(RequestedTeam))
+	{
+		return false;
+	}
+
+	// Leaving a previous team means leaving its crew seat too.
+	if (APawn* PreviousTank = PS->GetAssignedTank())
+	{
+		if (UTSTankCrewComponent* Crew = PreviousTank->FindComponentByClass<UTSTankCrewComponent>())
+		{
+			Crew->ReleaseRole(PS);
+		}
+	}
+
+	PS->SetTeamId(RequestedTeam);
+	PS->SetCrewRole(ETSCrewRole::None);
+	PS->SetAssignedTank(nullptr);
+
+	return true;
+}
+
+bool ATSGameMode::RequestRoleAssignment(ATSTankPlayerController* Controller, ETSCrewRole RequestedRole)
+{
+	if (!Controller)
+	{
+		return false;
+	}
+
+	ATSTankPlayerState* PS = Controller->GetPlayerState<ATSTankPlayerState>();
+	if (!PS || PS->GetTeamId() == ETSTeamId::None || RequestedRole == ETSCrewRole::None)
+	{
+		return false;
+	}
+
+	APawn* Tank = GetOrSpawnTankForTeam(PS->GetTeamId());
+	UTSTankCrewComponent* Crew = Tank ? Tank->FindComponentByClass<UTSTankCrewComponent>() : nullptr;
+	if (!Crew)
+	{
+		return false;
+	}
+
+	if (!Crew->TryOccupyRole(PS, RequestedRole))
+	{
+		return false;
+	}
+
+	PS->SetCrewRole(RequestedRole);
+	PS->SetAssignedTank(Tank);
+
+	if (ATSGameState* GS = GetGameState<ATSGameState>())
+	{
+		if (GS->GetMatchState() != ETSMatchState::InProgress && AreAllActiveTeamsFullyCrewed())
+		{
+			GS->SetMatchState(ETSMatchState::InProgress);
+		}
+	}
+
+	return true;
+}
+
+bool ATSGameMode::AreAllActiveTeamsFullyCrewed() const
+{
+	const ATSGameState* GS = GetGameState<ATSGameState>();
+	if (!GS)
+	{
+		return false;
+	}
+
+	TSet<ETSTeamId> ActiveTeams;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		if (const ATSTankPlayerState* PS = It->Get() ? It->Get()->GetPlayerState<ATSTankPlayerState>() : nullptr)
+		{
+			if (PS->GetTeamId() != ETSTeamId::None)
+			{
+				ActiveTeams.Add(PS->GetTeamId());
+			}
+		}
+	}
+
+	if (ActiveTeams.Num() == 0)
+	{
+		return false;
+	}
+
+	for (ETSTeamId TeamId : ActiveTeams)
+	{
+		const APawn* Tank = GS->FindTankForTeam(TeamId);
+		const UTSTankCrewComponent* Crew = Tank ? Tank->FindComponentByClass<UTSTankCrewComponent>() : nullptr;
+		if (!Crew
+			|| !Crew->IsRoleOccupied(ETSCrewRole::Driver)
+			|| !Crew->IsRoleOccupied(ETSCrewRole::Gunner)
+			|| !Crew->IsRoleOccupied(ETSCrewRole::Commander))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+FTransform ATSGameMode::GetSpawnTransformForTeam(ETSTeamId TeamId) const
+{
+	const FName Tag = SpawnTagForTeam(TeamId);
+	if (Tag != NAME_None)
+	{
+		for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+		{
+			if (It->ActorHasTag(Tag))
+			{
+				return It->GetActorTransform();
+			}
+		}
+	}
+
+	const int32 TeamIndex = AllTeams.IndexOfByKey(TeamId);
+	const float Offset = TeamIndex >= 0 ? static_cast<float>(TeamIndex) : 0.f;
+	UE_LOG(LogTemp, Warning, TEXT("ATSGameMode: no actor tagged '%s' found - tag a level spawn point for deterministic placement."), *Tag.ToString());
+	return FTransform(FVector(Offset * 2000.f, 0.f, 200.f));
+}
+
+APawn* ATSGameMode::GetOrSpawnTankForTeam(ETSTeamId TeamId)
+{
+	ATSGameState* GS = GetGameState<ATSGameState>();
+	if (!GS)
+	{
+		return nullptr;
+	}
+
+	if (APawn* Existing = GS->FindTankForTeam(TeamId))
+	{
+		return Existing;
+	}
+
+	if (!DefaultTankClass)
+	{
+		UE_LOG(LogTemp, Error, TEXT("ATSGameMode: DefaultTankClass is not set - assign a tank Blueprint in the GameMode defaults."));
+		return nullptr;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+
+	APawn* NewTank = GetWorld()->SpawnActor<APawn>(DefaultTankClass, GetSpawnTransformForTeam(TeamId), SpawnParams);
+	if (!NewTank)
+	{
+		return nullptr;
+	}
+
+	if (UTSTankCrewComponent* Crew = NewTank->FindComponentByClass<UTSTankCrewComponent>())
+	{
+		Crew->SetTeamId(TeamId);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("ATSGameMode: spawned tank has no UTSTankCrewComponent - add one in the Blueprint's Components panel."));
+	}
+
+	GS->RegisterTeamTank(TeamId, NewTank);
+	return NewTank;
+}
