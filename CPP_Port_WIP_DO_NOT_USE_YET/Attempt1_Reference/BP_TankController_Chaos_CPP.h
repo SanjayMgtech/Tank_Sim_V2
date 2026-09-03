@@ -8,7 +8,7 @@
 #include "WheeledVehiclePawn.h"
 #include "Tank/TSTankControllerChaosTypes.h"
 #include "InputActionValue.h"
-#include "TSTankControllerChaos.generated.h"
+#include "BP_TankController_Chaos_CPP.generated.h"
 
 class UChaosWheeledVehicleMovementComponent;
 class USpotLightComponent;
@@ -36,12 +36,12 @@ class USoundBase;
 struct FInputActionValue;
 
 UCLASS()
-class ATSTankControllerChaos : public AWheeledVehiclePawn
+class ABP_TankController_Chaos_CPP : public AWheeledVehiclePawn
 {
 	GENERATED_BODY()
 
 public:
-	ATSTankControllerChaos();
+	ABP_TankController_Chaos_CPP();
 
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void Tick(float DeltaTime) override;
@@ -208,6 +208,10 @@ public:
 	TObjectPtr<UParticleSystem> DestroyedFlamesTemplate;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank|Timeline")
 	TObjectPtr<UTimelineComponent> MainGunSpringTimeline;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank|Timeline")
+	TObjectPtr<UTimelineComponent> AimTimeline;
+	UPROPERTY(EditDefaultsOnly, Category = "Tank|Curves")
+	TObjectPtr<UCurveFloat> AimCurve;
 
 	// ------------------------------------------------------------------
 	// Variables (member-for-member port of the BP's 147 variables)
@@ -547,7 +551,9 @@ public:
 	void OnLookUpDown(const FInputActionValue& Value);
 	void OnLookRightLeft(const FInputActionValue& Value);
 	void OnMoveRightLeft(const FInputActionValue& Value);
+	void OnMoveRightLeftCompleted(const FInputActionValue& Value);
 	void OnMoveForwardBack(const FInputActionValue& Value);
+	void OnMoveForwardBackCompleted(const FInputActionValue& Value);
 	void OnHandbrakePressed(const FInputActionValue& Value);
 	void OnHandbrakeReleased(const FInputActionValue& Value);
 	void OnUseWeapon1(const FInputActionValue& Value);
@@ -668,12 +674,21 @@ public:
 	void UpdateCrosshairPositionAndSize();
 	UFUNCTION(BlueprintCallable, Category = "Camera")
 	void CameraAutoSetting();
+	// GetMesh() (AWheeledVehiclePawn::Mesh) is unreliable at the exact point BeginPlay() runs -
+	// the Chaos vehicle's mesh/physics state isn't fully settled yet on that same frame, so
+	// CameraAutoSetting's null-guard was firing every play session, leaving the camera at raw CDO
+	// defaults (visually inside the tank). Deferred one tick via this handle+callback instead.
+	FTimerHandle DeferredBeginPlaySetupTimerHandle;
+	void DeferredBeginPlaySetup();
 	UFUNCTION(BlueprintCallable, Category = "Camera")
 	double CameraPitchLimit(double AxisValue);
 	// The BP macro 'Zoom+SniperMode' has 3 separate exec entry points (SniperModeToggle, Zoom+, Zoom-) bound to
 	// different input actions in EventGraph; ported as 3 independent UFUNCTIONs rather than one macro-call.
 	UFUNCTION(BlueprintCallable, Category = "Zoom")
 	void SniperModeToggle();
+
+	UFUNCTION()
+	void OnAimTimelineUpdate(float AimingPhase);
 
 	UFUNCTION(BlueprintCallable, Category = "Zoom")
 	void ZoomIn();

@@ -1,4 +1,4 @@
-#include "Tank/TSTankControllerChaos.h"
+#include "Tank/BP_TankController_Chaos_CPP.h"
 
 #include "ChaosWheeledVehicleMovementComponent.h"
 #include "Components/AudioComponent.h"
@@ -14,6 +14,9 @@
 #include "Curves/CurveFloat.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "InputMappingContext.h"
+#include "InputAction.h"
+#include "Camera/CameraShakeBase.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -113,7 +116,7 @@ namespace TSWeaponReflection
 	}
 }
 
-ATSTankControllerChaos::ATSTankControllerChaos()
+ABP_TankController_Chaos_CPP::ABP_TankController_Chaos_CPP()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true;
@@ -222,7 +225,10 @@ ATSTankControllerChaos::ATSTankControllerChaos()
 	Tank_Destroyed = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Tank_Destroyed"));
 	Tank_Destroyed->SetupAttachment(GetMesh());
 	Tank_Destroyed->SetVisibility(false);
-	if (TankMetalPhysMatFinder.Succeeded()) { Tank_Destroyed->BodyInstance.SetPhysMaterialOverride(TankMetalPhysMatFinder.Object); }
+	if (!HasAnyFlags(RF_ClassDefaultObject) && TankMetalPhysMatFinder.Succeeded())
+	{
+		Tank_Destroyed->BodyInstance.SetPhysMaterialOverride(TankMetalPhysMatFinder.Object);
+	}
 	Decal = CreateDefaultSubobject<UDecalComponent>(TEXT("Decal"));
 	Decal->SetupAttachment(Tank_Destroyed);
 	Decal->SetVisibility(false);
@@ -233,7 +239,77 @@ ATSTankControllerChaos::ATSTankControllerChaos()
 	DestroyedFlames = CreateDefaultSubobject<UParticleSystemComponent>(TEXT("DestroyedFlames"));
 	DestroyedFlames->SetupAttachment(Tank_Destroyed);
 	DestroyedFlames->SetRelativeLocation(FVector(0.0, 0.0, 100.0));
+	DestroyedFlames->SetVisibility(false);
+	DestroyedFlames->bAutoActivate = false;
 	if (FlamesFinder.Succeeded()) { DestroyedFlames->SetTemplate(FlamesFinder.Object); }
+
+	// Default Input Mapping Context & Input Actions
+	static ConstructorHelpers::FObjectFinder<UInputMappingContext> DefaultMappingContextFinder(TEXT("/Game/YI_TankCollection/Inputs/IMC_Default.IMC_Default"));
+	if (DefaultMappingContextFinder.Succeeded()) { DefaultMappingContext = DefaultMappingContextFinder.Object; }
+
+	static ConstructorHelpers::FObjectFinder<UInputAction> LookUpDownFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_LookUpDown.IA_LookUpDown"));
+	if (LookUpDownFinder.Succeeded()) { IA_LookUpDown = LookUpDownFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> LookRightLeftFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_LookRightLeft.IA_LookRightLeft"));
+	if (LookRightLeftFinder.Succeeded()) { IA_LookRightLeft = LookRightLeftFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> MoveRightLeftFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_MoveRightLeft.IA_MoveRightLeft"));
+	if (MoveRightLeftFinder.Succeeded()) { IA_MoveRightLeft = MoveRightLeftFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> MoveForwardBackFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_MoveForwardBack.IA_MoveForwardBack"));
+	if (MoveForwardBackFinder.Succeeded()) { IA_MoveForwardBack = MoveForwardBackFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> HandbrakeFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_Handbrake.IA_Handbrake"));
+	if (HandbrakeFinder.Succeeded()) { IA_Handbrake = HandbrakeFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> DebugViewFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_DebugView.IA_DebugView"));
+	if (DebugViewFinder.Succeeded()) { IA_DebugView = DebugViewFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> DestroySelfFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_DestroySelf.IA_DestroySelf"));
+	if (DestroySelfFinder.Succeeded()) { IA_DestroySelf = DestroySelfFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> ToggleInterfaceFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_ToggleInterface.IA_ToggleInterface"));
+	if (ToggleInterfaceFinder.Succeeded()) { IA_ToggleInterface = ToggleInterfaceFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> BulletTimeFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_BulletTime.IA_BulletTime"));
+	if (BulletTimeFinder.Succeeded()) { IA_BulletTime = BulletTimeFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> UseWeapon1Finder(TEXT("/Game/YI_TankCollection/Inputs/IA_UseWeapon1.IA_UseWeapon1"));
+	if (UseWeapon1Finder.Succeeded()) { IA_UseWeapon1 = UseWeapon1Finder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> UseWeapon2Finder(TEXT("/Game/YI_TankCollection/Inputs/IA_UseWeapon2.IA_UseWeapon2"));
+	if (UseWeapon2Finder.Succeeded()) { IA_UseWeapon2 = UseWeapon2Finder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> UseWeapon3Finder(TEXT("/Game/YI_TankCollection/Inputs/IA_UseWeapon3.IA_UseWeapon3"));
+	if (UseWeapon3Finder.Succeeded()) { IA_UseWeapon3 = UseWeapon3Finder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> UseWeapon4Finder(TEXT("/Game/YI_TankCollection/Inputs/IA_UseWeapon4.IA_UseWeapon4"));
+	if (UseWeapon4Finder.Succeeded()) { IA_UseWeapon4 = UseWeapon4Finder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> UseWeapon5Finder(TEXT("/Game/YI_TankCollection/Inputs/IA_UseWeapon5.IA_UseWeapon5"));
+	if (UseWeapon5Finder.Succeeded()) { IA_UseWeapon5 = UseWeapon5Finder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> FirePrimaryWeaponFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_FirePrimaryWeapon.IA_FirePrimaryWeapon"));
+	if (FirePrimaryWeaponFinder.Succeeded()) { IA_FirePrimaryWeapon = FirePrimaryWeaponFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> ReloadFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_Reload.IA_Reload"));
+	if (ReloadFinder.Succeeded()) { IA_Reload = ReloadFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> AimFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_Aim.IA_Aim"));
+	if (AimFinder.Succeeded()) { IA_Aim = AimFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> SwitchCamoFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_SwitchCamo.IA_SwitchCamo"));
+	if (SwitchCamoFinder.Succeeded()) { IA_SwitchCamo = SwitchCamoFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> ToggleLightsFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_ToggleLights.IA_ToggleLights"));
+	if (ToggleLightsFinder.Succeeded()) { IA_ToggleLights = ToggleLightsFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> TurretBlockingFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_TurretBlocking.IA_TurretBlocking"));
+	if (TurretBlockingFinder.Succeeded()) { IA_TurretBlocking = TurretBlockingFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> StabilizerFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_Stabilizer.IA_Stabilizer"));
+	if (StabilizerFinder.Succeeded()) { IA_Stabilizer = StabilizerFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> HealingFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_Healing.IA_Healing"));
+	if (HealingFinder.Succeeded()) { IA_Healing = HealingFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> SniperModeToggleFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_SniperModeToggle.IA_SniperModeToggle"));
+	if (SniperModeToggleFinder.Succeeded()) { IA_SniperModeToggle = SniperModeToggleFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> ZoomFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_Zoom.IA_Zoom"));
+	if (ZoomFinder.Succeeded()) { IA_Zoom = ZoomFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> ShowHotkeysFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_ShowHotkeys.IA_ShowHotkeys"));
+	if (ShowHotkeysFinder.Succeeded()) { IA_ShowHotkeys = ShowHotkeysFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<UInputAction> GeoTracksSwitchingFinder(TEXT("/Game/YI_TankCollection/Inputs/IA_GeoTracksSwitching.IA_GeoTracksSwitching"));
+	if (GeoTracksSwitchingFinder.Succeeded()) { IA_GeoTracksSwitching = GeoTracksSwitchingFinder.Object; }
+
+	// Default Curves
+	static ConstructorHelpers::FObjectFinder<UCurveFloat> SteeringCurveFinder(TEXT("/Game/YI_TankCollection/Blueprint/Master/Curve/FC_SteeringTank.FC_SteeringTank"));
+	if (SteeringCurveFinder.Succeeded()) { SteeringCurve = SteeringCurveFinder.Object; }
+
+	static ConstructorHelpers::FObjectFinder<UParticleSystem> ExplosionEffectFinder(TEXT("/Game/YI_TankCollection/Particles/Master/P_Explosion_Bomb.P_Explosion_Bomb"));
+	if (ExplosionEffectFinder.Succeeded()) { ExplosionEffect = ExplosionEffectFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<USoundBase> ExplosionSoundFinder(TEXT("/Game/YI_TankCollection/Sounds/Master/CUE_ImpactExplosive.CUE_ImpactExplosive"));
+	if (ExplosionSoundFinder.Succeeded()) { ExplosionSound = ExplosionSoundFinder.Object; }
+	static ConstructorHelpers::FObjectFinder<USoundBase> ExplosionSound2Finder(TEXT("/Game/YI_TankCollection/Sounds/Master/CUE_Debris_Cue.CUE_Debris_Cue"));
+	if (ExplosionSound2Finder.Succeeded()) { ExplosionSound2 = ExplosionSound2Finder.Object; }
 
 	// TrackPath_R: authored 12-point closed-loop spline tracing the track path, recovered from the
 	// source BP (see recovered_component_data.md) - exact tangents reproduce the original curve shape.
@@ -276,23 +352,38 @@ ATSTankControllerChaos::ATSTankControllerChaos()
 	DebugCamera->Deactivate();
 
 	MainGunSpringTimeline = CreateDefaultSubobject<UTimelineComponent>(TEXT("MainGunSpringTimeline"));
+	AimTimeline = CreateDefaultSubobject<UTimelineComponent>(TEXT("AimTimeline"));
 
 	VehicleMovement = Cast<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
+
+	// Fixed-capacity logic buffers: the source BP authored these as zero-filled array
+	// defaults (10 turret/gun slots, 30 wheel/antenna slots) rather than sizing them at
+	// runtime, so every index-based read/write throughout this class assumes they're
+	// already at capacity.
+	TurretsRot.Init(FRotator::ZeroRotator, 10);
+	TurretsRotUnstabilized.Init(FRotator::ZeroRotator, 10);
+	TurretsRotPrevFrame.Init(FRotator::ZeroRotator, 10);
+	GunsRot.Init(FRotator::ZeroRotator, 10);
+	GunsRotUnstabilized.Init(FRotator::ZeroRotator, 10);
+	GunsRotPrevFrame.Init(FRotator::ZeroRotator, 10);
+	WheelsZOffsets.Init(0.0, 30);
+	AntennaRotation.Init(FRotator::ZeroRotator, 30);
+	AntennaCurrentSpeed.Init(FVector::ZeroVector, 30);
 }
 
-void ATSTankControllerChaos::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+void ABP_TankController_Chaos_CPP::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(ATSTankControllerChaos, Rep_ControlRotation);
-	DOREPLIFETIME(ATSTankControllerChaos, TurretsRot);
-	DOREPLIFETIME(ATSTankControllerChaos, GunsRot);
+	DOREPLIFETIME(ABP_TankController_Chaos_CPP, Rep_ControlRotation);
+	DOREPLIFETIME(ABP_TankController_Chaos_CPP, TurretsRot);
+	DOREPLIFETIME(ABP_TankController_Chaos_CPP, GunsRot);
 }
 
 
 // ============================================================
 // Lifecycle, input, pawn switching, networked events (from EventGraph / UserConstructionScript / PawnSwitching)
 // ============================================================
-void ATSTankControllerChaos::PawnSwitching(const TArray<TSubclassOf<APawn>>& PossiblePawnClasses)
+void ABP_TankController_Chaos_CPP::PawnSwitching(const TArray<TSubclassOf<APawn>>& PossiblePawnClasses)
 {
 	// Find current pawn's class in the possible list, cycle to the next one (wrap to 0 at the end)
 	APawn* CurrentPawn = UGameplayStatics::GetPlayerPawn(this, 0);
@@ -313,7 +404,7 @@ void ATSTankControllerChaos::PawnSwitching(const TArray<TSubclassOf<APawn>>& Pos
 	const FTransform SpawnTransform(FRotator(CurrentPawn->GetActorRotation().Pitch, CurrentPawn->GetActorRotation().Yaw, 0.0), CurrentPawn->GetActorLocation());
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	ATSTankControllerChaos* NewTankPawn = Cast<ATSTankControllerChaos>(GetWorld()->SpawnActor(*NextClass, &SpawnTransform, SpawnParams));
+	ABP_TankController_Chaos_CPP* NewTankPawn = Cast<ABP_TankController_Chaos_CPP>(GetWorld()->SpawnActor(*NextClass, &SpawnTransform, SpawnParams));
 	if (!NewTankPawn)
 	{
 		return;
@@ -348,7 +439,7 @@ void ATSTankControllerChaos::PawnSwitching(const TArray<TSubclassOf<APawn>>& Pos
 		}
 	}
 }
-void ATSTankControllerChaos::OnConstruction(const FTransform& Transform)
+void ABP_TankController_Chaos_CPP::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 
@@ -406,9 +497,47 @@ void ATSTankControllerChaos::OnConstruction(const FTransform& Transform)
 		VibrationOffset_L.SetNum(FMath::Max(VibrationOffset_L.Num(), NumPoints));
 	}
 }
-void ATSTankControllerChaos::BeginPlay()
+void ABP_TankController_Chaos_CPP::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Safety net for VibrationOffset_R/L sizing: OnConstruction (where this is normally
+	// done) isn't reliably invoked for pawns spawned at runtime rather than placed in the
+	// level, so re-check it here too.
+	if (TrackPath_R)
+	{
+		const int32 NumPoints = TrackPath_R->GetNumberOfSplinePoints();
+		VibrationOffset_R.SetNum(FMath::Max(VibrationOffset_R.Num(), NumPoints));
+		VibrationOffset_L.SetNum(FMath::Max(VibrationOffset_L.Num(), NumPoints));
+	}
+
+	// Fallback load Blueprint classes at runtime if not assigned on the child CDO
+	if (!TankWeaponComponentClass)
+	{
+		TankWeaponComponentClass = StaticLoadClass(UActorComponent::StaticClass(), nullptr, TEXT("/Game/YI_TankCollection/Blueprint/Master/Components/BP_TankWeapon.BP_TankWeapon_C"));
+	}
+	if (!HUDClass)
+	{
+		HUDClass = StaticLoadClass(UUserWidget::StaticClass(), nullptr, TEXT("/Game/YI_TankCollection/Blueprint/Master/Widgets/W_MainHUD.W_MainHUD_C"));
+	}
+	if (!CrosshairClass)
+	{
+		CrosshairClass = StaticLoadClass(UUserWidget::StaticClass(), nullptr, TEXT("/Game/YI_TankCollection/Blueprint/Master/Widgets/W_Crosshair.W_Crosshair_C"));
+	}
+	if (!CameraShakeClass)
+	{
+		CameraShakeClass = StaticLoadClass(UCameraShakeBase::StaticClass(), nullptr, TEXT("/Game/YI_TankCollection/Blueprint/Master/Components/BP_CameraShake_MainTurret.BP_CameraShake_MainTurret_C"));
+	}
+
+	// Instantiate BPC_TankWeapon if configured and not yet spawned
+	if (!BPC_TankWeapon && TankWeaponComponentClass)
+	{
+		BPC_TankWeapon = NewObject<UActorComponent>(this, TankWeaponComponentClass, TEXT("BPC_TankWeapon"));
+		if (BPC_TankWeapon)
+		{
+			BPC_TankWeapon->RegisterComponent();
+		}
+	}
 
 	// --- Sequence branch 0: widgets, only for the locally controlling player controller
 	if (APlayerController* PC = Cast<APlayerController>(GetController()))
@@ -439,7 +568,7 @@ void ATSTankControllerChaos::BeginPlay()
 		}
 	}
 
-	// --- Sequence branch 1: camera/physics/spline setup
+	// --- Sequence branch 1: camera/physics/spline setup (synchronous execution matching Blueprint 1:1)
 	CameraAutoSetting();
 	if (USkeletalMeshComponent* SkelMesh = GetMesh())
 	{
@@ -449,11 +578,29 @@ void ATSTankControllerChaos::BeginPlay()
 	SplineFilletsCompensation(TrackPath_R);
 	SplineFilletsCompensation(TrackPath_L);
 	SplinePointsParametersDefinition();
-	PhysWheelsAmount = VehicleMovement ? VehicleMovement->GetNumWheels() : 0; // Robust re-definition (works for bots too, unlike the OnConstruction one)
+	PhysWheelsAmount = VehicleMovement ? VehicleMovement->GetNumWheels() : 0;
 	Health = HealthMax;
 	if (TrackPath_L && GetMesh())
 	{
 		TrackPath_L->AttachToComponent(GetMesh(), FAttachmentTransformRules::KeepRelativeTransform);
+	}
+
+	if (AimTimeline)
+	{
+		FOnTimelineFloat AimProgressUpdate;
+		AimProgressUpdate.BindUFunction(this, FName("OnAimTimelineUpdate"));
+		if (AimCurve)
+		{
+			AimTimeline->AddInterpFloat(AimCurve, AimProgressUpdate, FName("AimingPhase"));
+		}
+		else
+		{
+			UCurveFloat* DefaultAimCurve = NewObject<UCurveFloat>(this, TEXT("DefaultAimCurve"));
+			DefaultAimCurve->FloatCurve.AddKey(0.0f, 0.0f);
+			DefaultAimCurve->FloatCurve.AddKey(0.2f, 1.0f);
+			AimTimeline->AddInterpFloat(DefaultAimCurve, AimProgressUpdate, FName("AimingPhase"));
+		}
+		AimTimeline->SetLooping(false);
 	}
 
 	// --- Sequence branch 2: geometric vs UV tracks visibility
@@ -489,7 +636,25 @@ void ATSTankControllerChaos::BeginPlay()
 		}
 	}
 }
-void ATSTankControllerChaos::Tick(float DeltaTime)
+void ABP_TankController_Chaos_CPP::DeferredBeginPlaySetup()
+{
+	CameraAutoSetting();
+	if (USkeletalMeshComponent* SkelMesh = GetMesh())
+	{
+		SkelMesh->SetAllBodiesPhysicsBlendWeight(0.0f);
+	}
+	FilletsCompensation = TrackThickness / 2.0;
+	SplineFilletsCompensation(TrackPath_R);
+	SplineFilletsCompensation(TrackPath_L);
+	SplinePointsParametersDefinition();
+	PhysWheelsAmount = VehicleMovement ? VehicleMovement->GetNumWheels() : 0; // Robust re-definition (works for bots too, unlike the OnConstruction one)
+	Health = HealthMax;
+	if (TrackPath_L && GetMesh())
+	{
+		TrackPath_L->AttachToComponent(GetMesh(), FAttachmentTransformRules::KeepRelativeTransform);
+	}
+}
+void ABP_TankController_Chaos_CPP::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
@@ -537,20 +702,21 @@ void ATSTankControllerChaos::Tick(float DeltaTime)
 
 	// then_4
 	TurretsAndGunsRotCalculation();
-	// Per-category, per-side wheel rotation - exact WheelRotationDefinition argument wiring is an
-	// assumption (the real per-call pin wiring wasn't individually traced); verify against the BP.
+	// Per-category, per-side wheel rotation matching Blueprint EventGraph wiring 1:1:
+	// Front and Rear wheels receive WheelStartingAngleGeo/UV and WheelSpeedCorrectionUV;
+	// Middle and Accessory wheels default starting angles and UV speed correction to 0.0.
 	WheelRotFrontL = WheelRotationDefinition(ChassisDistanceL, WheelRadiusFront, TrackThickness, WheelSpeedCorrectionUV, WheelStartingAngleGeoL, WheelStartingAngleGeoR, WheelStartingAngleUVL, WheelStartingAngleUVR, true);
 	WheelRotFrontR = WheelRotationDefinition(ChassisDistanceR, WheelRadiusFront, TrackThickness, WheelSpeedCorrectionUV, WheelStartingAngleGeoL, WheelStartingAngleGeoR, WheelStartingAngleUVL, WheelStartingAngleUVR, false);
-	WheelRotMiddleL = WheelRotationDefinition(ChassisDistanceL, WheelRadiusMiddle, TrackThickness, WheelSpeedCorrectionUV, WheelStartingAngleGeoL, WheelStartingAngleGeoR, WheelStartingAngleUVL, WheelStartingAngleUVR, true);
-	WheelRotMiddleR = WheelRotationDefinition(ChassisDistanceR, WheelRadiusMiddle, TrackThickness, WheelSpeedCorrectionUV, WheelStartingAngleGeoL, WheelStartingAngleGeoR, WheelStartingAngleUVL, WheelStartingAngleUVR, false);
+	WheelRotMiddleL = WheelRotationDefinition(ChassisDistanceL, WheelRadiusMiddle, TrackThickness, 0.0, 0.0, 0.0, 0.0, 0.0, true);
+	WheelRotMiddleR = WheelRotationDefinition(ChassisDistanceR, WheelRadiusMiddle, TrackThickness, 0.0, 0.0, 0.0, 0.0, 0.0, false);
 	WheelRotRearL = WheelRotationDefinition(ChassisDistanceL, WheelRadiusRear, TrackThickness, WheelSpeedCorrectionUV, WheelStartingAngleGeoL, WheelStartingAngleGeoR, WheelStartingAngleUVL, WheelStartingAngleUVR, true);
 	WheelRotRearR = WheelRotationDefinition(ChassisDistanceR, WheelRadiusRear, TrackThickness, WheelSpeedCorrectionUV, WheelStartingAngleGeoL, WheelStartingAngleGeoR, WheelStartingAngleUVL, WheelStartingAngleUVR, false);
-	WheelRotAccessoryL = WheelRotationDefinition(ChassisDistanceL, WheelRadiusAccessory, TrackThickness, WheelSpeedCorrectionUV, WheelStartingAngleGeoL, WheelStartingAngleGeoR, WheelStartingAngleUVL, WheelStartingAngleUVR, true);
-	WheelRotAccessoryR = WheelRotationDefinition(ChassisDistanceR, WheelRadiusAccessory, TrackThickness, WheelSpeedCorrectionUV, WheelStartingAngleGeoL, WheelStartingAngleGeoR, WheelStartingAngleUVL, WheelStartingAngleUVR, false);
+	WheelRotAccessoryL = WheelRotationDefinition(ChassisDistanceL, WheelRadiusAccessory, TrackThickness, 0.0, 0.0, 0.0, 0.0, 0.0, true);
+	WheelRotAccessoryR = WheelRotationDefinition(ChassisDistanceR, WheelRadiusAccessory, TrackThickness, 0.0, 0.0, 0.0, 0.0, 0.0, false);
 	// For Each Loop over antenna array + world-location updates handled by sibling AntennaCalculation/attachment logic
 	ScatteringCalculation();
 }
-float ATSTankControllerChaos::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
+float ABP_TankController_Chaos_CPP::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
 	const float Result = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 
@@ -568,7 +734,7 @@ float ATSTankControllerChaos::TakeDamage(float DamageAmount, FDamageEvent const&
 
 	return Result;
 }
-void ATSTankControllerChaos::PossessedBy(AController* NewController)
+void ABP_TankController_Chaos_CPP::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
 
@@ -583,8 +749,43 @@ void ATSTankControllerChaos::PossessedBy(AController* NewController)
 	{
 		VehicleMovement->SetHandbrakeInput(false);
 	}
+
+	// BeginPlay's Controller-gated setup (mapping context, HUD/Crosshair) runs before PossessedBy for
+	// GameMode-spawned pawns (SpawnActor -> BeginPlay happens before the later Possess() call), so
+	// GetController() is still null when BeginPlay's checks run and that setup is silently skipped.
+	// Re-run it here, where NewController is guaranteed valid.
+	if (APlayerController* PC = Cast<APlayerController>(NewController))
+	{
+		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
+		{
+			if (DefaultMappingContext)
+			{
+				FModifyContextOptions Options;
+				Options.bIgnoreAllPressedKeysUntilRelease = true;
+				Subsystem->AddMappingContext(DefaultMappingContext, 0, Options);
+			}
+		}
+
+		if (!HUD)
+		{
+			PlayerController = PC;
+			HUD = CreateWidget<UUserWidget>(PC, HUDClass);
+			if (HUD)
+			{
+				HUD->AddToViewport();
+				WeaponSlotsDisplay();
+				UpdateChosenWeaponUI();
+				UpdateChosenVehicleUI();
+			}
+			Crosshair = CreateWidget<UUserWidget>(PC, CrosshairClass);
+			if (Crosshair)
+			{
+				Crosshair->AddToViewport();
+			}
+		}
+	}
 }
-void ATSTankControllerChaos::WeaponFire(int32 Index)
+void ABP_TankController_Chaos_CPP::WeaponFire(int32 Index)
 {
 	// Switch on Int: only case 0 is wired - other weapon indices are no-ops (1:1 with the real graph)
 	if (Index == 0)
@@ -595,12 +796,12 @@ void ATSTankControllerChaos::WeaponFire(int32 Index)
 		}
 	}
 }
-void ATSTankControllerChaos::SERVER_Explode_Implementation()
+void ABP_TankController_Chaos_CPP::SERVER_Explode_Implementation()
 {
 	MC_Explode();
 }
 
-void ATSTankControllerChaos::MC_Explode_Implementation()
+void ABP_TankController_Chaos_CPP::MC_Explode_Implementation()
 {
 	// then_0
 	Destroyed = true;
@@ -626,7 +827,7 @@ void ATSTankControllerChaos::MC_Explode_Implementation()
 	ServerLights(false);
 }
 
-void ATSTankControllerChaos::ClientDestroyed()
+void ABP_TankController_Chaos_CPP::ClientDestroyed()
 {
 	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
 	{
@@ -638,7 +839,7 @@ void ATSTankControllerChaos::ClientDestroyed()
 		UWidgetLayoutLibrary::RemoveAllWidgets(this);
 	}
 }
-void ATSTankControllerChaos::UpdateSound()
+void ABP_TankController_Chaos_CPP::UpdateSound()
 {
 	if (Destroyed)
 	{
@@ -661,7 +862,7 @@ void ATSTankControllerChaos::UpdateSound()
 		if (TankEngine) { TankEngine->FadeOut(0.5f, 0.f); }
 	}
 }
-void ATSTankControllerChaos::TracksDecal()
+void ABP_TankController_Chaos_CPP::TracksDecal()
 {
 	const float ForwardSpeed = VehicleMovement ? VehicleMovement->GetForwardSpeed() : 0.f;
 	const bool bMoving = (ForwardSpeed > 0.0) || (ForwardSpeed < 0.0);
@@ -673,7 +874,7 @@ void ATSTankControllerChaos::TracksDecal()
 		ServerSlipCosmetics(SlideBackLeft, true, Intensity);
 	}
 }
-void ATSTankControllerChaos::MulticastSlipCosmetics_Implementation(UParticleSystemComponent* Particle, bool bNewActive, double Intensity)
+void ABP_TankController_Chaos_CPP::MulticastSlipCosmetics_Implementation(UParticleSystemComponent* Particle, bool bNewActive, double Intensity)
 {
 	if (Particle)
 	{
@@ -682,16 +883,16 @@ void ATSTankControllerChaos::MulticastSlipCosmetics_Implementation(UParticleSyst
 	}
 }
 
-void ATSTankControllerChaos::ServerSlipCosmetics_Implementation(UParticleSystemComponent* Particle, bool bNewActive, double Intensity)
+void ABP_TankController_Chaos_CPP::ServerSlipCosmetics_Implementation(UParticleSystemComponent* Particle, bool bNewActive, double Intensity)
 {
 	MulticastSlipCosmetics(Particle, bNewActive, Intensity);
 }
-void ATSTankControllerChaos::SERVER_UpdateCamo_Implementation()
+void ABP_TankController_Chaos_CPP::SERVER_UpdateCamo_Implementation()
 {
 	MC_UpdateCamo();
 }
 
-void ATSTankControllerChaos::MC_UpdateCamo_Implementation()
+void ABP_TankController_Chaos_CPP::MC_UpdateCamo_Implementation()
 {
 	// Cycle CamoCurrent: wrap to 0 once past the last CamoVariations entry
 	const int32 LastIndex = CamoVariations.Num() - 1;
@@ -712,12 +913,12 @@ void ATSTankControllerChaos::MC_UpdateCamo_Implementation()
 		SetTrackDynamicMaterial();
 	}
 }
-void ATSTankControllerChaos::ServerLights_Implementation(bool bLightsOn)
+void ABP_TankController_Chaos_CPP::ServerLights_Implementation(bool bLightsOn)
 {
 	MulticastLights(bLightsOn);
 }
 
-void ATSTankControllerChaos::MulticastLights_Implementation(bool bLightsOn)
+void ABP_TankController_Chaos_CPP::MulticastLights_Implementation(bool bLightsOn)
 {
 	const float Intensity = bLightsOn ? LightIntensityLights : 0.0f;
 	if (Light_R) { Light_R->SetIntensity(Intensity); }
@@ -727,28 +928,28 @@ void ATSTankControllerChaos::MulticastLights_Implementation(bool bLightsOn)
 		GetMesh()->SetScalarParameterValueOnMaterials(FName("EmissiveIntensity"), bLightsOn ? EmissiveIntensityLights : 0.0f);
 	}
 }
-void ATSTankControllerChaos::SwitchPawn()
+void ABP_TankController_Chaos_CPP::SwitchPawn()
 {
 	PawnSwitching(PawnClassSelection);
 }
-void ATSTankControllerChaos::Server_Healing_Implementation()
+void ABP_TankController_Chaos_CPP::Server_Healing_Implementation()
 {
 	MC_Healing();
 }
 
-void ATSTankControllerChaos::MC_Healing_Implementation()
+void ABP_TankController_Chaos_CPP::MC_Healing_Implementation()
 {
 	Health = HealthMax;
 }
-void ATSTankControllerChaos::UpdateUI_HP()
+void ABP_TankController_Chaos_CPP::UpdateUI_HP()
 {
 	UpdateHealthBar();
 }
-void ATSTankControllerChaos::EventUpdateDamageUI(int32 Damage)
+void ABP_TankController_Chaos_CPP::EventUpdateDamageUI(int32 Damage)
 {
 	UpdateDamageCausedUI(Damage);
 }
-void ATSTankControllerChaos::WeaponReloadUI(int32 WeaponSlot)
+void ABP_TankController_Chaos_CPP::WeaponReloadUI(int32 WeaponSlot)
 {
 	// Switch on Int 0..4 all follow the same pattern: poll ReloadWeaponUI(slot) until it reports Reloaded, retrying next tick
 	if (WeaponSlot < 0 || WeaponSlot > 4)
@@ -761,79 +962,102 @@ void ATSTankControllerChaos::WeaponReloadUI(int32 WeaponSlot)
 		if (UWorld* World = GetWorld())
 		{
 			FTimerHandle Unused;
-			World->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateUObject(this, &ATSTankControllerChaos::WeaponReloadUI, WeaponSlot));
+			World->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateUObject(this, &ABP_TankController_Chaos_CPP::WeaponReloadUI, WeaponSlot));
 		}
 	}
 }
-void ATSTankControllerChaos::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+void ABP_TankController_Chaos_CPP::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
 	if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
-		EIC->BindAction(IA_LookUpDown, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnLookUpDown);
-		EIC->BindAction(IA_LookRightLeft, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnLookRightLeft);
-		EIC->BindAction(IA_MoveRightLeft, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnMoveRightLeft);
-		EIC->BindAction(IA_MoveForwardBack, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnMoveForwardBack);
-		EIC->BindAction(IA_Handbrake, ETriggerEvent::Started, this, &ATSTankControllerChaos::OnHandbrakePressed);
-		EIC->BindAction(IA_Handbrake, ETriggerEvent::Completed, this, &ATSTankControllerChaos::OnHandbrakeReleased);
-		EIC->BindAction(IA_DebugView, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnDebugView);
-		EIC->BindAction(IA_DestroySelf, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnDestroySelf);
-		EIC->BindAction(IA_ToggleInterface, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnToggleInterface);
-		EIC->BindAction(IA_BulletTime, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnBulletTime);
-		EIC->BindAction(IA_UseWeapon1, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnUseWeapon1);
-		EIC->BindAction(IA_UseWeapon2, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnUseWeapon2);
-		EIC->BindAction(IA_UseWeapon3, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnUseWeapon3);
-		EIC->BindAction(IA_UseWeapon4, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnUseWeapon4);
-		EIC->BindAction(IA_UseWeapon5, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnUseWeapon5);
-		EIC->BindAction(IA_FirePrimaryWeapon, ETriggerEvent::Started, this, &ATSTankControllerChaos::OnFirePrimaryWeaponStarted);
-		EIC->BindAction(IA_FirePrimaryWeapon, ETriggerEvent::Completed, this, &ATSTankControllerChaos::OnFirePrimaryWeaponCompleted);
-		EIC->BindAction(IA_Reload, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnReload);
-		EIC->BindAction(IA_Aim, ETriggerEvent::Started, this, &ATSTankControllerChaos::OnAimStarted);
-		EIC->BindAction(IA_Aim, ETriggerEvent::Completed, this, &ATSTankControllerChaos::OnAimCompleted);
-		EIC->BindAction(IA_SwitchCamo, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnSwitchCamo);
-		EIC->BindAction(IA_ToggleLights, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnToggleLights);
-		EIC->BindAction(IA_TurretBlocking, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnTurretBlockingToggle);
-		EIC->BindAction(IA_Stabilizer, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnStabilizerToggle);
-		EIC->BindAction(IA_Healing, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnHealingRequested);
-		EIC->BindAction(IA_SniperModeToggle, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnSniperModeToggle);
-		EIC->BindAction(IA_Zoom, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnZoom);
-		EIC->BindAction(IA_ShowHotkeys, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnShowHotkeys);
-		EIC->BindAction(IA_GeoTracksSwitching, ETriggerEvent::Triggered, this, &ATSTankControllerChaos::OnGeoTracksSwitching);
+		EIC->BindAction(IA_LookUpDown, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnLookUpDown);
+		EIC->BindAction(IA_LookRightLeft, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnLookRightLeft);
+		EIC->BindAction(IA_MoveRightLeft, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnMoveRightLeft);
+		EIC->BindAction(IA_MoveRightLeft, ETriggerEvent::Completed, this, &ABP_TankController_Chaos_CPP::OnMoveRightLeftCompleted);
+		EIC->BindAction(IA_MoveRightLeft, ETriggerEvent::Canceled, this, &ABP_TankController_Chaos_CPP::OnMoveRightLeftCompleted);
+		EIC->BindAction(IA_MoveForwardBack, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnMoveForwardBack);
+		EIC->BindAction(IA_MoveForwardBack, ETriggerEvent::Completed, this, &ABP_TankController_Chaos_CPP::OnMoveForwardBackCompleted);
+		EIC->BindAction(IA_MoveForwardBack, ETriggerEvent::Canceled, this, &ABP_TankController_Chaos_CPP::OnMoveForwardBackCompleted);
+		EIC->BindAction(IA_Handbrake, ETriggerEvent::Started, this, &ABP_TankController_Chaos_CPP::OnHandbrakePressed);
+		EIC->BindAction(IA_Handbrake, ETriggerEvent::Completed, this, &ABP_TankController_Chaos_CPP::OnHandbrakeReleased);
+		EIC->BindAction(IA_DebugView, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnDebugView);
+		EIC->BindAction(IA_DestroySelf, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnDestroySelf);
+		EIC->BindAction(IA_ToggleInterface, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnToggleInterface);
+		EIC->BindAction(IA_BulletTime, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnBulletTime);
+		EIC->BindAction(IA_UseWeapon1, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnUseWeapon1);
+		EIC->BindAction(IA_UseWeapon2, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnUseWeapon2);
+		EIC->BindAction(IA_UseWeapon3, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnUseWeapon3);
+		EIC->BindAction(IA_UseWeapon4, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnUseWeapon4);
+		EIC->BindAction(IA_UseWeapon5, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnUseWeapon5);
+		EIC->BindAction(IA_FirePrimaryWeapon, ETriggerEvent::Started, this, &ABP_TankController_Chaos_CPP::OnFirePrimaryWeaponStarted);
+		EIC->BindAction(IA_FirePrimaryWeapon, ETriggerEvent::Completed, this, &ABP_TankController_Chaos_CPP::OnFirePrimaryWeaponCompleted);
+		EIC->BindAction(IA_Reload, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnReload);
+		EIC->BindAction(IA_Aim, ETriggerEvent::Started, this, &ABP_TankController_Chaos_CPP::OnAimStarted);
+		EIC->BindAction(IA_Aim, ETriggerEvent::Completed, this, &ABP_TankController_Chaos_CPP::OnAimCompleted);
+		EIC->BindAction(IA_SwitchCamo, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnSwitchCamo);
+		EIC->BindAction(IA_ToggleLights, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnToggleLights);
+		EIC->BindAction(IA_TurretBlocking, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnTurretBlockingToggle);
+		EIC->BindAction(IA_Stabilizer, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnStabilizerToggle);
+		EIC->BindAction(IA_Healing, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnHealingRequested);
+		EIC->BindAction(IA_SniperModeToggle, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnSniperModeToggle);
+		EIC->BindAction(IA_Zoom, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnZoom);
+		EIC->BindAction(IA_ShowHotkeys, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnShowHotkeys);
+		EIC->BindAction(IA_GeoTracksSwitching, ETriggerEvent::Triggered, this, &ABP_TankController_Chaos_CPP::OnGeoTracksSwitching);
 	}
 }
-void ATSTankControllerChaos::OnLookUpDown(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnLookUpDown(const FInputActionValue& Value)
 {
 	// CameraPitchLimit (sibling function) re-scales the raw axis before it's applied
 	const double Clamped = CameraPitchLimit(Value.Get<float>());
 	AddControllerPitchInput(Clamped);
 }
 
-void ATSTankControllerChaos::OnLookRightLeft(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnLookRightLeft(const FInputActionValue& Value)
 {
 	AddControllerYawInput(Value.Get<float>());
 }
 
-void ATSTankControllerChaos::OnMoveRightLeft(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnMoveRightLeft(const FInputActionValue& Value)
 {
 	MoveRightAxis = Value.Get<float>();
 	// Followed by a call using the new MoveRightAxis (TurningControl, sibling function)
 	TurningControl();
 }
 
-void ATSTankControllerChaos::OnMoveForwardBack(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnMoveRightLeftCompleted(const FInputActionValue& Value)
+{
+	MoveRightAxis = 0.0f;
+	TurningControl();
+}
+
+void ABP_TankController_Chaos_CPP::OnMoveForwardBack(const FInputActionValue& Value)
 {
 	ThrottleControl(Value.Get<float>());
 }
 
-void ATSTankControllerChaos::OnHandbrakePressed(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnMoveForwardBackCompleted(const FInputActionValue& Value)
 {
-	PoliceTurn(true);
+	ThrottleControl(0.0f);
 }
 
-void ATSTankControllerChaos::OnHandbrakeReleased(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnHandbrakePressed(const FInputActionValue& Value)
+{
+	PoliceTurn(true);
+	if (VehicleMovement)
+	{
+		VehicleMovement->SetHandbrakeInput(true);
+	}
+}
+
+void ABP_TankController_Chaos_CPP::OnHandbrakeReleased(const FInputActionValue& Value)
 {
 	PoliceTurn(false);
+	if (VehicleMovement)
+	{
+		VehicleMovement->SetHandbrakeInput(false);
+	}
 }
 namespace
 {
@@ -848,47 +1072,47 @@ namespace
 	}
 }
 
-void ATSTankControllerChaos::OnUseWeapon1(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnUseWeapon1(const FInputActionValue& Value)
 {
 	struct { int32 WeaponIndex; } Params{ 0 };
 	CallWeaponFunction(BPC_TankWeapon, FName("SERVER_ChangeWeapon"), &Params);
 }
 
-void ATSTankControllerChaos::OnUseWeapon2(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnUseWeapon2(const FInputActionValue& Value)
 {
 	struct { int32 WeaponIndex; } Params{ 1 };
 	CallWeaponFunction(BPC_TankWeapon, FName("SERVER_ChangeWeapon"), &Params);
 }
 
-void ATSTankControllerChaos::OnUseWeapon3(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnUseWeapon3(const FInputActionValue& Value)
 {
 	struct { int32 WeaponIndex; } Params{ 2 };
 	CallWeaponFunction(BPC_TankWeapon, FName("SERVER_ChangeWeapon"), &Params);
 }
 
-void ATSTankControllerChaos::OnUseWeapon4(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnUseWeapon4(const FInputActionValue& Value)
 {
 	struct { int32 WeaponIndex; } Params{ 3 };
 	CallWeaponFunction(BPC_TankWeapon, FName("SERVER_ChangeWeapon"), &Params);
 }
 
-void ATSTankControllerChaos::OnUseWeapon5(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnUseWeapon5(const FInputActionValue& Value)
 {
 	struct { int32 WeaponIndex; } Params{ 4 };
 	CallWeaponFunction(BPC_TankWeapon, FName("SERVER_ChangeWeapon"), &Params);
 }
 
-void ATSTankControllerChaos::OnFirePrimaryWeaponStarted(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnFirePrimaryWeaponStarted(const FInputActionValue& Value)
 {
 	CallWeaponFunction(BPC_TankWeapon, FName("StartShooting"));
 }
 
-void ATSTankControllerChaos::OnFirePrimaryWeaponCompleted(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnFirePrimaryWeaponCompleted(const FInputActionValue& Value)
 {
 	CallWeaponFunction(BPC_TankWeapon, FName("StopShooting"));
 }
 
-void ATSTankControllerChaos::OnReload(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnReload(const FInputActionValue& Value)
 {
 	int32 CurrentWeaponIndex = 0;
 	if (FIntProperty* IdxProp = BPC_TankWeapon ? FindFProperty<FIntProperty>(BPC_TankWeapon->GetClass(), TEXT("Current WeaponIndex")) : nullptr)
@@ -898,7 +1122,7 @@ void ATSTankControllerChaos::OnReload(const FInputActionValue& Value)
 	struct { int32 Weapon; } Params{ CurrentWeaponIndex };
 	CallWeaponFunction(BPC_TankWeapon, FName("ReloadWeapon"), &Params);
 }
-void ATSTankControllerChaos::OnDebugView(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnDebugView(const FInputActionValue& Value)
 {
 	// Flip Flop: toggles a debug console command each press
 	bDebugViewFlipFlop = !bDebugViewFlipFlop;
@@ -908,12 +1132,12 @@ void ATSTankControllerChaos::OnDebugView(const FInputActionValue& Value)
 	}
 }
 
-void ATSTankControllerChaos::OnDestroySelf(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnDestroySelf(const FInputActionValue& Value)
 {
 	SERVER_Explode();
 }
 
-void ATSTankControllerChaos::OnToggleInterface(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnToggleInterface(const FInputActionValue& Value)
 {
 	bInterfaceFlipFlop = !bInterfaceFlipFlop;
 	if (HUD)
@@ -922,7 +1146,7 @@ void ATSTankControllerChaos::OnToggleInterface(const FInputActionValue& Value)
 	}
 }
 
-void ATSTankControllerChaos::OnBulletTime(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnBulletTime(const FInputActionValue& Value)
 {
 	// Only meaningful while Sniper Mode is active; global time dilation not owned by any ported graph
 	// function (BulletTime's real node wiring wasn't traced) - best-effort direct implementation.
@@ -932,57 +1156,64 @@ void ATSTankControllerChaos::OnBulletTime(const FInputActionValue& Value)
 	}
 }
 
-void ATSTankControllerChaos::OnAimStarted(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnAimTimelineUpdate(float AimingPhase)
 {
-	// IA_Aim's exact mapping onto the SniperModeToggle/ZoomIn/ZoomOut exec pins wasn't traced;
-	// approximated as hold-to-aim entering sniper mode. Verify against the BP.
-	if (!SniperMode)
+	if (SpringArmArcade)
 	{
-		SniperModeToggle();
+		SpringArmArcade->TargetArmLength = UKismetMathLibrary::FInterpEaseInOut(TargetArmLengthMin, 0.0, AimingPhase, 1.0f);
+		SpringArmArcade->SocketOffset = StartSocketOffsetArcade + (ArcadeAimCameraOffset * AimingPhase);
 	}
 }
 
-void ATSTankControllerChaos::OnAimCompleted(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnAimStarted(const FInputActionValue& Value)
 {
-	if (SniperMode)
+	if (!SniperMode && AimTimeline)
 	{
-		SniperModeToggle();
+		AimTimeline->Play();
 	}
 }
 
-void ATSTankControllerChaos::OnSwitchCamo(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnAimCompleted(const FInputActionValue& Value)
+{
+	if (!SniperMode && AimTimeline)
+	{
+		AimTimeline->Reverse();
+	}
+}
+
+void ABP_TankController_Chaos_CPP::OnSwitchCamo(const FInputActionValue& Value)
 {
 	SERVER_UpdateCamo();
 }
 
-void ATSTankControllerChaos::OnToggleLights(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnToggleLights(const FInputActionValue& Value)
 {
 	bLightsFlipFlop = !bLightsFlipFlop;
 	ServerLights(bLightsFlipFlop);
 }
 
-void ATSTankControllerChaos::OnTurretBlockingToggle(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnTurretBlockingToggle(const FInputActionValue& Value)
 {
 	TurretBlocking = !TurretBlocking;
 }
 
-void ATSTankControllerChaos::OnStabilizerToggle(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnStabilizerToggle(const FInputActionValue& Value)
 {
 	Stabilization = !Stabilization;
 	StabilizationWasSwitched = true;
 }
 
-void ATSTankControllerChaos::OnHealingRequested(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnHealingRequested(const FInputActionValue& Value)
 {
 	Server_Healing();
 }
 
-void ATSTankControllerChaos::OnSniperModeToggle(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnSniperModeToggle(const FInputActionValue& Value)
 {
 	SniperModeToggle();
 }
 
-void ATSTankControllerChaos::OnZoom(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnZoom(const FInputActionValue& Value)
 {
 	const float RawValue = Value.Get<float>();
 	if (RawValue > 0.f)
@@ -995,7 +1226,7 @@ void ATSTankControllerChaos::OnZoom(const FInputActionValue& Value)
 	}
 }
 
-void ATSTankControllerChaos::OnShowHotkeys(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnShowHotkeys(const FInputActionValue& Value)
 {
 	bHotkeysFlipFlop = !bHotkeysFlipFlop;
 	if (UWidget* HotkeysBox = HUD ? Cast<UWidget>(HUD->GetWidgetFromName(FName("VerticalBoxHotkeys"))) : nullptr)
@@ -1004,12 +1235,12 @@ void ATSTankControllerChaos::OnShowHotkeys(const FInputActionValue& Value)
 	}
 }
 
-void ATSTankControllerChaos::OnGeoTracksSwitching(const FInputActionValue& Value)
+void ABP_TankController_Chaos_CPP::OnGeoTracksSwitching(const FInputActionValue& Value)
 {
 	UseGeometricTracks = !UseGeometricTracks;
 	// Followed by a Sequence of further track-remesh calls in sibling cluster code
 }
-void ATSTankControllerChaos::OnDebugAdjustWheelRadiusRear(bool bPressed)
+void ABP_TankController_Chaos_CPP::OnDebugAdjustWheelRadiusRear(bool bPressed)
 {
 	// Num5 key: Branch on UseGeometricTracks selects which debug value gets nudged
 	if (UseGeometricTracks)
@@ -1022,7 +1253,7 @@ void ATSTankControllerChaos::OnDebugAdjustWheelRadiusRear(bool bPressed)
 	}
 }
 
-void ATSTankControllerChaos::OnDebugToggleDebugCamera()
+void ABP_TankController_Chaos_CPP::OnDebugToggleDebugCamera()
 {
 	// 'C' key: Toggle Active on the debug Camera component
 	if (DebugCamera)
@@ -1034,7 +1265,7 @@ void ATSTankControllerChaos::OnDebugToggleDebugCamera()
 // ============================================================
 // Track & wheel spline animation (Chassis)
 // ============================================================
-void ATSTankControllerChaos::ChassisDistanceDefinition()
+void ABP_TankController_Chaos_CPP::ChassisDistanceDefinition()
 {
 	// Chassis distance Z rotation component
 	const double MeshYaw = GetMesh()->GetComponentRotation().Yaw;
@@ -1086,7 +1317,7 @@ void ATSTankControllerChaos::ChassisDistanceDefinition()
 		ChassisDistanceL = 0.0;
 	}
 }
-void ATSTankControllerChaos::UpdateTracksMID(UMaterialInstanceDynamic* MaterialInstance, double ChassisDistance)
+void ABP_TankController_Chaos_CPP::UpdateTracksMID(UMaterialInstanceDynamic* MaterialInstance, double ChassisDistance)
 {
 	if (!IsValid(MaterialInstance))
 	{
@@ -1097,7 +1328,7 @@ void ATSTankControllerChaos::UpdateTracksMID(UMaterialInstanceDynamic* MaterialI
 	const double Offset = InvertTrackDirection ? (Frac * -1.0) : Frac;
 	MaterialInstance->SetScalarParameterValue(TEXT("OffsetV"), static_cast<float>(Offset));
 }
-USplineComponent* ATSTankControllerChaos::SplineMirrorCopy(USplineComponent* SplineToCopy)
+USplineComponent* ABP_TankController_Chaos_CPP::SplineMirrorCopy(USplineComponent* SplineToCopy)
 {
 	if (!SplineToCopy)
 	{
@@ -1150,7 +1381,7 @@ USplineComponent* ATSTankControllerChaos::SplineMirrorCopy(USplineComponent* Spl
 
 	return NewSplineLocal;
 }
-TArray<UInstancedStaticMeshComponent*> ATSTankControllerChaos::InstanceTracksCreation(USplineComponent* TrackPathToAttach, bool TracksFlipY)
+TArray<UInstancedStaticMeshComponent*> ABP_TankController_Chaos_CPP::InstanceTracksCreation(USplineComponent* TrackPathToAttach, bool TracksFlipY)
 {
 	TArray<UInstancedStaticMeshComponent*> TrackInstancesLocal;
 
@@ -1196,7 +1427,7 @@ TArray<UInstancedStaticMeshComponent*> ATSTankControllerChaos::InstanceTracksCre
 
 	return TrackInstancesLocal;
 }
-void ATSTankControllerChaos::SetTracksTransform(const TArray<UInstancedStaticMeshComponent*>& TrackInstances, USplineComponent* TrackPath, double ChassisDistance)
+void ABP_TankController_Chaos_CPP::SetTracksTransform(const TArray<UInstancedStaticMeshComponent*>& TrackInstances, USplineComponent* TrackPath, double ChassisDistance)
 {
 	if (!TrackPath)
 	{
@@ -1242,7 +1473,7 @@ void ATSTankControllerChaos::SetTracksTransform(const TArray<UInstancedStaticMes
 		}
 	}
 }
-void ATSTankControllerChaos::TrackPathShift(USplineComponent* TrackPath, bool LeftSide)
+void ABP_TankController_Chaos_CPP::TrackPathShift(USplineComponent* TrackPath, bool LeftSide)
 {
 	UChaosWheeledVehicleMovementComponent* WheeledMovementComp = Cast<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
 	if (!TrackPath || !WheeledMovementComp)
@@ -1265,7 +1496,7 @@ void ATSTankControllerChaos::TrackPathShift(USplineComponent* TrackPath, bool Le
 		TrackPath->SetLocationAtSplinePoint(Index, FVector(Loc.X, Loc.Y, Z), ESplineCoordinateSpace::Local, true);
 	}
 }
-void ATSTankControllerChaos::TrackPathAnimations(USplineComponent* TrackPath, double SaggingDegree, bool ChassisLocked, bool LeftSide)
+void ABP_TankController_Chaos_CPP::TrackPathAnimations(USplineComponent* TrackPath, double SaggingDegree, bool ChassisLocked, bool LeftSide)
 {
 	UChaosVehicleMovementComponent* MovementComp = GetVehicleMovementComponent();
 	const bool bHandbrake = MovementComp ? MovementComp->GetHandbrakeInput() : false;
@@ -1302,7 +1533,7 @@ void ATSTankControllerChaos::TrackPathAnimations(USplineComponent* TrackPath, do
 		}
 	}
 }
-void ATSTankControllerChaos::SplinePointsParametersDefinition()
+void ABP_TankController_Chaos_CPP::SplinePointsParametersDefinition()
 {
 	for (int32 i = 0; i < TankSplineAnim.Num(); ++i)
 	{
@@ -1328,7 +1559,7 @@ void ATSTankControllerChaos::SplinePointsParametersDefinition()
 		}
 	}
 }
-FVector ATSTankControllerChaos::PointLocationCalculation(int32 SplinePointIndex, bool ChassisLocked, bool InteractWithWheel, double VibrationMaxAmplitude, double VibrationPhase, double SaggingForward, double SaggingBack, double SaggingDegree, int32 ArrayIndex, USplineComponent* TrackPath, bool LeftSide)
+FVector ABP_TankController_Chaos_CPP::PointLocationCalculation(int32 SplinePointIndex, bool ChassisLocked, bool InteractWithWheel, double VibrationMaxAmplitude, double VibrationPhase, double SaggingForward, double SaggingBack, double SaggingDegree, int32 ArrayIndex, USplineComponent* TrackPath, bool LeftSide)
 {
 	UChaosWheeledVehicleMovementComponent* WheeledMovementComp = Cast<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
 	const int32 MiddleWheelsAmount = WheeledMovementComp ? (WheeledMovementComp->Wheels.Num() / 2) : 0;
@@ -1394,7 +1625,7 @@ FVector ATSTankControllerChaos::PointLocationCalculation(int32 SplinePointIndex,
 
 	return LocalSplinePointLocation + CurrentVibrationOffset * CurrentPointPerpendicularVector;
 }
-int32 ATSTankControllerChaos::FindSplineXClosestPoint(int32 SplinePointindex)
+int32 ABP_TankController_Chaos_CPP::FindSplineXClosestPoint(int32 SplinePointindex)
 {
 	if (!TrackPath_R)
 	{
@@ -1425,7 +1656,7 @@ int32 ATSTankControllerChaos::FindSplineXClosestPoint(int32 SplinePointindex)
 
 	return ClosestPointIndexCurrent;
 }
-void ATSTankControllerChaos::SplineFilletsCompensation(USplineComponent* TrackPath)
+void ABP_TankController_Chaos_CPP::SplineFilletsCompensation(USplineComponent* TrackPath)
 {
 	if (!TrackPath)
 	{
@@ -1441,7 +1672,7 @@ void ATSTankControllerChaos::SplineFilletsCompensation(USplineComponent* TrackPa
 		TrackPath->SetLocationAtSplinePoint(Index, NewLoc, ESplineCoordinateSpace::Local, true);
 	}
 }
-void ATSTankControllerChaos::ShowUVTracks(bool Show)
+void ABP_TankController_Chaos_CPP::ShowUVTracks(bool Show)
 {
 	USkeletalMeshComponent* MeshComp = GetMesh();
 	if (!MeshComp)
@@ -1459,7 +1690,7 @@ void ATSTankControllerChaos::ShowUVTracks(bool Show)
 		MeshComp->ShowMaterialSection(MatIdxR, MatIdxR, Show, LODIndex);
 	}
 }
-double ATSTankControllerChaos::WheelRotationDefinition(double Distance, double WheelRadius, double TrackThicknessParam, double WheelSpeedCorrectionUVParam, double WheelStartAngleLeftGeoTracks, double WheelStartAngleRightGeoTracks, double WheelStartAngleLeftUVTracks, double WheelStartAngleRightUVTracks, bool LeftWheel) const
+double ABP_TankController_Chaos_CPP::WheelRotationDefinition(double Distance, double WheelRadius, double TrackThicknessParam, double WheelSpeedCorrectionUVParam, double WheelStartAngleLeftGeoTracks, double WheelStartAngleRightGeoTracks, double WheelStartAngleLeftUVTracks, double WheelStartAngleRightUVTracks, bool LeftWheel) const
 {
 	// Circumference
 	const double Circumference = 2.0 * (WheelRadius + TrackThicknessParam + (UseGeometricTracks ? 0.0 : WheelSpeedCorrectionUVParam)) * PI;
@@ -1471,7 +1702,7 @@ double ATSTankControllerChaos::WheelRotationDefinition(double Distance, double W
 
 	return (-360.0 * (Distance / Circumference)) + StartAngle;
 }
-void ATSTankControllerChaos::SetTrackDynamicMaterial()
+void ABP_TankController_Chaos_CPP::SetTrackDynamicMaterial()
 {
 	USkeletalMeshComponent* MeshComp = GetMesh();
 	if (!MeshComp)
@@ -1489,21 +1720,21 @@ void ATSTankControllerChaos::SetTrackDynamicMaterial()
 // ============================================================
 // Suspension / vibration / antenna physics + drive input
 // ============================================================
-double ATSTankControllerChaos::SaggingCalculation(double SaggingDegree, double HullDeltaXLocationParam, double ChassisDeltaDistance, bool ChassisLocked) const
+double ABP_TankController_Chaos_CPP::SaggingCalculation(double SaggingDegree, double HullDeltaXLocationParam, double ChassisDeltaDistance, bool ChassisLocked) const
 {
 	// HullDeltaXLocationParam is used when braking (negated); otherwise use the raw chassis delta distance
 	const double SelectedDistance = ChassisLocked ? (HullDeltaXLocationParam * -1.0) : ChassisDeltaDistance;
 	const double SaggingDegreeNew = SaggingDegree + (SelectedDistance / SaggingMaxDistance);
 	return FMath::Clamp(SaggingDegreeNew, 0.0, 1.0);
 }
-double ATSTankControllerChaos::VibrationCalculation(double VibrationAmplitude, double VibrationPhase)
+double ABP_TankController_Chaos_CPP::VibrationCalculation(double VibrationAmplitude, double VibrationPhase)
 {
 	const double TimeSeconds = GetWorld() ? UGameplayStatics::GetTimeSeconds(GetWorld()) : 0.0;
 	const double Phase = VibrationPhase + (TimeSeconds * TrackFrequency);
 	const double VibrationOffset = VibrationAmplitude * UKismetMathLibrary::DegSin(Phase);
 	return VibrationOffset;
 }
-void ATSTankControllerChaos::AntennaCalculation(const TArray<FTSAntennaParams>& InAntennaParameters)
+void ABP_TankController_Chaos_CPP::AntennaCalculation(const TArray<FTSAntennaParams>& InAntennaParameters)
 {
 	USkeletalMeshComponent* MeshComp = GetMesh();
 	if (!MeshComp)
@@ -1566,7 +1797,7 @@ void ATSTankControllerChaos::AntennaCalculation(const TArray<FTSAntennaParams>& 
 		AntennaRotation[CurrentIndex] = NewAntennaRotation;
 	}
 }
-void ATSTankControllerChaos::HullAccelerationDefinition()
+void ABP_TankController_Chaos_CPP::HullAccelerationDefinition()
 {
 	USkeletalMeshComponent* MeshComp = GetMesh();
 	if (!MeshComp)
@@ -1578,7 +1809,7 @@ void ATSTankControllerChaos::HullAccelerationDefinition()
 	HullAccelerationWorldInverted = HullSpeedWorld - CurrentVelocity;
 	HullSpeedWorld = CurrentVelocity;
 }
-void ATSTankControllerChaos::TurningControl()
+void ABP_TankController_Chaos_CPP::TurningControl()
 {
 	UChaosWheeledVehicleMovementComponent* Movement = Cast<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
 	USkeletalMeshComponent* MeshComp = GetMesh();
@@ -1588,7 +1819,7 @@ void ATSTankControllerChaos::TurningControl()
 	}
 
 	const double AngularVelZ = FMath::Abs(MeshComp->GetPhysicsAngularVelocityInDegrees(NAME_None).Z);
-	const double SteeringValue = SteeringCurve ? (SteeringCurve->GetFloatValue(ForwardSpeedMPH) * MaxTurningSpeed) : 0.0;
+	const double SteeringValue = SteeringCurve ? (SteeringCurve->GetFloatValue(ForwardSpeedMPH) * MaxTurningSpeed) : MaxTurningSpeed;
 	const double PoliceTurnSum = SteeringValue + ForwardSpeedMPH; // Police turn fix
 	const bool bHandbrake = Movement->GetHandbrakeInput();
 	const double TurnSpeedLimit = bHandbrake ? PoliceTurnSum : SteeringValue;
@@ -1618,14 +1849,21 @@ void ATSTankControllerChaos::TurningControl()
 		// Physics bug fix: if the tank turns in place with zero throttle it experiences extra
 		// resistance and turns slower, so a small throttle input is added when turning in place.
 		const bool bStationaryTurn = (FMath::Abs(ForwardSpeedMPH) < 3.0) && (MoveRightAxis != 0.0);
-		Movement->SetThrottleInput(bStationaryTurn ? 0.001f : 0.0f);
+		if (bStationaryTurn && FMath::IsNearlyZero(Movement->GetThrottleInput()))
+		{
+			Movement->SetThrottleInput(0.001f);
+		}
+		else if (!bStationaryTurn && FMath::IsNearlyEqual(Movement->GetThrottleInput(), 0.001f))
+		{
+			Movement->SetThrottleInput(0.0f);
+		}
 	}
 	else
 	{
 		Movement->SetYawInput(0.0f);
 	}
 }
-void ATSTankControllerChaos::ThrottleControl(double ThrottleActionValue)
+void ABP_TankController_Chaos_CPP::ThrottleControl(double ThrottleActionValue)
 {
 	if (!IsVehicleTaken)
 	{
@@ -1644,10 +1882,34 @@ void ATSTankControllerChaos::ThrottleControl(double ThrottleActionValue)
 	Movement->SetThrottleInput(static_cast<float>(ThrottleInput));
 
 	const bool bBrakingWhileReversing = (ThrottleInput > 0.0) && (ForwardSpeedMPH < -1.0);
-	const double BrakeInput = bBrakingWhileReversing ? ThrottleInput : (ThrottleInput * -1.0);
+	const bool bBrakingWhileForward = (ThrottleInput < 0.0) && (ForwardSpeedMPH > 1.0);
+	
+	double BrakeInput = 0.0;
+	if (bBrakingWhileReversing)
+	{
+		BrakeInput = ThrottleInput;
+	}
+	else if (bBrakingWhileForward)
+	{
+		BrakeInput = ThrottleInput * -1.0;
+	}
+	
 	Movement->SetBrakeInput(static_cast<float>(BrakeInput));
+
+	// Automatic-transmission shift-out-of-Neutral isn't engaging on its own for this vehicle
+	// (TargetGear stays 0 indefinitely even with sustained positive throttle), so drive it
+	// explicitly here rather than relying on the engine's own auto-shift.
+	if (ThrottleInput > 0.0 && Movement->GetCurrentGear() <= 0 && Movement->GetTargetGear() <= 0)
+	{
+		Movement->SetTargetGear(1, true);
+	}
+	else if (ThrottleInput < 0.0 && Movement->GetCurrentGear() >= 0 && Movement->GetTargetGear() >= 0)
+	{
+		Movement->SetTargetGear(-1, true);
+	}
+
 }
-void ATSTankControllerChaos::PoliceTurn(bool bPressed)
+void ABP_TankController_Chaos_CPP::PoliceTurn(bool bPressed)
 {
 	UChaosWheeledVehicleMovementComponent* Movement = Cast<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
 	if (!Movement)
@@ -1698,7 +1960,7 @@ void ATSTankControllerChaos::PoliceTurn(bool bPressed)
 // ============================================================
 // Turret / gun rotation + ballistics
 // ============================================================
-void ATSTankControllerChaos::UpdateTurretRotation_Old()
+void ABP_TankController_Chaos_CPP::UpdateTurretRotation_Old()
 {
 	// --- Sequence pin 0: recalculate TurretRotation (world/hull relative) then interp toward target ---
 	if (StabilizationWasSwitched)
@@ -1747,7 +2009,7 @@ void ATSTankControllerChaos::UpdateTurretRotation_Old()
 		TurretPitch = UKismetMathLibrary::FClamp(TurretRotation.Pitch, MinPitch, TurretVerticalRange.Y);
 	}
 }
-void ATSTankControllerChaos::UpdateMachineGunRotation_Old()
+void ABP_TankController_Chaos_CPP::UpdateMachineGunRotation_Old()
 {
 	const FRotator StabilizedTarget = Stabilization
 		? UKismetMathLibrary::NormalizedDeltaRotator(Rep_ControlRotation, GetActorRotation())
@@ -1760,7 +2022,7 @@ void ATSTankControllerChaos::UpdateMachineGunRotation_Old()
 	MGYaw = MGRotation.Yaw;
 	MGPitch = UKismetMathLibrary::FClamp(MGRotation.Pitch, MGVerticalRange.X, MGVerticalRange.Y);
 }
-void ATSTankControllerChaos::UpdateTurretRotation(FName BoneToRotate, double YawRotSpeed, TSubclassOf<AActor> GunProjectile, FRotator TurretRotCurrent, FVector2D HorizontalRange, bool CalculateBallistix, FVector TargetPoint, float& TurretRotNew_Roll, float& TurretRotNew_Pitch, float& TurretRotNew_Yaw)
+void ABP_TankController_Chaos_CPP::UpdateTurretRotation(FName BoneToRotate, double YawRotSpeed, TSubclassOf<AActor> GunProjectile, FRotator TurretRotCurrent, FVector2D HorizontalRange, bool CalculateBallistix, FVector TargetPoint, float& TurretRotNew_Roll, float& TurretRotNew_Pitch, float& TurretRotNew_Yaw)
 {
 	USkeletalMeshComponent* MeshComp = GetMesh();
 
@@ -1790,7 +2052,7 @@ void ATSTankControllerChaos::UpdateTurretRotation(FName BoneToRotate, double Yaw
 	TurretRotNew_Pitch = 0.f;
 	TurretRotNew_Yaw = UKismetMathLibrary::FClamp(TurretRotNew.Yaw, HorizontalRange.X, HorizontalRange.Y);
 }
-void ATSTankControllerChaos::UpdateGunRotation(int32 WeaponIndex, FName BoneToRotate, double GunPitchSpeed, FRotator GunRotCurrent, FVector2D VerticalRange, bool CalculateBallistix, FVector TargetPoint, TSubclassOf<AActor> GunProjectile, float& GunRotNew_Roll, float& GunRotNew_Pitch, float& GunRotNew_Yaw)
+void ABP_TankController_Chaos_CPP::UpdateGunRotation(int32 WeaponIndex, FName BoneToRotate, double GunPitchSpeed, FRotator GunRotCurrent, FVector2D VerticalRange, bool CalculateBallistix, FVector TargetPoint, TSubclassOf<AActor> GunProjectile, float& GunRotNew_Roll, float& GunRotNew_Pitch, float& GunRotNew_Yaw)
 {
 	USkeletalMeshComponent* MeshComp = GetMesh();
 	FVector SocketToTargetGun = TargetPoint - MeshComp->GetSocketLocation(BoneToRotate);
@@ -1853,7 +2115,7 @@ void ATSTankControllerChaos::UpdateGunRotation(int32 WeaponIndex, FName BoneToRo
 		GunRotNew_Yaw = 0.f;
 	}
 }
-double ATSTankControllerChaos::BallisticsCalculation(FVector VectorBetweenSocketAndTarget, TSubclassOf<AActor> GunProjectile)
+double ABP_TankController_Chaos_CPP::BallisticsCalculation(FVector VectorBetweenSocketAndTarget, TSubclassOf<AActor> GunProjectile)
 {
 	// Class-default projectile stats (BP_ProjectileMaster_C's "Initial Speed" / "Projectile Gravity Scale")
 	double ProjectileSpeed = 0.0;
@@ -1889,7 +2151,7 @@ double ATSTankControllerChaos::BallisticsCalculation(FVector VectorBetweenSocket
 	const double AimPointCorrection = UKismetMathLibrary::DegTan(PrimaryAngle + AdditionalElevationAngle) * TargetVectorProjectedXYWorld.Size() - TargetVectorProjectedZWorld.Size();
 	return AimPointCorrection;
 }
-void ATSTankControllerChaos::TurretsAndGunsRotCalculation()
+void ABP_TankController_Chaos_CPP::TurretsAndGunsRotCalculation()
 {
 	if (TurretBlocking)
 	{
@@ -1976,7 +2238,7 @@ void ATSTankControllerChaos::TurretsAndGunsRotCalculation()
 	IsTurretRotating = !MainTurretAndGunRotation.Equals(CombinedTurretGunRotation, 0.1f);
 	MainTurretAndGunRotation = CombinedTurretGunRotation;
 }
-void ATSTankControllerChaos::RecalculateGunAndTurretRotation()
+void ABP_TankController_Chaos_CPP::RecalculateGunAndTurretRotation()
 {
 	// Re-bake the stabilization offset into TurretsRotUnstabilized (turret yaw follows hull yaw when unstabilized)
 	const double YawMultiplier = Stabilization ? 1.0 : -1.0;
@@ -1994,7 +2256,7 @@ void ATSTankControllerChaos::RecalculateGunAndTurretRotation()
 		GunRot = UKismetMathLibrary::ComposeRotators(GunRot, RotCorrector);
 	}
 }
-void ATSTankControllerChaos::ScatteringCalculation()
+void ABP_TankController_Chaos_CPP::ScatteringCalculation()
 {
 	if (!BPC_TankWeapon)
 	{
@@ -2040,7 +2302,7 @@ void ATSTankControllerChaos::ScatteringCalculation()
 	GunsRotPrevFrame = GunsRot;
 	TurretsRotPrevFrame = TurretsRot;
 }
-FRotator ATSTankControllerChaos::SelfCollisionCheck(FName BoneToRotate, FRotator CurrentRotation, FRotator TargetRotation, double GunPitchSpeed, FVector2D VerticalRange)
+FRotator ABP_TankController_Chaos_CPP::SelfCollisionCheck(FName BoneToRotate, FRotator CurrentRotation, FRotator TargetRotation, double GunPitchSpeed, FVector2D VerticalRange)
 {
 	USkeletalMeshComponent* MeshComp = GetMesh();
 	const FVector SocketLoc = MeshComp->GetSocketLocation(BoneToRotate) - FVector(0.0, 0.0, 10.0);
@@ -2094,7 +2356,7 @@ FRotator ATSTankControllerChaos::SelfCollisionCheck(FName BoneToRotate, FRotator
 // ============================================================
 // Camera, HUD and UI update functions
 // ============================================================
-void ATSTankControllerChaos::ReplicateControlRotation()
+void ABP_TankController_Chaos_CPP::ReplicateControlRotation()
 {
 	if (HasAuthority() || IsLocallyControlled())
 	{
@@ -2113,7 +2375,7 @@ void ATSTankControllerChaos::ReplicateControlRotation()
 	}
 }
 // --- shared reflection helpers (BP_TankWeapon_C fields have no native C++ type) ---
-int32 ATSTankControllerChaos::GetIntProp(const UObject* Obj, FName PropertyName, int32 DefaultValue)
+int32 ABP_TankController_Chaos_CPP::GetIntProp(const UObject* Obj, FName PropertyName, int32 DefaultValue)
 {
 	if (!Obj) return DefaultValue;
 	if (const FIntProperty* P = FindFProperty<FIntProperty>(Obj->GetClass(), PropertyName))
@@ -2123,7 +2385,7 @@ int32 ATSTankControllerChaos::GetIntProp(const UObject* Obj, FName PropertyName,
 	return DefaultValue;
 }
 
-bool ATSTankControllerChaos::GetBoolProp(const UObject* Obj, FName PropertyName, bool DefaultValue)
+bool ABP_TankController_Chaos_CPP::GetBoolProp(const UObject* Obj, FName PropertyName, bool DefaultValue)
 {
 	if (!Obj) return DefaultValue;
 	if (const FBoolProperty* P = FindFProperty<FBoolProperty>(Obj->GetClass(), PropertyName))
@@ -2133,7 +2395,7 @@ bool ATSTankControllerChaos::GetBoolProp(const UObject* Obj, FName PropertyName,
 	return DefaultValue;
 }
 
-double ATSTankControllerChaos::GetDoubleProp(const UObject* Obj, FName PropertyName, double DefaultValue)
+double ABP_TankController_Chaos_CPP::GetDoubleProp(const UObject* Obj, FName PropertyName, double DefaultValue)
 {
 	if (!Obj) return DefaultValue;
 	if (const FDoubleProperty* P = FindFProperty<FDoubleProperty>(Obj->GetClass(), PropertyName))
@@ -2143,7 +2405,7 @@ double ATSTankControllerChaos::GetDoubleProp(const UObject* Obj, FName PropertyN
 	return DefaultValue;
 }
 
-FVector ATSTankControllerChaos::GetVectorProp(const UObject* Obj, FName PropertyName, FVector DefaultValue)
+FVector ABP_TankController_Chaos_CPP::GetVectorProp(const UObject* Obj, FName PropertyName, FVector DefaultValue)
 {
 	if (!Obj) return DefaultValue;
 	if (const FStructProperty* P = FindFProperty<FStructProperty>(Obj->GetClass(), PropertyName))
@@ -2156,7 +2418,7 @@ FVector ATSTankControllerChaos::GetVectorProp(const UObject* Obj, FName Property
 	return DefaultValue;
 }
 
-int32 ATSTankControllerChaos::GetArrayNum(const UObject* Obj, FName ArrayPropertyName)
+int32 ABP_TankController_Chaos_CPP::GetArrayNum(const UObject* Obj, FName ArrayPropertyName)
 {
 	if (!Obj) return 0;
 	if (const FArrayProperty* ArrProp = FindFProperty<FArrayProperty>(Obj->GetClass(), ArrayPropertyName))
@@ -2167,7 +2429,7 @@ int32 ATSTankControllerChaos::GetArrayNum(const UObject* Obj, FName ArrayPropert
 	return 0;
 }
 
-void* ATSTankControllerChaos::GetStructPropPtr(UObject* Obj, FName PropertyName, UScriptStruct** OutStruct)
+void* ABP_TankController_Chaos_CPP::GetStructPropPtr(UObject* Obj, FName PropertyName, UScriptStruct** OutStruct)
 {
 	if (!Obj) return nullptr;
 	if (FStructProperty* P = FindFProperty<FStructProperty>(Obj->GetClass(), PropertyName))
@@ -2178,7 +2440,7 @@ void* ATSTankControllerChaos::GetStructPropPtr(UObject* Obj, FName PropertyName,
 	return nullptr;
 }
 
-void* ATSTankControllerChaos::GetArrayElementStructPtr(UObject* Obj, FName ArrayPropertyName, int32 Index, UScriptStruct** OutStruct)
+void* ABP_TankController_Chaos_CPP::GetArrayElementStructPtr(UObject* Obj, FName ArrayPropertyName, int32 Index, UScriptStruct** OutStruct)
 {
 	if (!Obj) return nullptr;
 	FArrayProperty* ArrProp = FindFProperty<FArrayProperty>(Obj->GetClass(), ArrayPropertyName);
@@ -2191,7 +2453,7 @@ void* ATSTankControllerChaos::GetArrayElementStructPtr(UObject* Obj, FName Array
 	return Helper.GetRawPtr(Index);
 }
 
-FText ATSTankControllerChaos::GetTextFieldFromStruct(void* StructPtr, UScriptStruct* Struct, FName FieldName)
+FText ABP_TankController_Chaos_CPP::GetTextFieldFromStruct(void* StructPtr, UScriptStruct* Struct, FName FieldName)
 {
 	if (!StructPtr || !Struct) return FText::GetEmpty();
 	if (const FTextProperty* P = FindFProperty<FTextProperty>(Struct, FieldName))
@@ -2201,7 +2463,7 @@ FText ATSTankControllerChaos::GetTextFieldFromStruct(void* StructPtr, UScriptStr
 	return FText::GetEmpty();
 }
 
-double ATSTankControllerChaos::GetDoubleFieldFromStruct(void* StructPtr, UScriptStruct* Struct, FName FieldName, double DefaultValue)
+double ABP_TankController_Chaos_CPP::GetDoubleFieldFromStruct(void* StructPtr, UScriptStruct* Struct, FName FieldName, double DefaultValue)
 {
 	if (!StructPtr || !Struct) return DefaultValue;
 	if (const FDoubleProperty* P = FindFProperty<FDoubleProperty>(Struct, FieldName))
@@ -2211,7 +2473,7 @@ double ATSTankControllerChaos::GetDoubleFieldFromStruct(void* StructPtr, UScript
 	return DefaultValue;
 }
 
-void ATSTankControllerChaos::UpdateHUD()
+void ABP_TankController_Chaos_CPP::UpdateHUD()
 {
 	if (!IsValid(HUD)) return;
 
@@ -2263,7 +2525,7 @@ void ATSTankControllerChaos::UpdateHUD()
 		}
 	}
 }
-void ATSTankControllerChaos::UpdateCrosshairPositionAndSize()
+void ABP_TankController_Chaos_CPP::UpdateCrosshairPositionAndSize()
 {
 	if (!IsValid(Crosshair)) return;
 
@@ -2291,11 +2553,11 @@ void ATSTankControllerChaos::UpdateCrosshairPositionAndSize()
 		}
 	}
 }
-void ATSTankControllerChaos::CameraAutoSetting()
+void ABP_TankController_Chaos_CPP::CameraAutoSetting()
 {
 	if (!SpringArmArcade || !SpringArmSniper || !GetMesh())
 	{
-		UE_LOG(LogTemp, Error, TEXT("ATSTankControllerChaos::CameraAutoSetting: missing SpringArmArcade/SpringArmSniper/Mesh on %s - skipping camera setup"), *GetNameSafe(this));
+		UE_LOG(LogTemp, Error, TEXT("ABP_TankController_Chaos_CPP::CameraAutoSetting: missing SpringArmArcade/SpringArmSniper/Mesh on %s - skipping camera setup"), *GetNameSafe(this));
 		return;
 	}
 
@@ -2303,6 +2565,8 @@ void ATSTankControllerChaos::CameraAutoSetting()
 	StartTargetArmLengthArcade = SpringArmArcade->TargetArmLength;
 	StartSocketOffsetArcade = SpringArmArcade->SocketOffset;
 	StartLagSpeed = SpringArmSniper->CameraLagSpeed;
+
+	GetMesh()->UpdateComponentToWorld();
 
 	// SpringArmArcade alignment: align X/Y with the turret's rotation axis, then Z with the gun's rotation axis
 	const FVector TurretSocketLocation = GetMesh()->GetSocketLocation(TEXT("turret"));
@@ -2318,7 +2582,7 @@ void ATSTankControllerChaos::CameraAutoSetting()
 	const FVector2D TurretXY(TurretSocketLocation.X, TurretSocketLocation.Y);
 	TargetArmLengthArcade_2 = (GunXY - TurretXY).Size() * -1.0;
 }
-double ATSTankControllerChaos::CameraPitchLimit(double AxisValue)
+double ABP_TankController_Chaos_CPP::CameraPitchLimit(double AxisValue)
 {
 	const double AxisValueInput = AxisValue;
 
@@ -2361,7 +2625,7 @@ double ATSTankControllerChaos::CameraPitchLimit(double AxisValue)
 	const double Delta = GunMinAngle - GunCurrentAngle;
 	return (Delta * Delta) / -800.0;
 }
-void ATSTankControllerChaos::SniperModeToggle()
+void ABP_TankController_Chaos_CPP::SniperModeToggle()
 {
 	if (!SpringArmArcade || !SpringArmSniper || !Camera)
 	{
@@ -2400,7 +2664,7 @@ void ATSTankControllerChaos::SniperModeToggle()
 	UpdateZoomRatioUI();
 }
 
-void ATSTankControllerChaos::ZoomIn()
+void ABP_TankController_Chaos_CPP::ZoomIn()
 {
 	if (!SpringArmArcade || !Camera)
 	{
@@ -2426,7 +2690,7 @@ void ATSTankControllerChaos::ZoomIn()
 	SpringArmArcade->TargetArmLength = FMath::Clamp(SpringArmArcade->TargetArmLength - Step, TargetArmLengthMin, TargetArmLengthMax);
 }
 
-void ATSTankControllerChaos::ZoomOut()
+void ABP_TankController_Chaos_CPP::ZoomOut()
 {
 	if (!SpringArmArcade || !Camera)
 	{
@@ -2450,7 +2714,7 @@ void ATSTankControllerChaos::ZoomOut()
 	const double Step = LeftCtrlPressed ? CameraZoomStep / 5.0 : CameraZoomStep;
 	SpringArmArcade->TargetArmLength = FMath::Clamp(SpringArmArcade->TargetArmLength + Step, TargetArmLengthMin, TargetArmLengthMax);
 }
-void ATSTankControllerChaos::UpdateHealthBar()
+void ABP_TankController_Chaos_CPP::UpdateHealthBar()
 {
 	if (!IsValid(HUD)) return;
 
@@ -2470,7 +2734,7 @@ void ATSTankControllerChaos::UpdateHealthBar()
 		HPText->SetText(FText::AsNumber(Health));
 	}
 }
-void ATSTankControllerChaos::WeaponSlotsDisplay()
+void ABP_TankController_Chaos_CPP::WeaponSlotsDisplay()
 {
 	if (!IsValid(HUD)) return;
 
@@ -2504,7 +2768,7 @@ void ATSTankControllerChaos::WeaponSlotsDisplay()
 		}
 	}
 }
-void ATSTankControllerChaos::UpdateChosenWeaponUI()
+void ABP_TankController_Chaos_CPP::UpdateChosenWeaponUI()
 {
 	if (!IsValid(HUD)) return;
 
@@ -2524,7 +2788,7 @@ void ATSTankControllerChaos::UpdateChosenWeaponUI()
 		}
 	}
 }
-void ATSTankControllerChaos::UpdateZoomRatioUI()
+void ABP_TankController_Chaos_CPP::UpdateZoomRatioUI()
 {
 	if (!IsValid(HUD)) return;
 	UTextBlock* ZoomRatioText = Cast<UTextBlock>(HUD->GetWidgetFromName(TEXT("TextZoomRatio")));
@@ -2541,7 +2805,7 @@ void ATSTankControllerChaos::UpdateZoomRatioUI()
 	const int32 Ratio = FMath::TruncToInt(90.0 / FOV); // To remove the zero after the decimal point
 	ZoomRatioText->SetText(FText::FromString(FString::Printf(TEXT("x%d"), Ratio)));
 }
-void ATSTankControllerChaos::UpdateChosenVehicleUI()
+void ABP_TankController_Chaos_CPP::UpdateChosenVehicleUI()
 {
 	if (!IsValid(HUD)) return;
 
@@ -2554,7 +2818,7 @@ void ATSTankControllerChaos::UpdateChosenVehicleUI()
 		TankNameText->SetText(FText::FromString(Trimmed));
 	}
 }
-void ATSTankControllerChaos::UpdateDamageCausedUI(int32 Damage)
+void ABP_TankController_Chaos_CPP::UpdateDamageCausedUI(int32 Damage)
 {
 	DamageCausedUI += Damage;
 
@@ -2568,10 +2832,10 @@ void ATSTankControllerChaos::UpdateDamageCausedUI(int32 Damage)
 	}
 
 	// BP used a Retriggerable Delay (2s) then hid the text and reset the counter; a retriggerable timer is the C++ equivalent
-	GetWorldTimerManager().SetTimer(DamageCausedUITimerHandle, this, &ATSTankControllerChaos::HideDamageCausedUI, 2.0f, false);
+	GetWorldTimerManager().SetTimer(DamageCausedUITimerHandle, this, &ABP_TankController_Chaos_CPP::HideDamageCausedUI, 2.0f, false);
 }
 
-void ATSTankControllerChaos::HideDamageCausedUI()
+void ABP_TankController_Chaos_CPP::HideDamageCausedUI()
 {
 	if (IsValid(HUD))
 	{
@@ -2582,7 +2846,7 @@ void ATSTankControllerChaos::HideDamageCausedUI()
 	}
 	DamageCausedUI = 0;
 }
-bool ATSTankControllerChaos::ReloadWeaponUI(int32 WeaponIndex)
+bool ABP_TankController_Chaos_CPP::ReloadWeaponUI(int32 WeaponIndex)
 {
 	static const TCHAR* ProgressBarNames[5] = { TEXT("ProgressBar_GunReload_1"), TEXT("ProgressBar_GunReload_2"), TEXT("ProgressBar_GunReload_3"), TEXT("ProgressBar_GunReload_4"), TEXT("ProgressBar_GunReload_5") };
 
