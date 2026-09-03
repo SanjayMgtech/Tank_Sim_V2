@@ -4,6 +4,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/EngineBaseTypes.h"
 #include "Interfaces/OnlineSessionInterface.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "TSSessionSubsystem.generated.h"
@@ -72,12 +73,18 @@ private:
 	void HandleJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result);
 	void HandleDestroySessionComplete(FName SessionName, bool bWasSuccessful);
 
+	// ClientTravel() is fire-and-forget - it never tells the caller whether the connection actually
+	// succeeded. This is the only way to find out a travel silently failed (wrong/unreachable address,
+	// port mismatch, firewall, etc.) instead of the client just sitting on the same map forever.
+	void HandleNetworkFailure(UWorld* World, class UNetDriver* NetDriver, ENetworkFailure::Type FailureType, const FString& ErrorString);
+
 	TSharedPtr<class FOnlineSessionSearch> SessionSearch;
 
 	FDelegateHandle CreateSessionCompleteHandle;
 	FDelegateHandle FindSessionsCompleteHandle;
 	FDelegateHandle JoinSessionCompleteHandle;
 	FDelegateHandle DestroySessionCompleteHandle;
+	FDelegateHandle NetworkFailureHandle;
 
 	bool bDestroyThenCreatePending = false;
 	int32 PendingMaxPlayers = 12;

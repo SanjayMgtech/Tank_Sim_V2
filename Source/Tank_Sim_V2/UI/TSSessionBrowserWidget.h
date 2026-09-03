@@ -46,5 +46,11 @@ private:
 	UFUNCTION()
 	void HandleFindSessionsComplete(bool bWasSuccessful, const TArray<FTSSessionSearchResult>& Results);
 
+	// OnJoin (above) is BlueprintAssignable for external listeners, but nothing native ever bound to
+	// it - it fired into nothing. This gives it a real, always-present listener so a click is visible
+	// immediately, independent of whether any Blueprint happens to bind the delegate too.
+	UFUNCTION()
+	void HandleJoinClicked(int32 SessionIndex);
+
 	UTSSessionSubsystem* GetSessionSubsystem() const;
 };

@@ -1,5 +1,7 @@
 #include "UI/TSSessionBrowserWidget.h"
 
+#include "Engine/Engine.h"
+
 UTSSessionSubsystem* UTSSessionBrowserWidget::GetSessionSubsystem() const
 {
 	return GetGameInstance() ? GetGameInstance()->GetSubsystem<UTSSessionSubsystem>() : nullptr;
@@ -13,6 +15,8 @@ void UTSSessionBrowserWidget::NativeConstruct()
 	{
 		Sessions->OnFindSessionsComplete.AddDynamic(this, &UTSSessionBrowserWidget::HandleFindSessionsComplete);
 	}
+
+	OnJoin.AddDynamic(this, &UTSSessionBrowserWidget::HandleJoinClicked);
 }
 
 void UTSSessionBrowserWidget::NativeDestruct()
@@ -55,4 +59,13 @@ void UTSSessionBrowserWidget::JoinSession(int32 SessionIndex)
 void UTSSessionBrowserWidget::HandleFindSessionsComplete(bool bWasSuccessful, const TArray<FTSSessionSearchResult>& Results)
 {
 	OnSessionListUpdated(bWasSuccessful ? Results : TArray<FTSSessionSearchResult>());
+}
+
+void UTSSessionBrowserWidget::HandleJoinClicked(int32 SessionIndex)
+{
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 6.0f, FColor::Cyan,
+			FString::Printf(TEXT("[Session] Join clicked for result index %d"), SessionIndex));
+	}
 }
