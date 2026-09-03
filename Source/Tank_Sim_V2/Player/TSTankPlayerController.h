@@ -10,6 +10,7 @@
 #include "TSTankPlayerController.generated.h"
 
 class ATSTankPlayerState;
+class UTSSessionSubsystem;
 
 UCLASS()
 class ATSTankPlayerController : public APlayerController
@@ -19,6 +20,9 @@ class ATSTankPlayerController : public APlayerController
 public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	APawn* GetAssignedTank() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Session")
+	UTSSessionSubsystem* GetSessionSubsystem() const;
 
 	// --- Team / role selection (validated by ATSGameMode) ---------------------------------------
 	// Named to match the Developer 1 shared contract (Tank_Simulation_Developer_Documentation.pdf

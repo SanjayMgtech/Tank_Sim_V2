@@ -2,6 +2,7 @@
 
 #include "Engine/Engine.h"
 #include "Engine/LocalPlayer.h"
+#include "Kismet/GameplayStatics.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
@@ -20,24 +21,36 @@ namespace
 	}
 }
 
+void UTSSessionSubsystem::EnsureDelegatesBound(IOnlineSessionPtr Sessions)
+{
+	if (!Sessions.IsValid())
+	{
+		return;
+	}
+
+	Sessions->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteHandle);
+	Sessions->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteHandle);
+	Sessions->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteHandle);
+	Sessions->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteHandle);
+
+	CreateSessionCompleteHandle = Sessions->AddOnCreateSessionCompleteDelegate_Handle(
+		FOnCreateSessionCompleteDelegate::CreateUObject(this, &UTSSessionSubsystem::HandleCreateSessionComplete));
+
+	FindSessionsCompleteHandle = Sessions->AddOnFindSessionsCompleteDelegate_Handle(
+		FOnFindSessionsCompleteDelegate::CreateUObject(this, &UTSSessionSubsystem::HandleFindSessionsComplete));
+
+	JoinSessionCompleteHandle = Sessions->AddOnJoinSessionCompleteDelegate_Handle(
+		FOnJoinSessionCompleteDelegate::CreateUObject(this, &UTSSessionSubsystem::HandleJoinSessionComplete));
+
+	DestroySessionCompleteHandle = Sessions->AddOnDestroySessionCompleteDelegate_Handle(
+		FOnDestroySessionCompleteDelegate::CreateUObject(this, &UTSSessionSubsystem::HandleDestroySessionComplete));
+}
+
 void UTSSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
-	if (IOnlineSessionPtr Sessions = GetSessionInterface())
-	{
-		CreateSessionCompleteHandle = Sessions->AddOnCreateSessionCompleteDelegate_Handle(
-			FOnCreateSessionCompleteDelegate::CreateUObject(this, &UTSSessionSubsystem::HandleCreateSessionComplete));
-
-		FindSessionsCompleteHandle = Sessions->AddOnFindSessionsCompleteDelegate_Handle(
-			FOnFindSessionsCompleteDelegate::CreateUObject(this, &UTSSessionSubsystem::HandleFindSessionsComplete));
-
-		JoinSessionCompleteHandle = Sessions->AddOnJoinSessionCompleteDelegate_Handle(
-			FOnJoinSessionCompleteDelegate::CreateUObject(this, &UTSSessionSubsystem::HandleJoinSessionComplete));
-
-		DestroySessionCompleteHandle = Sessions->AddOnDestroySessionCompleteDelegate_Handle(
-			FOnDestroySessionCompleteDelegate::CreateUObject(this, &UTSSessionSubsystem::HandleDestroySessionComplete));
-	}
+	EnsureDelegatesBound(GetSessionInterface());
 
 	if (GEngine)
 	{
@@ -75,9 +88,16 @@ IOnlineSessionPtr UTSSessionSubsystem::GetSessionInterface() const
 	return Subsystem ? Subsystem->GetSessionInterface() : nullptr;
 }
 
-void UTSSessionSubsystem::CreateSession(int32 MaxPlayers, bool bIsLAN, bool bIsPresence)
+void UTSSessionSubsystem::CreateSession(int32 MaxPlayers, bool bIsLAN, bool bIsPresence, FString MapPath)
 {
+	if (!MapPath.IsEmpty())
+	{
+		HostMapPath = MapPath;
+	}
+
 	IOnlineSessionPtr Sessions = GetSessionInterface();
+	EnsureDelegatesBound(Sessions);
+
 	const ULocalPlayer* LocalPlayer = GetGameInstance() ? GetGameInstance()->GetFirstGamePlayer() : nullptr;
 	if (!Sessions || !LocalPlayer)
 	{
@@ -123,12 +143,24 @@ void UTSSessionSubsystem::HandleCreateSessionComplete(FName SessionName, bool bW
 		: FString::Printf(TEXT("[Session] FAILED to host session '%s'."), *SessionName.ToString()),
 		bWasSuccessful ? FColor::Green : FColor::Red);
 
+	if (bWasSuccessful)
+	{
+		if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)
+		{
+			const FName MapToOpen = !HostMapPath.IsEmpty() ? FName(*HostMapPath) : FName(TEXT("/Game/TankSimulation/Maps/WarZone"));
+			PrintOnScreen(FString::Printf(TEXT("[Session] Host traveling to level %s ..."), *MapToOpen.ToString()), FColor::Cyan);
+			UGameplayStatics::OpenLevel(World, MapToOpen, true, TEXT("listen"));
+		}
+	}
+
 	OnCreateSessionComplete.Broadcast(bWasSuccessful);
 }
 
 void UTSSessionSubsystem::FindSessions(bool bIsLAN, bool bIsPresence)
 {
 	IOnlineSessionPtr Sessions = GetSessionInterface();
+	EnsureDelegatesBound(Sessions);
+
 	const ULocalPlayer* LocalPlayer = GetGameInstance() ? GetGameInstance()->GetFirstGamePlayer() : nullptr;
 	if (!Sessions || !LocalPlayer)
 	{
@@ -171,6 +203,8 @@ void UTSSessionSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 void UTSSessionSubsystem::JoinSession(int32 SearchResultIndex)
 {
 	IOnlineSessionPtr Sessions = GetSessionInterface();
+	EnsureDelegatesBound(Sessions);
+
 	const ULocalPlayer* LocalPlayer = GetGameInstance() ? GetGameInstance()->GetFirstGamePlayer() : nullptr;
 	const bool bHaveSearch = SessionSearch.IsValid();
 	const bool bValidIndex = bHaveSearch && SessionSearch->SearchResults.IsValidIndex(SearchResultIndex);
@@ -239,7 +273,10 @@ void UTSSessionSubsystem::HandleNetworkFailure(UWorld* World, UNetDriver* NetDri
 
 void UTSSessionSubsystem::DestroySession()
 {
-	if (IOnlineSessionPtr Sessions = GetSessionInterface())
+	IOnlineSessionPtr Sessions = GetSessionInterface();
+	EnsureDelegatesBound(Sessions);
+
+	if (Sessions)
 	{
 		Sessions->DestroySession(NAME_GameSession);
 	}

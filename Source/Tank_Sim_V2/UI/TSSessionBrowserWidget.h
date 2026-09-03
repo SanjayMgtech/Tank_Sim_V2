@@ -20,14 +20,17 @@ public:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 
-	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|UI")
+	UPROPERTY(BlueprintAssignable, BlueprintCallable, Category = "Tank Simulation|UI")
 	FTSOnCreateSessionEvent OnCreateSession;
 
-	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|UI")
+	UPROPERTY(BlueprintAssignable, BlueprintCallable, Category = "Tank Simulation|UI")
 	FTSOnRefreshEvent OnRefresh;
 
-	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|UI")
+	UPROPERTY(BlueprintAssignable, BlueprintCallable, Category = "Tank Simulation|UI")
 	FTSOnJoinEvent OnJoin;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|UI")
+	FString HostMapPath = TEXT("/Game/TankSimulation/Maps/WarZone");
 
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
 	void CreateSession(int32 MaxPlayers = 12, bool bIsLAN = true);
@@ -38,13 +41,31 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
 	void JoinSession(int32 SessionIndex);
 
-	// WBP override point: rebuild the visible list from the latest search results.
+	// WBP override points: respond to session lifecycle completion events
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|UI")
+	void OnCreateSessionFinished(bool bWasSuccessful);
+
 	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|UI")
 	void OnSessionListUpdated(const TArray<FTSSessionSearchResult>& Results);
 
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|UI")
+	void OnJoinSessionFinished(bool bWasSuccessful);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|UI")
+	void OnDestroySessionFinished(bool bWasSuccessful);
+
 private:
 	UFUNCTION()
+	void HandleCreateSessionComplete(bool bWasSuccessful);
+
+	UFUNCTION()
 	void HandleFindSessionsComplete(bool bWasSuccessful, const TArray<FTSSessionSearchResult>& Results);
+
+	UFUNCTION()
+	void HandleJoinSessionComplete(bool bWasSuccessful);
+
+	UFUNCTION()
+	void HandleDestroySessionComplete(bool bWasSuccessful);
 
 	// OnJoin (above) is BlueprintAssignable for external listeners, but nothing native ever bound to
 	// it - it fired into nothing. This gives it a real, always-present listener so a click is visible

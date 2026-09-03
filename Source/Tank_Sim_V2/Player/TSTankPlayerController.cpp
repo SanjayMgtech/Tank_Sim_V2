@@ -1,6 +1,8 @@
 #include "Player/TSTankPlayerController.h"
 
+#include "Core/TSGameInstance.h"
 #include "Core/TSGameMode.h"
+#include "Networking/TSSessionSubsystem.h"
 #include "Player/TSTankPlayerState.h"
 #include "Tank/TSTankCommanderComponent.h"
 #include "Tank/TSTankControlComponent.h"
@@ -16,6 +18,15 @@ APawn* ATSTankPlayerController::GetAssignedTank() const
 {
 	const ATSTankPlayerState* PS = GetTankPlayerState();
 	return PS ? PS->GetAssignedTank() : nullptr;
+}
+
+UTSSessionSubsystem* ATSTankPlayerController::GetSessionSubsystem() const
+{
+	if (UTSGameInstance* TSGI = Cast<UTSGameInstance>(GetGameInstance()))
+	{
+		return TSGI->GetSessionSubsystem();
+	}
+	return GetGameInstance() ? GetGameInstance()->GetSubsystem<UTSSessionSubsystem>() : nullptr;
 }
 
 // --- Team / role selection ------------------------------------------------------------------

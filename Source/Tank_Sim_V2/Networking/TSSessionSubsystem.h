@@ -41,8 +41,11 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Session")
+	FString HostMapPath = TEXT("/Game/TankSimulation/Maps/WarZone");
+
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
-	void CreateSession(int32 MaxPlayers = 12, bool bIsLAN = true, bool bIsPresence = false);
+	void CreateSession(int32 MaxPlayers = 12, bool bIsLAN = true, bool bIsPresence = false, FString MapPath = TEXT(""));
 
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
 	void FindSessions(bool bIsLAN = true, bool bIsPresence = false);
@@ -67,6 +70,7 @@ public:
 
 private:
 	IOnlineSessionPtr GetSessionInterface() const;
+	void EnsureDelegatesBound(IOnlineSessionPtr Sessions);
 
 	void HandleCreateSessionComplete(FName SessionName, bool bWasSuccessful);
 	void HandleFindSessionsComplete(bool bWasSuccessful);

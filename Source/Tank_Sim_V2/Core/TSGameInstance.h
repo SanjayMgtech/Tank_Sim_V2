@@ -15,6 +15,18 @@ class UTSGameInstance : public UGameInstance
 	GENERATED_BODY()
 
 public:
-	UFUNCTION(BlueprintPure, Category = "Tank Simulation", meta = (CompactNodeTitle = "Sessions"))
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Session", meta = (CompactNodeTitle = "Sessions"))
 	UTSSessionSubsystem* GetSessionSubsystem() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
+	void CreateSession(int32 MaxPlayers = 12, bool bIsLAN = true, bool bIsPresence = false, FString MapPath = TEXT(""));
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
+	void FindSessions(bool bIsLAN = true, bool bIsPresence = false);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
+	void JoinSession(int32 SearchResultIndex);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
+	void DestroySession();
 };
