@@ -40,7 +40,13 @@ void UTSSessionSubsystem::Deinitialize()
 
 IOnlineSessionPtr UTSSessionSubsystem::GetSessionInterface() const
 {
-	IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
+	// World-scoped lookup, not the bare IOnlineSubsystem::Get(): PIE runs the server and each client
+	// as separate UWorlds in one process, each registered under its own OSS instance name. The
+	// world-unaware static grabs whichever instance happens to be "current", so a client's
+	// CreateSession/FindSessions calls can silently land on a different instance than the host's -
+	// sessions get created but nothing can ever find them. Online::GetSubsystem(World) resolves the
+	// instance actually owned by this GameInstance's world.
+	IOnlineSubsystem* Subsystem = Online::GetSubsystem(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr);
 	return Subsystem ? Subsystem->GetSessionInterface() : nullptr;
 }
 
