@@ -445,4 +445,26 @@ public:
 	// ---------------------------------------------------------------------
 	UFUNCTION(BlueprintCallable, Category = "Chassis", meta = (ToolTip = "Updates dynamic material instance"))
 	void UpdateTracksMID(UMaterialInstanceDynamic* MaterialInstance, double ChassisDistance);
+
+	// ---------------------------------------------------------------------
+	// Phase 16: SaggingCalculation. Unblocked by the Phase 15 parameter rename.
+	//
+	// Ported 1:1:
+	//   Selected = ChassisLocked ? (InHullDeltaXLocation * -1) : ChassisDeltaDistance
+	//   SaggingDegreeNew = Clamp(SaggingDegree + Selected / SaggingMaxDistance, 0, 1)
+	//
+	// BlueprintPURE, unlike the other ported functions: get_function_signature reports
+	// is_pure=true and both EventGraph call sites carry data pins only, no exec pins.
+	// (The function graph's own entry/result nodes do show exec pins internally - that
+	// is an artifact. Trust the CALL SITE, not the graph.)
+	//
+	// The parameter is InHullDeltaXLocation, not HullDeltaXLocation: UHT forbids a
+	// parameter shadowing the member of that name moved in Phase 7. The Blueprint
+	// parameter was renamed first (Phase 15) so the pin name still matches.
+	//
+	// `SaggingDegree` is the input parameter, not a member - there is no member of
+	// that name, only SaggingDegreeR/L.
+	// ---------------------------------------------------------------------
+	UFUNCTION(BlueprintPure, Category = "Chassis", meta = (ToolTip = "Calculation of the amount of sagging tracks"))
+	void SaggingCalculation(double SaggingDegree, double InHullDeltaXLocation, double ChassisDeltaDistance, bool ChassisLocked, double& SaggingDegreeNew) const;
 };

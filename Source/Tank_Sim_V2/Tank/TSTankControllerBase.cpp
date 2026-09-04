@@ -111,3 +111,20 @@ void ATSTankControllerBase::UpdateTracksMID(UMaterialInstanceDynamic* MaterialIn
 
 	MaterialInstance->SetScalarParameterValue(TEXT("OffsetV"), static_cast<float>(Value));
 }
+
+void ATSTankControllerBase::SaggingCalculation(double SaggingDegree, double InHullDeltaXLocation, double ChassisDeltaDistance, bool ChassisLocked, double& SaggingDegreeNew) const
+{
+	// 1:1 port. Graph order was:
+	//   InHullDeltaXLocation * -1 -> SelectFloat(A, ChassisDeltaDistance, bPickA=ChassisLocked)
+	//   -> / SaggingMaxDistance -> + SaggingDegree -> Clamp(0, 1)
+	//
+	// SelectFloat returns A when bPickA is true. The graph comment on the negate node
+	// reads "HullDeltaXLocation is used when braking", i.e. the locked-chassis branch.
+	const double Selected = ChassisLocked ? (InHullDeltaXLocation * -1.0) : ChassisDeltaDistance;
+
+	// UKismetMathLibrary::Divide_DoubleDouble returns 0 rather than dividing by zero.
+	// SaggingMaxDistance is 20 on every tank today but is designer-editable.
+	const double Scaled = FMath::IsNearlyZero(SaggingMaxDistance) ? 0.0 : (Selected / SaggingMaxDistance);
+
+	SaggingDegreeNew = FMath::Clamp(SaggingDegree + Scaled, 0.0, 1.0);
+}

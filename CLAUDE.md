@@ -305,9 +305,11 @@ function they call has already been moved and individually verified.**
 | 11 (retry) — vibration/sagging tuning, **middle path** | ✅ PASS | 9 moved: `SpeedInfluence`, `MaxSpeedInfluence`, `AccelerationInfluence`, `MaxAccelerationInfluence`, `TrackFrequency`, `DecayRate`, `InteractionAmplitudeMultiplier`, `SaggingMaxDistance`, `ProportionalCoefficient`. 62 native props. All 9 verified correct on master **and all 6 tanks** (`problems=0`). BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
 | 12 — **First function move**: `VibrationCalculation` | ✅ PASS | Ported 1:1 to C++. Call site in `PointLocationCalculation` rebound with **every pin intact, 0 orphaned**, node retargeted to `TSTankControllerBase`. Math verified **bit-exact** (delta 0.000e+00) on 3 input pairs. BP `UpToDate`, 0 errors/warnings, PIE clean. |
 | 13 — `HullAccelerationDefinition` | ✅ PASS | Ported 1:1. Call site retargeted to `TSTankControllerBase`, all pins intact, 0 orphaned. `HullSpeedWorld` matches the mesh's physics velocity **exactly** (delta 0.0000) at two sample points; inverted acceleration non-zero. BP `UpToDate`, PIE clean. |
-| 13a — `SaggingCalculation` | ⛔ **BLOCKED** | Parameter name shadows a moved member. See below. |
+| 13a — `SaggingCalculation` | ⛔ BLOCKED, later UNBLOCKED | Parameter shadowed a moved member. Resolved in Phase 15/16. |
 | 14 — Tuning w/ **override re-application** + `UpdateTracksMID` | ✅ PASS | Moved `TilingSegmentLength`, `InvertTrackDirection` (both differ per tank), re-applied all overrides, then ported `UpdateTracksMID`. Overrides **survived an editor restart** (`problems=0`). Function math matches to float precision. |
-| 15+ — Move more functions | ⬜ next | |
+| 15 — **Rename** `SaggingCalculation` param (manual) | ✅ PASS | `HullDeltaXLocation` -> `InHullDeltaXLocation`, done by hand in the editor. Both call sites kept their wiring; signature clean; 0 errored BPs. |
+| 16 — `SaggingCalculation` | ✅ PASS | Ported 1:1 as **BlueprintPure**. Call site retargeted, no exec pins added, 0 orphaned. Math **bit-exact** (delta 0.000e+00) across both branches and both clamp boundaries. |
+| 17+ — SCS component access pattern, then more functions | ⬜ next | |
 
 **Phase 14 — the override re-application procedure, proven end to end.**
 The loss happened exactly as predicted, then was recovered:
@@ -416,6 +418,25 @@ baseline, BP `UpToDate`, 0 errored BPs, and PIE healthy with the Phase 14 overri
 **Capture the baseline before touching a signature.** `get_node_details` on every call site,
 recording each pin and the variable feeding it, is what made it possible to prove the recovery
 was exact rather than merely plausible.
+
+### Renaming a Blueprint function parameter — it works, and it is safe
+Done manually in the function's Details panel (there is no MCP action for it). The editor
+renames the pin on every call site and keeps the connection. Verified on
+`SaggingCalculation`: both EventGraph call sites showed the pin as `InHullDeltaXLocation`
+still wired to the same `HullDeltaXLocation` variable, every other pin unchanged, nothing
+orphaned, 0 errored Blueprints. Capture each call site's pins first so the check is a
+comparison, not a guess.
+
+**Phase 16 numeric proof** — chosen to hit BOTH branches and BOTH clamp limits, not just a
+happy path:
+```
+sd=0.5 hx=2.0  cd=0.0  lock=True   got=0.400000000 expected=0.400000000 delta=0.000e+00
+sd=0.2 hx=0.0  cd=3.0  lock=False  got=0.350000000 expected=0.350000000 delta=0.000e+00
+sd=0.9 hx=-4.0 cd=0.0  lock=True   got=1.000000000 expected=1.000000000 delta=0.000e+00  (upper clamp)
+sd=0.1 hx=0.0  cd=-5.0 lock=False  got=0.000000000 expected=0.000000000 delta=0.000e+00  (lower clamp)
+```
+A single mid-range input would have passed even if the clamp or the branch select were wrong.
+Pick inputs that exercise every path through the function.
 
 **Phase 12 numeric proof** — computed independently in Python and compared:
 ```
