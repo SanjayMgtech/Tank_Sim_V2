@@ -172,4 +172,57 @@ public:
 	// Default is 1.0 in the Blueprint - see the trap note above.
 	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)")
 	double TrackSpeedModifier = 1.0;
+
+	// ---------------------------------------------------------------------
+	// Phase 8: runtime scratch ARRAYS.
+	//
+	// Array LENGTH is the new risk. Several of these ship with a pre-sized
+	// default and the graph indexes into them directly, so an empty array would
+	// throw "Attempted to access index N from array of length 0" at runtime.
+	// The sized ones are filled in the constructor - verified identical across
+	// all six per-tank Blueprints.
+	//
+	// Excluded from this phase:
+	//   * WheelsZOffsets, AntennaRotation - consumed by ABP_Chaos_<Tank>, so they
+	//     belong with the AnimBP group and its animation-level test.
+	//   * TurretsRot, GunsRot - replicated; replication is its own phase.
+	//   * TracksInstances_R/L - arrays of component object pointers.
+	//   * TankSplineAnim, TrackStaticMeshes, AntennaParameters, CamoVariations,
+	//     PawnClassSelection - real per-tank configuration, not scratch.
+	// ---------------------------------------------------------------------
+
+	// Empty by default.
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	TArray<double> VibrationOffset_R;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	TArray<double> VibrationOffset_L;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	TArray<FVector> SplinePointLocation;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	TArray<FVector> SplinePointPerpendicularVectors;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	TArray<int32> CopyPointIndices;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Scattering")
+	TArray<double> FinalScattering;
+
+	// Pre-sized in the constructor - see TSTankControllerBase.cpp.
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Antenna")
+	TArray<FVector> AntennaCurrentSpeed;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
+	TArray<FRotator> TurretsRotUnstabilized;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Scattering")
+	TArray<FRotator> TurretsRotPrevFrame;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Gun")
+	TArray<FRotator> GunsRotUnstabilized;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Scattering")
+	TArray<FRotator> GunsRotPrevFrame;
 };

@@ -298,7 +298,44 @@ function they call has already been moved and individually verified.**
 | 5 — Vars: chassis accel / rot / move scratch | ✅ PASS | `ChassisAccelerationR/L`, `HullZRot`, `ChassisDistanceZRotComponentR/L`, `ChassisDistanceXMoveComponentR/L` moved. All 11 native props present on the CDO; `remove_variable` reports "not found" for the moved names. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. Graceful editor close worked — no recovery modal. |
 | 6 — Vars: turret / MG scratch (**first structs**) | ✅ PASS | `MainTurretAndGunRotation`, `TurretRotation`, `MGRotation` (FRotator), `TurretYaw`, `TurretPitch` (double), `TurretBlocking`, `IsTurretRotating` (bool). All 18 native props present; moved names gone from the BP. `TurretRotation` still 10 refs / same node IDs. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
 | 7 — Vars: antenna / UI / misc (**FVector, float, int32**) | ✅ PASS | 14 moved: `HullSpeedWorld`, `HullAccelerationWorldInverted`, `TurretSpeedLocalInverted` (FVector), `CrosshairTraceClamp`, `AimPointCorrectionUI`, `CurrentAmplitudeMultiplierR/L`, `FilletsCompensation`, `HullDeltaXLocation`, `DeltaSeconds`, `CurentRPMRatio`, `TrackSpeedModifier` (double), `ForwardSpeedMPH` (float), `DamageCausedUI` (int32). 32 native props total. All 6 tanks match master on every default. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. **13/14 proven at runtime; `DamageCausedUI` structural only** (see below). |
-| 8+ — Move more variables | ⬜ next | |
+| 8 — Vars: scratch **ARRAYS** | ✅ PASS | 11 moved: `VibrationOffset_R/L`, `FinalScattering` (TArray&lt;double&gt;), `SplinePointLocation`, `SplinePointPerpendicularVectors`, `AntennaCurrentSpeed` (TArray&lt;FVector&gt;), `CopyPointIndices` (TArray&lt;int32&gt;), `TurretsRotUnstabilized`, `TurretsRotPrevFrame`, `GunsRotUnstabilized`, `GunsRotPrevFrame` (TArray&lt;FRotator&gt;). 43 native props. All lengths match across all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. |
+| 9+ — Move more variables | ⬜ next | |
+
+**Phase 8 runtime proof:**
+```
+VibrationOffset_R=19  VibrationOffset_L=19  SplinePointLocation=9
+SplinePointPerpendicularVectors=9  CopyPointIndices=9  FinalScattering=2
+AntennaCurrentSpeed=30  TurretsRot{Unstabilized,PrevFrame}=10  GunsRot{Unstabilized,PrevFrame}=10
+SAMPLE antenna0=(169.7875,24.0094,-13.6778) turretUnstab0=(0,0.1083,0) vibR0=-0.1011
+```
+The empty-by-default arrays get **sized by the Blueprint at runtime** (19/9/9/9/2), proving the
+graph populates the native property. Sampled elements carry real data, so writes reach actual
+elements, not just the container.
+
+### Array length is the thing that will bite you
+Several arrays ship pre-sized and the graph indexes into them directly. An empty array where
+the graph writes index 29 produces
+`Attempted to access index N from array 'X' of length 0`. Reproduce the sizes in the
+constructor:
+```cpp
+AntennaCurrentSpeed.Init(FVector::ZeroVector, 30);
+TurretsRotUnstabilized.Init(FRotator::ZeroRotator, 10);   // and the other three
+```
+This is the only thing the constructor is allowed to grow. It creates no components and loads
+no assets, so RULE 1 and RULE 2 still hold.
+Add these to `run_pie_smoke` `log_patterns.must_absent` for every array phase:
+`"Attempted to access index"`, `"out of bounds"`.
+
+### PRE-EXISTING BUG (not caused by the port) — AnimBP VibrationOffset
+`ABP_Chaos_T90` reads its **own** `VibrationOffsetR` / `VibrationOffsetL` (note: **no
+underscore**, unlike the pawn's `VibrationOffset_R`) at indices up to 18 while those arrays are
+length 0 — **60 warnings per PIE session**. The pawn's `VibrationOffset_R` correctly holds 19
+elements at runtime, so the pawn→AnimBP copy is not landing before the AnimGraph reads it.
+
+Confirmed pre-existing: present in `Tank_Sim_V2-backup-2026.09.03-20.55.50.log`, from the
+Phase 0–3 era, before any variable was moved. Zero warnings name any pawn array. **This makes
+`run_pie_smoke` report `ok:false` on any phase that checks for index warnings — do not read
+that as a regression, and do not "fix" it by dropping the pattern.** Fix the AnimBP separately.
 
 **Phase 7 runtime proof:**
 ```
