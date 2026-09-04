@@ -301,7 +301,77 @@ function they call has already been moved and individually verified.**
 | 8 — Vars: scratch **ARRAYS** | ✅ PASS | 11 moved: `VibrationOffset_R/L`, `FinalScattering` (TArray&lt;double&gt;), `SplinePointLocation`, `SplinePointPerpendicularVectors`, `AntennaCurrentSpeed` (TArray&lt;FVector&gt;), `CopyPointIndices` (TArray&lt;int32&gt;), `TurretsRotUnstabilized`, `TurretsRotPrevFrame`, `GunsRotUnstabilized`, `GunsRotPrevFrame` (TArray&lt;FRotator&gt;). 43 native props. All lengths match across all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. |
 | 9 — Vars: **REPLICATED** | ✅ PASS (with a stated gap) | `Rep_ControlRotation` (FRotator), `TurretsRot`, `GunsRot` (TArray&lt;FRotator&gt;, len 10). 46 native props. `UPROPERTY(Replicated)` + `GetLifetimeReplicatedProps`/`DOREPLIFETIME`. Lengths correct on all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs, **0 LogNet warnings**. PIE clean. **Client-server replication NOT exercised — see gap below.** |
 | 10 — Vars: object / component **references** | ✅ PASS | 7 moved: `BaseTrackMaterial`, `RightTrackMID`, `LeftTrackMID`, `TracksInstances_R/L`, `TrackPath_L`, `VehicleMovement`. 53 native props. **All 21 SCS components still intact.** BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. 6/7 runtime-proven. |
-| 11+ — Move more variables | ⬜ next | |
+| 11 — Vars: first real tuning values | ❌ **FAILED, REVERTED** | Moving the four `WheelRadius*` lost **19 of 24 per-tank overrides** — every tank fell back to the master default. Reverted; all overrides restored, nothing lost. See below. |
+| 11 (retry) — tuning values with override re-application | ⬜ next | |
+
+## ⚠ THE BIG ONE — child Blueprint overrides do NOT survive the move
+
+**Moving a variable to C++ preserves graph node references but DISCARDS every per-tank
+Class Defaults override.** The override is serialised against the Blueprint-owned property;
+once that property becomes native, the child's stored value no longer resolves and the tank
+silently falls back to the C++ default.
+
+This is precisely what killed attempt 1. Phases 4–10 never exposed it because every value
+moved there was identical across all six tanks — the fallback happened to equal the override.
+The first phase to move genuinely differing values reproduced it immediately:
+```
+WheelRadiusFront  master=22.5
+   T90 expect=23.19 got=22.5 *** LOST ***      Proxy expect=47.3 got=22.5 *** LOST ***
+SUMMARY lost_overrides=19
+```
+
+**Recovery is easy IF you have not saved anything.** The loss happens in memory at load; the
+child `.uasset` files on disk keep their overrides. `git checkout` the header, rebuild, and the
+values return (verified: `still_lost=0`). **Never save a child Blueprint after a failed
+tuning-value move — that bakes the loss in permanently.**
+
+### Required procedure for ANY variable with per-tank overrides
+1. **Before moving**, dump the value from all six tanks and record it (table below).
+2. Move the property to C++ with an `Edit` specifier — `EditDefaultsOnly` when the Blueprint
+   has Instance Editable unchecked, `EditAnywhere` when it is checked. Without an `Edit`
+   specifier the property will not even appear in Class Defaults, so it can never be re-tuned.
+3. **Re-apply every override explicitly** (`set_cdo_property` per child Blueprint) and save the
+   six child Blueprints.
+4. Re-verify all six against the recorded table. Only then is the phase green.
+
+Step 3 is not optional and is easy to forget, because the tank still drives perfectly with the
+wrong values.
+
+### Per-tank override table — 18 variables that genuinely differ
+Captured before the Phase 11 attempt. **This is the recovery data. Do not delete it.**
+
+| Variable | master | T90 | Leo | M1A2 | Merk | Proxy | VK |
+|---|---|---|---|---|---|---|---|
+| MaxSpeedKMH | 60 | 60 | 69 | 69 | 65 | 60 | 60 |
+| MaxTurningSpeed | 45 | 45 | 45 | 45 | 45 | 45 | 36 |
+| TracksAmount | 50 | 78 | 80 | 75 | 120 | 70 | 68 |
+| WheelRadiusFront | 22.5 | 23.19 | 22.716 | 29.94 | 23.2 | 47.3 | 32.7 |
+| WheelRadiusMiddle | 38 | 36.02 | 30.583 | 29.94 | 28.79 | 36.25 | 45.35 |
+| WheelRadiusRear | 22 | 27.16 | 23.6 | 27.1 | 24.64 | 28.1 | 32.35 |
+| WheelRadiusAccessory | 11 | 11 | 11 | 11 | 11 | 11 | 12 |
+| TilingSegmentLength | 70 | 69.58 | 66.424 | 78.66 | 42.56 | 36.7 | 29.15 |
+| TrackThickness | 4 | 7.26 | 5.6976 | 7.86 | 3.97 | 6.0 | 6.6 |
+| WheelStartingAngleGeoR | 0 | -12 | -2 | 9 | 5 | 2 | 0 |
+| WheelStartingAngleGeoL | 0 | -12 | 0 | 3 | 10 | 2 | 0 |
+| WheelStartingAngleUVR | 0 | -14 | -5 | 3 | -3 | 0 | 0 |
+| WheelStartingAngleUVL | 0 | -14 | -3 | 6 | -2 | 0 | 0 |
+| WheelSpeedCorrectionUV | 0 | -0.4 | -5.6 | 0.2 | 0.3 | 0.0 | 0.1 |
+| MiddleWheelXOffset | 0 | 0 | 16 | -23.561 | -14 | 0 | 0 |
+| InvertTrackDirection | **False** | True | True | True | True | True | False |
+| TargetArmLengthMax | 2000 | 2000 | 2000 | 2000 | 2000 | 2000 | 1800 |
+| TargetArmLengthMin | 1000 | 1000 | 1000 | 1000 | 1000 | 1000 | 800 |
+
+Note `InvertTrackDirection`: the master default is **False** but five of six tanks override it to
+True. Losing that flips the track direction on five tanks.
+
+These 26 are identical across all six tanks and therefore carry no override risk:
+`SaggingMaxDistance=20, ProportionalCoefficient=5, SpeedInfluence=0.3, MaxSpeedInfluence=0.6,
+AccelerationInfluence=0.2, MaxAccelerationInfluence=1.0, TrackFrequency=1500, DecayRate=0.3,
+InteractionAmplitudeMultiplier=0.4, FrontSagTangent=0, RearSagTangent=0, GeoTracksFlipR/L=False,
+ReverseTurnInReverse=False, UseGeometricTracks=True, HealthMax=100, LightIntensityLights=25,
+EmissiveIntensityLights=5, GravityForce=-70, SniperCameraMaxZoom=4, CameraZoomStep=1000,
+SniperLagSpeed=30, TargetArmLengthArcade_2=-60, EditorSplinePreview=True, PhysWheelsAmount=0,
+UniqueTrackMeshesAmount=0`
 
 **Phase 10 runtime proof:**
 ```
