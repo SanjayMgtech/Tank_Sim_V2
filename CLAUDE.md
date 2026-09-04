@@ -706,6 +706,65 @@ Check for RepNotify before choosing the specifier: search the Blueprint for `OnR
 `OnRep_*` functions. This project has none, so all three are plain `Replicated`, never
 `ReplicatedUsing`.
 
+## Unreal multiplayer — the model, and why this tank's turret does not replicate
+Researched from Epic's docs (links at the end of this section). Read this before touching
+anything networked in this project.
+
+### The model in four rules
+1. **The server is authoritative.** It holds the one true game state. Clients own remote proxies
+   of Pawns and ask the server to do things.
+2. **Property replication flows SERVER → CLIENT ONLY.** A client writing a replicated property
+   changes only its own copy; the value never travels upward and is overwritten on the next
+   update from the server. There is no such thing as "replicating up".
+3. **Client → server is done with a Server RPC.** That is the only upward channel.
+4. **Prefer replicated properties over RPCs for state**, and RepNotify over extra RPCs. RPCs are
+   for transient events. State that changes constantly should be a replicated property, driven
+   by the server.
+
+### Server RPC rules that bite
+- **The calling client must OWN the actor.** A Pawn possessed by that client's PlayerController
+  is owned. If the actor is not owned by the caller's connection, **the RPC is silently dropped
+  and never executes anywhere** — no error at the call site. Symptom: "the call does nothing".
+- **Unreliable by default, and correct for per-frame data.** Reliable RPCs cost bandwidth and
+  suspend later RPCs until acknowledged; a reliable RPC fired every frame can disconnect the
+  client. Aim data every frame must be **Unreliable**.
+- `WithValidation` is a trust-and-verify hook; a failed validation **disconnects** the caller.
+- A `UFUNCTION(Server, ...)` called from a Blueprint graph must ALSO be `BlueprintCallable`, or
+  the graph refuses it with *"should not be called from a Blueprint"*.
+
+### ⚠ THE ONE THAT EXPLAINS THIS PROJECT
+**Control rotation does NOT replicate automatically for a `Pawn`.** It does for `Character`,
+which is why most tutorials "just work" and this does not. `BP_TankController_Chaos` derives from
+`AWheeledVehiclePawn` → `APawn`, so **the server has no idea where a client is aiming.** The
+engine replicates view *pitch* only (`RemoteViewPitch`), and this project has
+`bUseControllerRotationYaw = false`, so yaw never arrives either.
+
+Epic's own answer for Pawns is manual: on tick, read the aim on the owning client, send it to the
+server with a Server RPC, and store it in a replicated property on the server — which then
+replicates back down to everyone. Do not multicast it.
+
+### How that maps to this tank (measured, not assumed)
+The turret is **not** driven by control rotation. `TurretsAndGunsRotCalculation` aims by
+**line-tracing from the Camera component**:
+```
+Get Camera -> GetWorldLocation + GetForwardVector -> LineTraceByChannel
+           -> TargetPoint (local var) -> StabilizingRotation
+           -> UpdateTurretRotation / UpdateGunRotation -> TurretsRot / GunsRot
+```
+`Rep_ControlRotation` is **vestigial** — its only readers are `UpdateTurretRotation_Old` and
+`UpdateMachineGunRotation_Old`, both dead code. Replicating it changes nothing visible. Verify a
+variable's consumers with `find_variable_references` before building on its name.
+
+So the server's copy of a client's tank traces from a camera that is not looking anywhere useful,
+and the turret sits still. That is the whole bug.
+
+### Sources
+- [Networking Overview](https://dev.epicgames.com/documentation/unreal-engine/networking-overview-for-unreal-engine)
+- [Remote Procedure Calls](https://dev.epicgames.com/documentation/unreal-engine/remote-procedure-calls-in-unreal-engine)
+- [Networking and Multiplayer](https://dev.epicgames.com/documentation/en-us/unreal-engine/networking-and-multiplayer-in-unreal-engine)
+- [Control rotation not replicating on Pawn (forum)](https://forums.unrealengine.com/t/cant-replicate-control-rotation/1971369)
+- [AimOffset replication in multiplayer (article)](https://sohelmoon.medium.com/unreal-engine-4-aimoffset-replication-in-fps-multiplayer-6fe8594b7311)
+
 ## 🟡 PRE-EXISTING FEATURE GAP — multiplayer turret aiming (fix 1 DONE, fix 2 open)
 
 **Not caused by the port. Proven by A/B test, not by argument.** The same listen-server test was
