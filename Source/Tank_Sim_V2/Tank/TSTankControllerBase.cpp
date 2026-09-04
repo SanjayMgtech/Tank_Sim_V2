@@ -150,3 +150,10 @@ void ATSTankControllerBase::WheelRotationDefinition(double Distance, double Whee
 
 	Degrees = (-360.0 * Revolutions) + StartAngle;
 }
+
+bool ATSTankControllerBase::IsTurretSimulatedLocally() const
+{
+	// Same condition ReplicateControlRotation already uses to decide whether to
+	// write Rep_ControlRotation, kept deliberately identical so the two agree.
+	return HasAuthority() || IsLocallyControlled();
+}

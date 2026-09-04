@@ -498,4 +498,24 @@ public:
 	//   Degrees       = -360 * (Distance / Circumference) + StartAngle
 	UFUNCTION(BlueprintCallable, Category = "Chassis")
 	void WheelRotationDefinition(double Distance, double WheelRadius, double TrackThickness, double WheelSpeedCorrectionUV, double WheelStartAngleLeftGeoTracks, double WheelStartAngleRightGeoTracks, double WheelStartAngleLeftUVTracks, double WheelStartAngleRightUVTracks, bool LeftWheel, double& Degrees);
+
+	// ---------------------------------------------------------------------
+	// Multiplayer jitter fix (NOT a port phase - this CHANGES behaviour).
+	//
+	// TurretsAndGunsRotCalculation is the only writer of TurretsRot/GunsRot (it
+	// feeds them into SetArrayElem; ScatteringCalculation only reads via
+	// GetArrayItem). Event Tick is gated solely on NOT Destroyed, so a client
+	// recomputes those arrays every frame for EVERY tank - including tanks it does
+	// not control - and overwrites whatever the server replicated down. Two writers
+	// alternating is the observed jitter.
+	//
+	// This helper gates that recompute: simulate locally only when we own the pawn
+	// (authority) or are the one aiming it (locally controlled). Anyone else should
+	// consume the replicated value instead.
+	//
+	// Single player is unaffected: the pawn is both authority and locally
+	// controlled, so this returns true and behaviour is identical.
+	// ---------------------------------------------------------------------
+	UFUNCTION(BlueprintPure, Category = "Networking", meta = (ToolTip = "True when this machine should compute turret/gun rotation itself rather than use the replicated value."))
+	bool IsTurretSimulatedLocally() const;
 };

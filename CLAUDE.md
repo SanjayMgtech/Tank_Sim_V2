@@ -730,6 +730,32 @@ is no Server RPC anywhere in this Blueprint. Client turret aiming has never work
 frame and overwrites `TurretsRot`/`GunsRot` locally, fighting the value replicated from the
 server. The two writers alternate, which is what the jitter is.
 
+### FIX 1 APPLIED — jitter gate (awaiting multiplayer verification)
+`Event Tick` now gates the `TurretsAndGunsRotCalculation` call on a new C++ helper
+`IsTurretSimulatedLocally()` = `HasAuthority() || IsLocallyControlled()` — deliberately the same
+condition `ReplicateControlRotation` already uses.
+
+Confirmed first that `TurretsAndGunsRotCalculation` is the **only** writer of
+`TurretsRot`/`GunsRot`: its `Get` feeds a `SetArrayElem`, whereas `ScatteringCalculation` only
+reads through `GetArrayItem`. So gating this one call is sufficient.
+
+Graph shape (EventGraph, `K2Node_IfThenElse_2` + `K2Node_CallFunction_7`):
+```
+Sequence_4.then_4 -> Branch(IsTurretSimulatedLocally)
+                       True  -> TurretsAndGunsRotCalculation -> ExecutionSequence_0
+                       False -> ExecutionSequence_0
+```
+The False path goes **straight to `ExecutionSequence_0`** on purpose: that sequence holds the 8
+`WheelRotationDefinition` calls and the scattering pass, which must still run on remote tanks.
+Skipping only the turret recompute is the entire change.
+
+Single-player regression check: `gate=True`, turret and gun rotations still non-zero, wheels
+still turning, PIE clean, 0 errors. Offline behaviour is unchanged by construction — a
+single-player pawn is both authority and locally controlled.
+
+**NOT YET VERIFIED IN MULTIPLAYER.** Needs the two-window listen-server test: does the client's
+view of the server's turret stop jittering? Until that is run, treat this as applied but unproven.
+
 ### If this is ever fixed, it is FEATURE work, not port repair
 1. Add a **Server RPC** carrying the locally-controlled client's aim to the server, and set
    `Rep_ControlRotation` there (authority only).
