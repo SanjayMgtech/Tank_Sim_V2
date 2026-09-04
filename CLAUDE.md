@@ -231,6 +231,17 @@ attempt-1 failure mode. Move those first. Save variables that hold real tuning v
 (`MaxSpeedKMH`, `WheelRadius*`, `TracksAmount`, ...) for later phases, and verify the
 child override survives the move.
 
+**Some variables are referenced only from dead `_Old` code paths.** `UpdateTurretRotation_Old`
+and `UpdateMachineGunRotation_Old` are not called from Tick, so `TurretRotation`, `MGRotation`,
+`TurretYaw` and `TurretPitch` legitimately stay 0 for a whole PIE session. **Do not read that
+as a failed rebind, and do not accept it as a pass either.** Prove them by invoking the owning
+function directly and diffing the values across the call:
+```
+t.call_method('UpdateTurretRotation_Old')   # both take no arguments
+```
+Before moving a variable, check *which graph* its references live in. A `_Old` suffix or an
+`Old` category means the normal drive test will never touch it.
+
 **Check the AnimBPs before moving anything chassis-related.** `ABP_Chaos_<Tank>` declares
 its *own* variables with the same names as several pawn variables — it Sets them in its
 EventGraph (copying from the pawn) and Gets them in the AnimGraph. Confirmed on
@@ -277,7 +288,23 @@ function they call has already been moved and individually verified.**
 | 3 — All six tanks | ✅ PASS | All 6 load, correct values, chain = `ATSTankControllerBase → BP_TankController_Chaos → BP_<Tank>_Controller_Chaos`. |
 | 4 — Vars: chassis distance accumulators | ✅ PASS | `ChassisDistanceR/L`, `ChassisDeltaDistanceR/L` moved to C++. CDO now reports `owner_class: TSTankControllerBase` for exactly those 4; all other ~150 still `BP_TankController_Chaos_C`. All 16 Get/Set nodes rebound (same node IDs). BP compiles `UpToDate`, 0 errors/warnings. PIE: values accumulate correctly (see below), 0 `Accessed None`, 0 BP runtime errors. |
 | 5 — Vars: chassis accel / rot / move scratch | ✅ PASS | `ChassisAccelerationR/L`, `HullZRot`, `ChassisDistanceZRotComponentR/L`, `ChassisDistanceXMoveComponentR/L` moved. All 11 native props present on the CDO; `remove_variable` reports "not found" for the moved names. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. Graceful editor close worked — no recovery modal. |
-| 6+ — Move more variables | ⬜ next | |
+| 6 — Vars: turret / MG scratch (**first structs**) | ✅ PASS | `MainTurretAndGunRotation`, `TurretRotation`, `MGRotation` (FRotator), `TurretYaw`, `TurretPitch` (double), `TurretBlocking`, `IsTurretRotating` (bool). All 18 native props present; moved names gone from the BP. `TurretRotation` still 10 refs / same node IDs. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
+| 7+ — Move more variables | ⬜ next | |
+
+**Phase 6 runtime proof** — `FRotator` structs marshal correctly, and the legacy group was
+proven by *calling the `_Old` functions directly* rather than accepting a static check:
+```
+START           main=(0.000,0.000,0.000)    blocking=False  rotating=False
+LIVE (turned)   main=(-0.115,-3.794,14.058) blocking=False  rotating=True
+LEGACY-BEFORE   turretRot=(0,0,0)  mgRot=(0,0,0)  yaw=0.000  pitch=0.000
+LEGACY-AFTER    turretRot=(5.051,0.058,0.003)  mgRot=(5.051,0.058,0.003)  yaw=0.058  pitch=5.051
+```
+Internally consistent: `TurretPitch` == `TurretRotation.pitch`, `TurretYaw` ==
+`TurretRotation.yaw`, and pitch tracks the injected control-rotation pitch of 5.0.
+
+**Structs need no special handling.** `FRotator` moved exactly like a scalar — same
+name/type/category match, same automatic rebind. Initialise with `FRotator::ZeroRotator`
+to match the Blueprint's `(0,0,0)` default.
 
 **Phase 5 runtime proof:**
 ```

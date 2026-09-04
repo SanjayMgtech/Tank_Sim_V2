@@ -78,4 +78,42 @@ public:
 
 	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
 	double ChassisDistanceXMoveComponentL = 0.0;
+
+	// ---------------------------------------------------------------------
+	// Phase 6: turret / machine gun scratch. First phase to move STRUCT types.
+	//
+	// All default-zero runtime scratch, no per-tank configuration. Confirmed the
+	// AnimBP does not consume any of these - ABP_Chaos_T90 drives the turret bone
+	// from TurretsRot (the replicated ARRAY), which is deliberately NOT in this
+	// group. Replicated properties and arrays are a later phase.
+	//
+	// Two verification classes, because reference sites differ:
+	//   LIVE   - written every tick via TurretsAndGunsRotCalculation / EventGraph:
+	//            MainTurretAndGunRotation, TurretBlocking, IsTurretRotating.
+	//   LEGACY - referenced only from UpdateTurretRotation_Old and
+	//            UpdateMachineGunRotation_Old: TurretRotation, MGRotation,
+	//            TurretYaw, TurretPitch. These stay 0 in a normal PIE session by
+	//            design; that is NOT a failed rebind. They are proven by calling
+	//            those _Old functions directly and observing the writes land.
+	// ---------------------------------------------------------------------
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
+	FRotator MainTurretAndGunRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
+	bool TurretBlocking = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
+	bool IsTurretRotating = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
+	FRotator TurretRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
+	double TurretYaw = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
+	double TurretPitch = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Machine gun")
+	FRotator MGRotation = FRotator::ZeroRotator;
 };
