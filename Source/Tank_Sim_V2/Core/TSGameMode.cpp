@@ -6,7 +6,6 @@
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Player/TSVRPawn.h"
-#include "Tank/TSTank.h"
 #include "Tank/TSTankCrewComponent.h"
 
 namespace
@@ -164,10 +163,10 @@ bool ATSGameMode::TryAssignRole(APlayerController* Player, ETSCrewRole Requested
 	return true;
 }
 
-ATSTank* ATSGameMode::GetTankForTeam(ETSTeamId Team) const
+APawn* ATSGameMode::GetTankForTeam(ETSTeamId Team) const
 {
 	const ATSGameState* GS = GetGameState<ATSGameState>();
-	return GS ? Cast<ATSTank>(GS->FindTankForTeam(Team)) : nullptr;
+	return GS ? GS->FindTankForTeam(Team) : nullptr;
 }
 
 bool ATSGameMode::AreAllActiveTeamsFullyCrewed() const

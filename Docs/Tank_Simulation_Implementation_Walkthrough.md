@@ -1,5 +1,13 @@
 # Tank Simulation — Implementation Walkthrough
 
+> **⚠ OUTDATED IN ONE RESPECT — `ATSTank` and "Path A" no longer exist.**
+> `ATSTank` was deleted as dead code. Our tank must keep `AWheeledVehiclePawn` as its native
+> parent for Chaos vehicle movement, so it can never derive from a common tank base — Path A was
+> unusable on this project and no Content asset ever referenced it. **Path B (implement
+> `ITSTankInterface` directly) is now the only integration path**, and everything this document
+> says about Path B is still correct. `ATSGameMode::GetTankForTeam` now returns `APawn*`.
+> See [VR_Crew_Delivery_Plan.md](VR_Crew_Delivery_Plan.md).
+
 A step-by-step, do-this-then-this guide to turn the compiled C++ framework into a playable 3-crew
 VR tank match in the Editor. Everything here is Editor/Blueprint work — none of it can be done as a
 text file, which is why it wasn't done automatically.

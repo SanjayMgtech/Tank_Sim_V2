@@ -1,7 +1,8 @@
-// Section 9 - stable BlueprintNativeEvent contract. Either derive the tank Blueprint from ATSTank
-// (recommended - see Path A in Docs/Tank_Simulation_Setup_Guide.md) or, if the Blueprint must keep
-// a different native parent (e.g. an existing Chaos vehicle pawn), implement this interface directly
-// (Path B). C++ decides WHO is allowed to act; these functions decide HOW the tank executes it.
+// Section 9 - stable BlueprintNativeEvent contract. The tank Blueprint implements this interface
+// directly. It cannot derive from a common tank base class: it must keep AWheeledVehiclePawn as its
+// native parent for Chaos vehicle movement. (An ATSTank base once existed for that purpose and was
+// deleted as dead code - nothing could ever use it.)
+// C++ decides WHO is allowed to act; these functions decide HOW the tank executes it.
 #pragma once
 
 #include "CoreMinimal.h"
