@@ -19,10 +19,10 @@ int32 UTSGunnerHUDWidget::GetMachineGunAmmo() const
 	return Weapon ? Weapon->GetMachineGunAmmo() : 0;
 }
 
-FVector_NetQuantize UTSGunnerHUDWidget::GetAimDirection() const
+FVector_NetQuantize UTSGunnerHUDWidget::GetAimPoint() const
 {
 	const UTSTankWeaponComponent* Weapon = GetWeaponComponent(GetAssignedTank());
-	return Weapon ? Weapon->GetCurrentAimDirection() : FVector_NetQuantize();
+	return Weapon ? Weapon->GetCurrentAimPoint() : FVector_NetQuantize();
 }
 
 bool UTSGunnerHUDWidget::IsReloading() const

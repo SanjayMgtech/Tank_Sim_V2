@@ -65,20 +65,20 @@ bool ATSTankPlayerController::ServerSetDriveInput_Validate(float Throttle, float
 		&& FMath::Abs(Throttle) <= 1.5f && FMath::Abs(Steering) <= 1.5f;
 }
 
-void ATSTankPlayerController::ServerAimTurret_Implementation(FVector_NetQuantize AimDirection)
+void ATSTankPlayerController::ServerAimTurret_Implementation(FVector_NetQuantize AimPoint)
 {
 	if (APawn* Tank = GetAssignedTank())
 	{
 		if (UTSTankWeaponComponent* Weapon = Tank->FindComponentByClass<UTSTankWeaponComponent>())
 		{
-			Weapon->TryAimTurret(GetTankPlayerState(), AimDirection);
+			Weapon->TryAimTurret(GetTankPlayerState(), AimPoint);
 		}
 	}
 }
 
-bool ATSTankPlayerController::ServerAimTurret_Validate(FVector_NetQuantize AimDirection)
+bool ATSTankPlayerController::ServerAimTurret_Validate(FVector_NetQuantize AimPoint)
 {
-	return !AimDirection.ContainsNaN();
+	return !AimPoint.ContainsNaN();
 }
 
 void ATSTankPlayerController::ServerFireMainCannon_Implementation()

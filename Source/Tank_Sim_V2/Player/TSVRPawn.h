@@ -31,6 +31,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|VR")
 	void ApplyRoleMappingContext(ETSCrewRole NewRole);
 
+	// How far the Gunner's look-ray is traced when converting an aim gesture into a world point.
+	// Beyond this the aim point is simply the end of the ray, which is fine - at long range the
+	// direction is what matters and the gun elevation difference is negligible.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR")
+	float AimTraceDistance = 100000.f;
+
 	UFUNCTION()
 	void ApplyRoleMappingContext_FromPlayerState();
 

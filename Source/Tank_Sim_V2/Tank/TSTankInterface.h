@@ -26,8 +26,12 @@ public:
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Tank Simulation|Blueprint Integration")
 	void BP_SetDriveInput(float Throttle, float Steering);
 
+	// AimPoint is a WORLD-SPACE POINT the gun should aim at, not a direction. That is what the
+	// tank's turret maths actually consumes (TargetPoint in TurretsAndGunsRotCalculation), and a
+	// point stays correct when the hull rotates underneath the gunner, where a direction would
+	// have to be re-based every frame.
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Tank Simulation|Blueprint Integration")
-	void BP_AimTurret(FVector_NetQuantize AimDirection);
+	void BP_AimTurret(FVector_NetQuantize AimPoint);
 
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Tank Simulation|Blueprint Integration")
 	void BP_FireMainCannon();

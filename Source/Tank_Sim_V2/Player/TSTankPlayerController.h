@@ -39,7 +39,7 @@ public:
 	void ServerSetDriveInput(float Throttle, float Steering);
 
 	UFUNCTION(Server, Unreliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
-	void ServerAimTurret(FVector_NetQuantize AimDirection);
+	void ServerAimTurret(FVector_NetQuantize AimPoint);
 
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerFireMainCannon();

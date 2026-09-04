@@ -2,6 +2,9 @@
 
 #include "Camera/CameraComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "CollisionQueryParams.h"
+#include "WorldCollision.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "IXRTrackingSystem.h"
@@ -176,11 +179,38 @@ void ATSVRPawn::Input_Drive(const FInputActionValue& Value)
 
 void ATSVRPawn::Input_AimTurret(const FInputActionValue& Value)
 {
-	const FVector2D Axis = Value.Get<FVector2D>();
-	if (ATSTankPlayerController* PC = GetTankController())
+	// The Gunner aims by looking: trace along the HMD/camera forward vector and send the world
+	// POINT that ray lands on.
+	//
+	// This deliberately ignores the FInputActionValue. It used to send FVector(Axis.X, Axis.Y, 0) -
+	// a 2D stick axis packed into a vector - which could never work: the tank's turret consumes a
+	// world-space point, so a stick reading of (0.4, 0.1) asked the gun to aim at a spot half a
+	// centimetre from the world origin. The action is still bound so the aim updates while the
+	// Gunner holds it, but the value itself carries no aim information in VR.
+	ATSTankPlayerController* PC = GetTankController();
+	const UWorld* World = GetWorld();
+	if (!PC || !World || !Camera)
 	{
-		PC->ServerAimTurret(FVector_NetQuantize(Axis.X, Axis.Y, 0.f));
+		return;
 	}
+
+	const FVector Start = Camera->GetComponentLocation();
+	const FVector End = Start + Camera->GetForwardVector() * AimTraceDistance;
+
+	// Ignore ourselves and our own tank, or the trace hits the hull we are sitting inside and the
+	// turret tries to aim at its own armour.
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(TSVRAimTrace), /*bTraceComplex=*/false, this);
+	if (const APawn* Tank = PC->GetAssignedTank())
+	{
+		Params.AddIgnoredActor(Tank);
+	}
+
+	FHitResult Hit;
+	const bool bHit = World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params);
+
+	// On a miss, aim at the far end of the ray rather than bailing out - otherwise looking at open
+	// sky would freeze the turret at its last target instead of following the Gunner's view.
+	PC->ServerAimTurret(FVector_NetQuantize(bHit ? Hit.ImpactPoint : End));
 }
 
 void ATSVRPawn::Input_FireMainCannon(const FInputActionValue& Value)

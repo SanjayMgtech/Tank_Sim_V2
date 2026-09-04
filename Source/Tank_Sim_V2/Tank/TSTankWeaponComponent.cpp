@@ -17,7 +17,7 @@ void UTSTankWeaponComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	DOREPLIFETIME(UTSTankWeaponComponent, CurrentAimDirection);
+	DOREPLIFETIME(UTSTankWeaponComponent, CurrentAimPoint);
 	DOREPLIFETIME(UTSTankWeaponComponent, AmmoMainCannon);
 	DOREPLIFETIME(UTSTankWeaponComponent, AmmoMachineGun);
 	DOREPLIFETIME(UTSTankWeaponComponent, bReloading);
@@ -37,24 +37,24 @@ static bool HasGunnerAccess(const UTSTankCrewComponent* Crew, ATSTankPlayerState
 	return Crew && Crew->HasAccess(Requester, ETSCrewRole::Gunner);
 }
 
-bool UTSTankWeaponComponent::TryAimTurret(ATSTankPlayerState* Requester, FVector_NetQuantize AimDirection)
+bool UTSTankWeaponComponent::TryAimTurret(ATSTankPlayerState* Requester, FVector_NetQuantize AimPoint)
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !HasGunnerAccess(GetCrewComponent(), Requester))
 	{
 		return false;
 	}
 
-	CurrentAimDirection = AimDirection;
-	OnRep_AimDirection();
+	CurrentAimPoint = AimPoint;
+	OnRep_AimPoint();
 
 	return true;
 }
 
-void UTSTankWeaponComponent::OnRep_AimDirection()
+void UTSTankWeaponComponent::OnRep_AimPoint()
 {
 	if (GetOwner() && GetOwner()->Implements<UTSTankInterface>())
 	{
-		ITSTankInterface::Execute_BP_AimTurret(GetOwner(), CurrentAimDirection);
+		ITSTankInterface::Execute_BP_AimTurret(GetOwner(), CurrentAimPoint);
 	}
 }
 

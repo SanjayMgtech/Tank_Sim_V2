@@ -5,6 +5,9 @@
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Net/UnrealNetwork.h"
+#include "GameFramework/PlayerController.h"
+#include "Player/TSTankPlayerState.h"
+#include "Engine/World.h"
 
 ATSTankControllerBase::ATSTankControllerBase()
 {
@@ -183,16 +186,60 @@ void ATSTankControllerBase::RecalculateGunAndTurretRotation()
 	}
 }
 
+bool ATSTankControllerBase::IsLocalGunnerOfThisTank() const
+{
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	// Only local controllers matter - we are asking "does THIS machine drive this turret", and a
+	// listen server holds PlayerControllers for remote clients too.
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+	{
+		const APlayerController* PC = It->Get();
+		if (!PC || !PC->IsLocalController())
+		{
+			continue;
+		}
+
+		const ATSTankPlayerState* PS = PC->GetPlayerState<ATSTankPlayerState>();
+		if (PS && PS->GetCrewRole() == ETSCrewRole::Gunner
+			&& PS->GetAssignedTank() == static_cast<const APawn*>(this))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
 bool ATSTankControllerBase::IsTurretSimulatedLocally() const
 {
-	// Authority owns the authoritative turret state; the locally-controlled client
-	// needs a responsive local one. Anyone else consumes the replicated value.
-	return HasAuthority() || IsLocallyControlled();
+	// Authority always simulates. Beyond that there are two ways this machine can be the one
+	// aiming, and BOTH must be honoured:
+	//
+	//   IsLocallyControlled()      - the LEGACY path, where a player possesses the tank directly
+	//                                (the single-player demo map and the pre-framework multiplayer
+	//                                setup). Dropping this would break the existing demo.
+	//   IsLocalGunnerOfThisTank()  - the FRAMEWORK path, where nobody possesses the tank and the
+	//                                Gunner is identified by crew role instead.
+	//
+	// Anyone else consumes the replicated TurretsRot/GunsRot.
+	return HasAuthority() || IsLocallyControlled() || IsLocalGunnerOfThisTank();
 }
 
 bool ATSTankControllerBase::ShouldSendAimToServer() const
 {
-	// Not the server, but we are the player aiming this tank.
+	// Deliberately NOT extended with IsLocalGunnerOfThisTank(). This gates the tank's OWN
+	// ServerSetAimPoint RPC, and a Server RPC is silently dropped unless the calling client owns
+	// the actor. Under the crew model the Gunner owns their VR pawn, not the tank, so adding the
+	// Gunner here would fire an RPC that never arrives and leave no trace at the call site.
+	//
+	// The framework path sends aim through ATSTankPlayerController::ServerAimTurret instead,
+	// which the client does own. This predicate therefore covers only the legacy possessed-tank
+	// case and stays exactly as it was when it was verified in the two-window listen-server test.
 	return !HasAuthority() && IsLocallyControlled();
 }
 
@@ -236,16 +283,15 @@ void ATSTankControllerBase::BP_SetDriveInput_Implementation(float Throttle, floa
 	WarnNotOverridden(this, TEXT("BP_SetDriveInput"));
 }
 
-void ATSTankControllerBase::BP_AimTurret_Implementation(FVector_NetQuantize AimDirection)
+void ATSTankControllerBase::BP_AimTurret_Implementation(FVector_NetQuantize AimPoint)
 {
-	// NOTE: the parameter is named AimDirection, but this tank's turret consumes a
-	// world-space POINT (ReceivedAimPoint -> TargetPoint in TurretsAndGunsRotCalculation).
-	// That mismatch is unresolved - see "V3 - Fix the aim path" in
-	// Docs/VR_Crew_Delivery_Plan.md. Deliberately NOT assigning to ReceivedAimPoint here:
-	// writing a direction into a variable the turret reads as a point would aim the gun at
-	// a spot roughly one centimetre from the origin, and it would look like a maths bug
-	// rather than a contract mismatch.
-	WarnNotOverridden(this, TEXT("BP_AimTurret"));
+	// Now that the contract carries a world-space POINT, this is implementable in C++ and needs
+	// no Blueprint override: ReceivedAimPoint is exactly what TurretsAndGunsRotCalculation already
+	// consumes (it selects between its own camera trace and this value, then writes TargetPoint).
+	//
+	// So the framework's aim request lands in the same variable the verified multiplayer aim fix
+	// uses, and the turret maths downstream is untouched.
+	ReceivedAimPoint = AimPoint;
 }
 
 void ATSTankControllerBase::BP_FireMainCannon_Implementation()

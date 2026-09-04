@@ -21,7 +21,7 @@ public:
 	int32 GetMachineGunAmmo() const;
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|HUD")
-	FVector_NetQuantize GetAimDirection() const;
+	FVector_NetQuantize GetAimPoint() const;
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|HUD")
 	bool IsReloading() const;

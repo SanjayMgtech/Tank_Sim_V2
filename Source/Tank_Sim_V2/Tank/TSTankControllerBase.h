@@ -569,6 +569,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Networking", meta = (ToolTip = "True only on a locally-controlled client, i.e. we must send our aim to the server."))
 	bool ShouldSendAimToServer() const;
 
+	// True when a player on THIS machine is the Gunner of THIS tank, per the framework's crew
+	// assignment.
+	//
+	// Needed because under the three-crew model NOBODY possesses the tank - each crew member
+	// possesses their own VR pawn - so IsLocallyControlled() is false on every machine and can
+	// no longer answer "should I simulate this turret locally".
+	UFUNCTION(BlueprintPure, Category = "Networking")
+	bool IsLocalGunnerOfThisTank() const;
+
 	// Written on the SERVER by ServerSetAimPoint. Not replicated: clients never need
 	// it, they receive the finished TurretsRot/GunsRot.
 	UPROPERTY(BlueprintReadWrite, Category = "Networking")
@@ -602,7 +611,7 @@ public:
 	// "work" in a smoke test and be wrong in every real case.
 	// =====================================================================
 	virtual void BP_SetDriveInput_Implementation(float Throttle, float Steering) override;
-	virtual void BP_AimTurret_Implementation(FVector_NetQuantize AimDirection) override;
+	virtual void BP_AimTurret_Implementation(FVector_NetQuantize AimPoint) override;
 	virtual void BP_FireMainCannon_Implementation() override;
 	virtual void BP_FireMachineGun_Implementation() override;
 	virtual void BP_UpdateCommanderIntel_Implementation(const FTSCommanderIntel& Intel) override;
