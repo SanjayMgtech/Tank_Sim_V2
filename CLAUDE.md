@@ -820,6 +820,14 @@ Skipping only the turret recompute is the entire change.
 
 Single-player regression check: `gate=True`, turret and gun rotations still non-zero, wheels
 still turning, PIE clean, 0 errors. Offline behaviour is unchanged by construction — a
+single-player pawn is both authority and locally controlled, so every gate passes.
+
+**SINGLE PLAYER VERIFIED BY HAND 2026-09-04** — turret aims normally offline after both fixes.
+Worth stating why this needed a separate check: the editor's Play settings had been left on
+listen-server, so every `run_pie_smoke` "single player" run in this session was actually a
+2-player listen server (two PIE worlds, a window titled *NetMode: Client 1*). Claims of
+"single player verified" made from those runs were wrong. **Check the net mode before calling a
+PIE run single player** — `grep UEDPIE_ ` in the log shows how many worlds were created.
 single-player pawn is both authority and locally controlled.
 
 **VERIFIED IN MULTIPLAYER 2026-09-04.** Two-window listen-server test: the client's view of the
