@@ -304,7 +304,46 @@ function they call has already been moved and individually verified.**
 | 11 — Vars: first real tuning values | ❌ **FAILED, REVERTED** | Moving the four `WheelRadius*` lost **19 of 24 per-tank overrides** — every tank fell back to the master default. Reverted; all overrides restored, nothing lost. See below. |
 | 11 (retry) — vibration/sagging tuning, **middle path** | ✅ PASS | 9 moved: `SpeedInfluence`, `MaxSpeedInfluence`, `AccelerationInfluence`, `MaxAccelerationInfluence`, `TrackFrequency`, `DecayRate`, `InteractionAmplitudeMultiplier`, `SaggingMaxDistance`, `ProportionalCoefficient`. 62 native props. All 9 verified correct on master **and all 6 tanks** (`problems=0`). BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
 | 12 — **First function move**: `VibrationCalculation` | ✅ PASS | Ported 1:1 to C++. Call site in `PointLocationCalculation` rebound with **every pin intact, 0 orphaned**, node retargeted to `TSTankControllerBase`. Math verified **bit-exact** (delta 0.000e+00) on 3 input pairs. BP `UpToDate`, 0 errors/warnings, PIE clean. |
-| 13+ — Move more functions | ⬜ next | |
+| 13 — `HullAccelerationDefinition` | ✅ PASS | Ported 1:1. Call site retargeted to `TSTankControllerBase`, all pins intact, 0 orphaned. `HullSpeedWorld` matches the mesh's physics velocity **exactly** (delta 0.0000) at two sample points; inverted acceleration non-zero. BP `UpToDate`, PIE clean. |
+| 13a — `SaggingCalculation` | ⛔ **BLOCKED** | Parameter name shadows a moved member. See below. |
+| 14+ — Move more functions | ⬜ next | |
+
+**Phase 13 runtime proof:**
+```
+A  hull=(158.612,-7.397,-86.710)  meshV=(158.612,-7.397,-86.710)  accel=(-40.514,19.023,52.201)
+B  hull=(461.341,-0.958,11.194)   meshV=(461.341,-0.958,11.194)   |hull-meshV|=0.0000
+```
+Ordering matters in this one: the subtraction reads the PREVIOUS frame's `HullSpeedWorld`
+before it is reassigned. Swapping those two lines would make the result permanently zero and
+still compile, still drive, still look fine.
+
+## ⛔ BLOCKER — a function parameter cannot shadow a moved member
+
+UHT rejects this outright:
+```
+Error: Function parameter: 'HullDeltaXLocation' cannot be defined in 'SaggingCalculation'
+as it is already defined in scope 'ATSTankControllerBase' (shadowing is not allowed)
+```
+Blueprint happily allows a function parameter with the same name as a member variable. **C++
+does not.** `SaggingCalculation` takes a parameter `HullDeltaXLocation`, and the member of that
+name moved to C++ in Phase 7, so the function can no longer be ported as-is.
+
+There is no clean escape: the parameter name cannot change (call-site pins rebind by name) and
+the member name cannot change (RULE 4). `UPARAM(DisplayName=...)` only alters the label, not the
+internal pin name used for reconnection, so it would orphan the link.
+
+**Moving a variable can retroactively block a function port.** Before moving any variable,
+check whether a Blueprint function takes a parameter of the same name. Known collisions:
+
+| Function | Parameter | Collides with | Status |
+|---|---|---|---|
+| `SaggingCalculation` | `HullDeltaXLocation` | member moved in Phase 7 | already blocked |
+| `WheelRotationDefinition` | `TrackThickness` | still a BP variable | **would block if moved** |
+| `WheelRotationDefinition` | `WheelSpeedCorrectionUV` | still a BP variable | **would block if moved** |
+
+To unblock one, rename the parameter in the Blueprint first, let the editor fix up the call
+sites, verify, commit — then port. Treat that as its own phase; do not fold a rename into a
+function move.
 
 **Phase 12 numeric proof** — computed independently in Python and compared:
 ```

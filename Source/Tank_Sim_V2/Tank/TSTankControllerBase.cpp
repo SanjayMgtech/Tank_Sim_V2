@@ -1,5 +1,6 @@
 #include "Tank/TSTankControllerBase.h"
 
+#include "Components/SkeletalMeshComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 
@@ -65,4 +66,26 @@ void ATSTankControllerBase::VibrationCalculation(double VibrationAmplitude, doub
 	const double Phase = VibrationPhase + TimeSeconds * TrackFrequency;
 
 	VibrationOffset = VibrationAmplitude * FMath::Sin(FMath::DegreesToRadians(Phase));
+}
+
+void ATSTankControllerBase::HullAccelerationDefinition()
+{
+	// 1:1 port. Graph order was:
+	//   Get Mesh -> GetPhysicsLinearVelocity
+	//   -> Set HullAccelerationWorldInverted = (HullSpeedWorld - Velocity)
+	//   -> Set HullSpeedWorld = Velocity
+	//
+	// The subtraction uses the PREVIOUS frame's HullSpeedWorld, so it must happen
+	// before HullSpeedWorld is reassigned. Reordering these two lines would
+	// silently make the result always zero.
+	//
+	// Mesh is null-checked: the Blueprint would emit "Accessed None" and carry on
+	// with a zero vector, so falling back to ZeroVector matches that behaviour
+	// rather than crashing.
+	// Not const: UPrimitiveComponent::GetPhysicsLinearVelocity is a non-const method.
+	USkeletalMeshComponent* MeshComp = GetMesh();
+	const FVector CurrentVelocity = MeshComp ? MeshComp->GetPhysicsLinearVelocity(NAME_None) : FVector::ZeroVector;
+
+	HullAccelerationWorldInverted = HullSpeedWorld - CurrentVelocity;
+	HullSpeedWorld = CurrentVelocity;
 }

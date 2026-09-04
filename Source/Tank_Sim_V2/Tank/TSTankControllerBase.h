@@ -377,4 +377,24 @@ public:
 	// ---------------------------------------------------------------------
 	UFUNCTION(BlueprintCallable, Category = "Chassis", meta = (ToolTip = "Track vibration calculation"))
 	void VibrationCalculation(double VibrationAmplitude, double VibrationPhase, double& VibrationOffset);
+
+	// ---------------------------------------------------------------------
+	// Phase 13: HullAccelerationDefinition. Second function moved.
+	//
+	// Ported 1:1:
+	//   V = Mesh->GetPhysicsLinearVelocity()
+	//   HullAccelerationWorldInverted = HullSpeedWorld (previous frame) - V
+	//   HullSpeedWorld = V
+	// Order matters - the old HullSpeedWorld is read before being overwritten.
+	//
+	// Chosen over SaggingCalculation, which is BLOCKED - see CLAUDE.md. Its
+	// parameter `HullDeltaXLocation` collides with the member of the same name
+	// moved in Phase 7, and UHT rejects a parameter that shadows a UPROPERTY.
+	// This function has NO parameters, so it cannot hit that.
+	//
+	// The Blueprint declares an unused local `HullAcceleration` (FVector); no node
+	// references it, so it is deliberately not reproduced.
+	// ---------------------------------------------------------------------
+	UFUNCTION(BlueprintCallable, Category = "Default", meta = (ToolTip = "Calculates the force of inertia"))
+	void HullAccelerationDefinition();
 };
