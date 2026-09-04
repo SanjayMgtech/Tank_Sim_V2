@@ -101,6 +101,19 @@ rename by hand in about a minute.
 **Before starting any step, ask: is there an action for this?** If not, it is a hand-off.
 Check the namespace action list rather than assuming an action exists because it "should".
 
+### Spawned sessions and git worktrees — Unreal is NOT reachable from a worktree
+`.mcp.json` starts the Monolith proxy from `Plugins/Monolith/Binaries/monolith_proxy.exe`.
+`Plugins/` is **not tracked in git**, so a worktree never contains it and the proxy reports
+`CONNECTION_CLOSED` every time. A subagent spawned into a worktree therefore cannot touch the
+editor at all, and will end up working in the main checkout instead — which looks like an empty
+worktree and an untouched branch even when the work was done. Do not read an empty worktree as
+"nothing happened"; check the main checkout too.
+
+Fixed 2026-09-04 by making that path absolute in `.mcp.json` (the file is untracked, so this is
+local-only and does not affect other clones). Also note: only ONE editor and ONE main checkout
+serve all concurrent sessions, so log lines and file writes may come from another agent — always
+stage commits with an explicit pathspec, never `git add -A`.
+
 ### Things ONLY the human can do (known list — extend as found)
 | Task | Why the tooling cannot |
 |---|---|
