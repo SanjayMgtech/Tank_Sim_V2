@@ -128,8 +128,9 @@ stage commits with an explicit pathspec, never `git add -A`.
 - **Parameter renames** are only needed if a port hits shadowing. `WheelRotationDefinition`
   turned out NOT to need one (Phase 17) - its tuning arrives as parameters. Ask only when a
   concrete port is actually blocked.
-- **Space-in-name variables** (`Player Controller`, `MG Yaw`, `Is Vehicle taken?`, ...) need a
-  Blueprint rename before they could ever be ported.
+- **Space-in-name variables** (`Player Controller`, `Is Vehicle taken?`, `Debug Camera`) need a
+  Blueprint rename before they could ever be ported. The list used to be longer; the legacy
+  turret ones were deleted outright instead — see *DEAD CODE REMOVED*.
 
 ---
 
@@ -164,8 +165,7 @@ Branch → Set DeltaSeconds → Set ForwardSpeedMPH → Sequence:
   then_0: ChassisDistanceDefinition → Set SaggingDegreeR/L
   then_1: (if !UseGeometricTracks) UpdateTracksMID ×2 → TrackPathAnimations ×2
   then_2: (if UseGeometricTracks) TrackPathShift ×2 → TrackPathAnimations ×2 → SetTracksTransform ×2
-  then_3: UpdateHUD → UpdateSound → ReplicateControlRotation →
-          UpdateCrosshairPositionAndSize → TracksDecal → HullAccelerationDefinition →
+  then_3: UpdateHUD → UpdateSound → UpdateCrosshairPositionAndSize → TracksDecal → HullAccelerationDefinition →
           AntennaCalculation
   then_4: TurretsAndGunsRotCalculation → Sequence(WheelRotationDefinition ×8, ForEach → Scattering)
 ```
@@ -289,16 +289,18 @@ attempt-1 failure mode. Move those first. Save variables that hold real tuning v
 (`MaxSpeedKMH`, `WheelRadius*`, `TracksAmount`, ...) for later phases, and verify the
 child override survives the move.
 
-**Some variables are referenced only from dead `_Old` code paths.** `UpdateTurretRotation_Old`
-and `UpdateMachineGunRotation_Old` are not called from Tick, so `TurretRotation`, `MGRotation`,
-`TurretYaw` and `TurretPitch` legitimately stay 0 for a whole PIE session. **Do not read that
-as a failed rebind, and do not accept it as a pass either.** Prove them by invoking the owning
-function directly and diffing the values across the call:
+**A variable may be referenced only from code the drive test never runs.** Before moving one,
+check *which graph* its references live in — an `Old` suffix or category, or a function absent
+from Tick, means the normal drive test will never touch it and the value stays 0 all session.
+**Do not read that as a failed rebind, and do not accept it as a pass either.** Prove it by
+invoking the owning function directly and diffing the values across the call:
 ```
-t.call_method('UpdateTurretRotation_Old')   # both take no arguments
+t.call_method('<TheFunction>')
 ```
-Before moving a variable, check *which graph* its references live in. A `_Old` suffix or an
-`Old` category means the normal drive test will never touch it.
+This is how Phase 6's `TurretRotation` / `MGRotation` / `TurretYaw` / `TurretPitch` were proven,
+via the then-existing `UpdateTurretRotation_Old` and `UpdateMachineGunRotation_Old`. Those
+functions and those four properties have since been **deleted** as dead code — see
+*DEAD CODE REMOVED* below — so the technique outlives its first example.
 
 **Check the AnimBPs before moving anything chassis-related.** `ABP_Chaos_<Tank>` declares
 its *own* variables with the same names as several pawn variables — it Sets them in its
@@ -318,8 +320,10 @@ Watch for a naming trap here: some `ABP_Chaos_T90` nodes read `WheelRot Accessor
 two different variables that look identical at a glance.
 
 **Variables with spaces in the name cannot be ported directly** — `Player Controller`,
-`Is Vehicle taken?`, `Turret Rotation Speed`, `MG Yaw`, `Clipping Range Min/Max`,
-`Turret Height Range Clip`, `MGRotation Speed`, `Debug Camera`. A C++ identifier cannot
+`Is Vehicle taken?`, `Debug Camera`. (Five more once belonged here — `Turret Rotation Speed`,
+`MG Yaw`, `Clipping Range Min/Max`, `Turret Height Range Clip`, `MGRotation Speed` — all dead
+legacy turret variables, since deleted rather than renamed. Deleting beats renaming when the
+value has no readers.) A C++ identifier cannot
 contain a space, so an exact name match is impossible and RULE 4 cannot be satisfied.
 These need a deliberate rename phase of their own (rename in the BP first, let the
 editor fix up every node, verify, commit — *then* port). Do not sneak a rename into an
@@ -346,7 +350,7 @@ function they call has already been moved and individually verified.**
 | 3 — All six tanks | ✅ PASS | All 6 load, correct values, chain = `ATSTankControllerBase → BP_TankController_Chaos → BP_<Tank>_Controller_Chaos`. |
 | 4 — Vars: chassis distance accumulators | ✅ PASS | `ChassisDistanceR/L`, `ChassisDeltaDistanceR/L` moved to C++. CDO now reports `owner_class: TSTankControllerBase` for exactly those 4; all other ~150 still `BP_TankController_Chaos_C`. All 16 Get/Set nodes rebound (same node IDs). BP compiles `UpToDate`, 0 errors/warnings. PIE: values accumulate correctly (see below), 0 `Accessed None`, 0 BP runtime errors. |
 | 5 — Vars: chassis accel / rot / move scratch | ✅ PASS | `ChassisAccelerationR/L`, `HullZRot`, `ChassisDistanceZRotComponentR/L`, `ChassisDistanceXMoveComponentR/L` moved. All 11 native props present on the CDO; `remove_variable` reports "not found" for the moved names. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. Graceful editor close worked — no recovery modal. |
-| 6 — Vars: turret / MG scratch (**first structs**) | ✅ PASS | `MainTurretAndGunRotation`, `TurretRotation`, `MGRotation` (FRotator), `TurretYaw`, `TurretPitch` (double), `TurretBlocking`, `IsTurretRotating` (bool). All 18 native props present; moved names gone from the BP. `TurretRotation` still 10 refs / same node IDs. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
+| 6 — Vars: turret / MG scratch (**first structs**) | ✅ PASS, partly **since deleted** | `MainTurretAndGunRotation`, `TurretRotation`, `MGRotation` (FRotator), `TurretYaw`, `TurretPitch` (double), `TurretBlocking`, `IsTurretRotating` (bool). All 18 native props present; moved names gone from the BP. `TurretRotation` still 10 refs / same node IDs. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. **`TurretRotation`, `MGRotation`, `TurretYaw`, `TurretPitch` were later deleted as dead code** — see *DEAD CODE REMOVED*. |
 | 7 — Vars: antenna / UI / misc (**FVector, float, int32**) | ✅ PASS | 14 moved: `HullSpeedWorld`, `HullAccelerationWorldInverted`, `TurretSpeedLocalInverted` (FVector), `CrosshairTraceClamp`, `AimPointCorrectionUI`, `CurrentAmplitudeMultiplierR/L`, `FilletsCompensation`, `HullDeltaXLocation`, `DeltaSeconds`, `CurentRPMRatio`, `TrackSpeedModifier` (double), `ForwardSpeedMPH` (float), `DamageCausedUI` (int32). 32 native props total. All 6 tanks match master on every default. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. **13/14 proven at runtime; `DamageCausedUI` structural only** (see below). |
 | 8 — Vars: scratch **ARRAYS** | ✅ PASS | 11 moved: `VibrationOffset_R/L`, `FinalScattering` (TArray&lt;double&gt;), `SplinePointLocation`, `SplinePointPerpendicularVectors`, `AntennaCurrentSpeed` (TArray&lt;FVector&gt;), `CopyPointIndices` (TArray&lt;int32&gt;), `TurretsRotUnstabilized`, `TurretsRotPrevFrame`, `GunsRotUnstabilized`, `GunsRotPrevFrame` (TArray&lt;FRotator&gt;). 43 native props. All lengths match across all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. |
 | 9 — Vars: **REPLICATED** | ✅ PASS — **verified not a regression** | Properties moved correctly: 46 native props, `UPROPERTY(Replicated)` + `DOREPLIFETIME`, lengths correct on all 6 tanks, 0 LogNet warnings. A/B listen-server test (2026-09-04) at `c783cbf` vs current gives **identical** behaviour in both directions, so the port neither broke nor fixed replication. The multiplayer turret faults are PRE-EXISTING — see below. |
@@ -785,9 +789,10 @@ Get Camera -> GetWorldLocation + GetForwardVector -> LineTraceByChannel
            -> TargetPoint (local var) -> StabilizingRotation
            -> UpdateTurretRotation / UpdateGunRotation -> TurretsRot / GunsRot
 ```
-`Rep_ControlRotation` is **vestigial** — its only readers are `UpdateTurretRotation_Old` and
-`UpdateMachineGunRotation_Old`, both dead code. Replicating it changes nothing visible. Verify a
-variable's consumers with `find_variable_references` before building on its name.
+`Rep_ControlRotation` was **vestigial** — its only readers were `UpdateTurretRotation_Old` and
+`UpdateMachineGunRotation_Old`, both dead code. Replicating it changed nothing visible. All three
+have since been deleted (*DEAD CODE REMOVED*). The lesson that cost the time: **verify a
+variable's consumers with `find_variable_references` before building on its name.**
 
 So the server's copy of a client's tank traces from a camera that is not looking anywhere useful,
 and the turret sits still. That is the whole bug.
@@ -863,10 +868,12 @@ Results were identical:
 Phase 9 therefore neither broke nor fixed anything, and is marked verified. What remains are two
 faults that have always been in the Blueprint:
 
-**1. The client's aim never reaches the server.** Replication is server → client only.
-`ReplicateControlRotation` writes `Rep_ControlRotation` when `HasAuthority() OR
-IsLocallyControlled()`, so a client writes only its own copy and it never travels upward. There
-is no Server RPC anywhere in this Blueprint. Client turret aiming has never worked in multiplayer.
+**1. The client's aim never reaches the server.** Replication is server → client only. The
+then-present `ReplicateControlRotation` wrote `Rep_ControlRotation` when `HasAuthority() OR
+IsLocallyControlled()`, so a client wrote only its own copy and it never travelled upward. There
+was no Server RPC anywhere in this Blueprint. Client turret aiming had never worked in
+multiplayer. (That function and that variable are now deleted; the working upward channel is
+`ServerSetAimPoint` — see FIX 2.)
 
 **2. The jitter on server → client.** `Event Tick` is gated only on `NOT Destroyed` — no
 `HasAuthority`, no `IsLocallyControlled`. A client runs `TurretsAndGunsRotCalculation` every
@@ -876,7 +883,7 @@ server. The two writers alternate, which is what the jitter is.
 ### ✅ FIX 1 VERIFIED — jitter gate (tested in multiplayer 2026-09-04)
 `Event Tick` now gates the `TurretsAndGunsRotCalculation` call on a new C++ helper
 `IsTurretSimulatedLocally()` = `HasAuthority() || IsLocallyControlled()` — deliberately the same
-condition `ReplicateControlRotation` already uses.
+condition `ReplicateControlRotation` used at the time (that function has since been deleted).
 
 Confirmed first that `TurretsAndGunsRotCalculation` is the **only** writer of
 `TurretsRot`/`GunsRot`: its `Get` feeds a `SetArrayElem`, whereas `ScatteringCalculation` only
@@ -938,8 +945,8 @@ So the owning client traces as before and sends the point up; the server stops t
 meaningless trace for that pawn and uses the received point. The server still runs all the turret
 maths and stays authoritative.
 
-`ReplicateControlRotation` was restored to its original form (original OR gate, RPC nodes
-removed) since that whole path was a dead end.
+`ReplicateControlRotation` was first restored to its original form since that whole path was a
+dead end, and later **deleted entirely** along with `Rep_ControlRotation` — nothing read either.
 
 Evidence the channel works (server-world probe, 3 pawns):
 ```
@@ -952,16 +959,10 @@ never existed in this project. BP `UpToDate`, 0 errored BPs, PIE clean.
 server, and the server -> client direction remains smooth. Multiplayer turret aiming works in
 both directions for the first time in this project.
 
-### If this is ever fixed, it is FEATURE work, not port repair
-1. Add a **Server RPC** carrying the locally-controlled client's aim to the server, and set
-   `Rep_ControlRotation` there (authority only).
-2. **Gate the turret calculation**: a pawn that is neither authority nor locally controlled must
-   consume the replicated `TurretsRot`/`GunsRot` rather than recompute them. The
-   `HasAuthority || IsLocallyControlled` condition already used by `ReplicateControlRotation` is
-   the right gate.
-
-Do not attempt either as part of the Blueprint → C++ port. They change gameplay behaviour, they
-need a two-window test to verify, and the port is deliberately behaviour-preserving.
+### Both fixes were FEATURE work, not port repair — and were done deliberately as such
+They changed gameplay behaviour and needed a two-window manual test, so they were kept out of the
+port's behaviour-preserving phases and verified separately. If more multiplayer work follows,
+treat it the same way: its own commit, its own listen-server test, never folded into a phase.
 
 ### A/B testing is how you separate "port broke it" from "always broken"
 The first test reported only "turret not replicating", which was too coarse — it could not
@@ -1058,7 +1059,7 @@ holds 1.0, which is correct — nothing in this scenario modifies it.
 
 **`DamageCausedUI` was NOT exercised at runtime.** Its only writer is the *macro*
 `UpdateDamageCausedUI`. Macros are inlined at compile time and are not UFunctions, so unlike
-the Phase 6 `_Old` functions they cannot be invoked via `call_method`, and reaching it needs a
+a real function they cannot be invoked via `call_method`, and reaching it needs a
 real damage-caused event. It is verified structurally: present natively, absent from the BP
 variable list, and its 4 graph references still resolve. Recorded as a known gap rather than
 counted as a pass. **A variable whose only writer is a macro cannot be runtime-proven this way** —
@@ -1073,7 +1074,9 @@ This is the direct check against attempt 1's failure mode. It becomes mandatory,
 once real tuning values (`MaxSpeedKMH`, `WheelRadius*`, `TracksAmount`) start moving.
 
 **Phase 6 runtime proof** — `FRotator` structs marshal correctly, and the legacy group was
-proven by *calling the `_Old` functions directly* rather than accepting a static check:
+proven by *calling the `_Old` functions directly* rather than accepting a static check.
+(Historical: that legacy group was later deleted as dead code. The proof stands as the record of
+why the move was sound at the time.)
 ```
 START           main=(0.000,0.000,0.000)    blocking=False  rotating=False
 LIVE (turned)   main=(-0.115,-3.794,14.058) blocking=False  rotating=True
