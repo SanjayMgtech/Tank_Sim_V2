@@ -737,6 +737,27 @@ Both sit in Blueprint code the port never edited:
 
 **That is reasoning, not proof.** Confirm it with the test below before acting on it.
 
+### PRE-PORT BASELINE MEASURED (c783cbf, Phase 8 — before replicated vars moved to C++)
+Listen-server, 2 players, tested 2026-09-04:
+
+| Direction | Pre-port result |
+|---|---|
+| Server turret → seen by client | **WORKS**, but jittery / "not perfect" |
+| Client turret → seen by server | **DOES NOT WORK** |
+
+Both halves are explained by the graph, and neither is caused by the port:
+- **Client → server was never possible.** Replication is server → client only, and there is no
+  Server RPC anywhere in this Blueprint to carry a client's aim upward.
+  `ReplicateControlRotation` writes `Rep_ControlRotation` locally on the client, which never
+  travels. This is a missing feature, not a regression.
+- **The jitter on server → client** is the ungated `Event Tick`: the client recomputes
+  `TurretsRot`/`GunsRot` every frame and fights the replicated value.
+
+**The remaining question is narrow:** does server → client still work AFTER the port? If it does,
+the port changed nothing and both faults are pre-existing. If it does not, Phase 9 regressed it.
+Test the two directions SEPARATELY — the first test only reported "turret not replicating",
+which was too coarse to tell these apart.
+
 ### THE PRE-PORT TEST (decisive)
 Check out `c783cbf` (Phase 8 — the commit *before* replicated variables moved to C++), rebuild,
 and run the same listen-server test.
