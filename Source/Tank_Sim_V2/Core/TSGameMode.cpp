@@ -133,8 +133,10 @@ void ATSGameMode::PostLogin(APlayerController* NewPlayer)
 {
 	Super::PostLogin(NewPlayer);
 
-	if (GameState && GameState->PlayerArray.Num() > MaxCrewMembers)
+	if (MaxLobbyPlayers > 0 && GameState && GameState->PlayerArray.Num() > MaxLobbyPlayers)
 	{
+		UE_LOG(LogTankSim, Warning, TEXT("ATSGameMode: lobby is full (%d/%d) - kicking '%s'."),
+			GameState->PlayerArray.Num(), MaxLobbyPlayers, *GetNameSafe(NewPlayer));
 		if (GameSession)
 		{
 			GameSession->KickPlayer(NewPlayer, FText::FromString(TEXT("Tank crew lobby is full.")));
@@ -329,6 +331,27 @@ bool ATSGameMode::TryAssignRole(APlayerController* Player, ETSCrewRole Requested
 	}
 
 	return true;
+}
+
+void ATSGameMode::ClearAssignment(APlayerController* Player)
+{
+	ATSTankPlayerState* PS = Player ? Player->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	if (!PS)
+	{
+		return;
+	}
+
+	if (APawn* Tank = PS->GetAssignedTank())
+	{
+		if (UTSTankCrewComponent* Crew = Tank->FindComponentByClass<UTSTankCrewComponent>())
+		{
+			Crew->ReleaseRole(PS);
+		}
+	}
+
+	PS->SetAssignedTank(nullptr);
+	PS->SetCrewRole(ETSCrewRole::None);
+	PS->SetTeamId(ETSTeamId::None);
 }
 
 ATSTank* ATSGameMode::GetTankForTeam(ETSTeamId Team) const

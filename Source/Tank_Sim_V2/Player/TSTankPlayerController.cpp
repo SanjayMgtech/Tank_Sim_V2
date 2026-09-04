@@ -3,6 +3,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Core/TSGameInstance.h"
 #include "Core/TSGameMode.h"
+#include "Core/TSTypes.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Networking/TSSessionSubsystem.h"
@@ -183,6 +184,14 @@ void ATSTankPlayerController::RefreshSelectionUI()
 		return;
 	}
 
+	if (!bAutoShowSelectionUI)
+	{
+		// Host-driven lobby: assignment happens in the debug/lobby console, not in a panel that pops
+		// up over whatever the player is looking at.
+		HideSelectionUI();
+		return;
+	}
+
 	const ETSTeamId CurrentTeam = PS->GetTeamId();
 	const ETSCrewRole CurrentRole = PS->GetCrewRole();
 
@@ -308,44 +317,119 @@ bool ATSTankPlayerController::ServerRequestTeamChange_Validate(ETSTeamId NewTeam
 	return NewTeam != ETSTeamId::None;
 }
 
-void ATSTankPlayerController::ServerHostAssignPlayerToTeam_Implementation(APlayerState* TargetPlayerState, ETSTeamId NewTeam)
+bool ATSTankPlayerController::IsMatchHost() const
 {
-	if (!HasAuthority() || !TargetPlayerState || NewTeam == ETSTeamId::None)
+	// On a listen server the host's own controller is the only one that is both authoritative and
+	// locally controlled; every remote client's server-side proxy fails IsLocalController().
+	return HasAuthority() && IsLocalController();
+}
+
+APlayerController* ATSTankPlayerController::ResolveControllerForPlayerState(APlayerState* TargetPlayerState) const
+{
+	if (!TargetPlayerState)
 	{
-		return;
+		return nullptr;
 	}
 
-	APlayerController* TargetPC = TargetPlayerState->GetOwner<APlayerController>();
-	if (!TargetPC)
+	if (APlayerController* OwningPC = TargetPlayerState->GetOwner<APlayerController>())
 	{
-		if (UWorld* World = GetWorld())
+		return OwningPC;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
 		{
-			for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+			if (APlayerController* TestPC = It->Get())
 			{
-				if (APlayerController* TestPC = It->Get())
+				if (TestPC->PlayerState == TargetPlayerState)
 				{
-					if (TestPC->PlayerState == TargetPlayerState)
-					{
-						TargetPC = TestPC;
-						break;
-					}
+					return TestPC;
 				}
 			}
 		}
 	}
 
-	if (TargetPC)
+	return nullptr;
+}
+
+void ATSTankPlayerController::ServerHostAssignPlayerToTeam_Implementation(APlayerState* TargetPlayerState, ETSTeamId NewTeam)
+{
+	if (!IsMatchHost() || NewTeam == ETSTeamId::None)
 	{
-		if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
-		{
-			GM->TryAssignTeam(TargetPC, NewTeam);
-		}
+		return;
 	}
+
+	APlayerController* TargetPC = ResolveControllerForPlayerState(TargetPlayerState);
+	ATSGameMode* GM = TargetPC ? GetWorld()->GetAuthGameMode<ATSGameMode>() : nullptr;
+	if (!GM)
+	{
+		return;
+	}
+
+	const bool bAssigned = GM->TryAssignTeam(TargetPC, NewTeam);
+	UE_LOG(LogTankSim, Log, TEXT("Host assign team: '%s' -> %s (%s)"),
+		*TargetPlayerState->GetPlayerName(), *UTSTypeUtils::TeamIdToString(NewTeam),
+		bAssigned ? TEXT("ok") : TEXT("rejected"));
 }
 
 bool ATSTankPlayerController::ServerHostAssignPlayerToTeam_Validate(APlayerState* TargetPlayerState, ETSTeamId NewTeam)
 {
 	return NewTeam != ETSTeamId::None;
+}
+
+void ATSTankPlayerController::ServerHostAssignPlayerToRole_Implementation(APlayerState* TargetPlayerState, ETSCrewRole NewRole)
+{
+	if (!IsMatchHost() || NewRole == ETSCrewRole::None)
+	{
+		return;
+	}
+
+	APlayerController* TargetPC = ResolveControllerForPlayerState(TargetPlayerState);
+	ATSGameMode* GM = TargetPC ? GetWorld()->GetAuthGameMode<ATSGameMode>() : nullptr;
+	if (!GM)
+	{
+		return;
+	}
+
+	const bool bAssigned = GM->TryAssignRole(TargetPC, NewRole);
+	UE_LOG(LogTankSim, Log, TEXT("Host assign role: '%s' -> %s (%s)"),
+		*TargetPlayerState->GetPlayerName(), *UTSTypeUtils::CrewRoleToString(NewRole),
+		bAssigned ? TEXT("ok") : TEXT("rejected - seat taken, or the player has no team yet"));
+
+	// Tell the assigned player's own client, so their UI reacts the same way it would to a self-pick.
+	if (ATSTankPlayerController* TargetTankPC = Cast<ATSTankPlayerController>(TargetPC))
+	{
+		TargetTankPC->ClientRoleRequestResult(NewRole, bAssigned);
+	}
+}
+
+bool ATSTankPlayerController::ServerHostAssignPlayerToRole_Validate(APlayerState* TargetPlayerState, ETSCrewRole NewRole)
+{
+	return NewRole != ETSCrewRole::None;
+}
+
+void ATSTankPlayerController::ServerHostClearPlayerAssignment_Implementation(APlayerState* TargetPlayerState)
+{
+	if (!IsMatchHost())
+	{
+		return;
+	}
+
+	APlayerController* TargetPC = ResolveControllerForPlayerState(TargetPlayerState);
+	ATSGameMode* GM = TargetPC ? GetWorld()->GetAuthGameMode<ATSGameMode>() : nullptr;
+	if (!GM)
+	{
+		return;
+	}
+
+	GM->ClearAssignment(TargetPC);
+	UE_LOG(LogTankSim, Log, TEXT("Host cleared assignment for '%s'."), *TargetPlayerState->GetPlayerName());
+}
+
+bool ATSTankPlayerController::ServerHostClearPlayerAssignment_Validate(APlayerState* TargetPlayerState)
+{
+	return true;
 }
 
 void ATSTankPlayerController::ServerRequestRoleChange_Implementation(ETSCrewRole NewRole)

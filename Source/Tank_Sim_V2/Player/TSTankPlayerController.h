@@ -82,8 +82,26 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerRequestTeamChange(ETSTeamId NewTeam);
 
+	// --- Host-driven assignment (the lobby console in UTSRoleDebugWidget) -----------------------
+	// The host picks each player's team and seat rather than every player self-selecting. All three
+	// re-check IsMatchHost() server-side: a Server RPC's HasAuthority() is trivially true, so without
+	// that check any client could reassign anybody.
+
+	// True only for the controller that owns the listen server (or a standalone session). Gates the
+	// assignment buttons client-side and the RPCs server-side.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Lobby")
+	bool IsMatchHost() const;
+
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerHostAssignPlayerToTeam(APlayerState* TargetPlayerState, ETSTeamId NewTeam);
+
+	// Requires the target to already be on a team - a seat only exists on a team's tank.
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ServerHostAssignPlayerToRole(APlayerState* TargetPlayerState, ETSCrewRole NewRole);
+
+	// Returns the player to the unassigned state: frees their seat and clears their team.
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ServerHostClearPlayerAssignment(APlayerState* TargetPlayerState);
 
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerRequestRoleChange(ETSCrewRole NewRole);
@@ -127,6 +145,13 @@ public:
 	void ServerIssueCrewCommand(ETSCrewCommand Command);
 
 protected:
+	// Pop WBP_TeamSelection / WBP_RoleSelection automatically as soon as this player lacks a team or a
+	// seat. Off by default: assignment is host-driven through the lobby console, and a self-select
+	// panel appearing on top of it lets two players race for the same seat. Turn it back on for a
+	// free-for-all lobby where everyone picks their own.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|UI")
+	bool bAutoShowSelectionUI = false;
+
 	// Auto-create the role debug panel for this local player on gameplay maps.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
 	bool bShowRoleDebugWidgetOnGameplayMaps = true;
@@ -145,6 +170,10 @@ protected:
 private:
 	ATSTankPlayerState* GetTankPlayerState() const;
 	UTSUISubsystem* GetUISubsystem() const;
+
+	// PlayerState -> owning PlayerController. Prefers GetOwner(), falling back to a controller scan
+	// because a PlayerState's owner can be null for a brief window around (re)connection.
+	APlayerController* ResolveControllerForPlayerState(APlayerState* TargetPlayerState) const;
 
 	// Runs one tick after BeginPlay: the menu-map level Blueprint's own BeginPlay has finished by
 	// then, so a widget it created in the same frame is caught by the sweep rather than surviving it.

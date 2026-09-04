@@ -65,6 +65,12 @@ public:
 	// a (deprecated) member called Role (legacy ENetRole), which C4458 correctly flags as shadowing.
 	bool TryAssignRole(APlayerController* Player, ETSCrewRole RequestedRole);
 
+	// Server only. Frees the player's crew seat and clears their team, returning them to the
+	// unassigned state the lobby starts in. TryAssignTeam deliberately rejects ETSTeamId::None, so
+	// this is the way back out of a team.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation")
+	void ClearAssignment(APlayerController* Player);
+
 	// Convenience typed accessor matching the Developer 1 "Suggested API" exactly. Returns null for a
 	// team whose tank was integrated via Path B (implements ITSTankInterface without deriving from
 	// ATSTank) - use ATSGameState::FindTankForTeam for the untyped, always-correct accessor instead
@@ -102,8 +108,11 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
 	FName GameplayMapName = TEXT("Controller_Demo_T90");
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
-	int32 MaxCrewMembers = 3;
+	// Capacity of the whole lobby, not of one tank. Renamed from MaxCrewMembers, which defaulted to 3
+	// and so kicked the fourth player to connect - fatal for a two-team match, which needs six.
+	// Three seats per team times MaxTeams. Set to 0 to remove the cap.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby", meta = (ClampMin = "0"))
+	int32 MaxLobbyPlayers = 12;
 
 	FString PendingLobbyCode;
 	FString GenerateLobbyCode() const;
