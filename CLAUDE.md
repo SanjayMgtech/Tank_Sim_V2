@@ -55,9 +55,18 @@ independent regressions before anyone pressed Play — each then took hours to i
 A C++ `UPROPERTY` with the same name and type as the Blueprint variable lets existing
 Blueprint values and node connections carry over. Mismatched names silently orphan data.
 
-### RULE 5 — Close the editor before rebuilding C++
-Live Coding cannot safely patch constructors or class layout. It caused repeated
-`EXCEPTION_ACCESS_VIOLATION` crashes in the destructor during attempt 1.
+### RULE 5 — Close the editor *gracefully* before rebuilding C++
+Live Coding cannot safely patch constructors or class layout. Adding or removing a
+`UPROPERTY` changes class layout, so **every variable-move phase needs a full rebuild.**
+Live Coding caused repeated `EXCEPTION_ACCESS_VIOLATION` crashes in the destructor
+during attempt 1.
+
+Close the editor from its own File menu / window close button. Do **not**
+`Stop-Process`/`taskkill` it: a force-kill makes the next launch open a blocking
+auto-save recovery modal, which freezes the MCP server until a human dismisses it
+(`LogMonolith: Warning: MODAL_OPEN ... MCP will be unresponsive until dismissed`).
+That costs a human round-trip on every single rebuild.
+
 Full rebuild with the editor closed:
 ```bash
 "C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" Tank_Sim_V2Editor Win64 Development -Project="C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" -WaitMutex -FromMsBuild
@@ -199,6 +208,37 @@ Components and all data stay in the Blueprint.
 Order: simple scalars → structs → arrays. Match names and types exactly.
 - **Test after each group:** values still show correct in the Blueprint defaults; tank drives.
 
+**The move is simpler than expected — you do NOT hand-delete the Blueprint variable.**
+Declare the `UPROPERTY` in C++ with the *exact* same name and type, rebuild, and reopen.
+UE's Blueprint compiler sees the parent now provides that property, drops the duplicate
+Blueprint variable by itself, and rebinds every existing Get/Set node to the native
+property. Verified on the Phase 4 group: all 16 nodes kept their original node IDs, the
+Blueprint compiled `UpToDate` with 0 errors / 0 warnings, and `remove_variable` then
+reports "Variable not found" because it is already gone.
+
+Mapping rules learned:
+- BP `double` → C++ `double`; BP `float` → C++ `float`. Do not collapse them.
+- Carry the BP category string across verbatim, including `|` subcategories
+  (e.g. `Category = "Hidden (Used for logic)|Chassis"`), or the details panel regroups.
+- `instance_editable: false` → `BlueprintReadWrite` only. Adding `EditAnywhere` would
+  expose a variable the Blueprint deliberately hid.
+
+**Pick each group by blast radius, not by convenience.** Before moving anything, run
+`find_variable_references` and check whether any per-tank child Blueprint overrides the
+default. Variables that are pure runtime scratch (default 0, written every tick, read
+only inside the master BP) carry no per-tank data and therefore cannot reproduce the
+attempt-1 failure mode. Move those first. Save variables that hold real tuning values
+(`MaxSpeedKMH`, `WheelRadius*`, `TracksAmount`, ...) for later phases, and verify the
+child override survives the move.
+
+**Variables with spaces in the name cannot be ported directly** — `Player Controller`,
+`Is Vehicle taken?`, `Turret Rotation Speed`, `MG Yaw`, `Clipping Range Min/Max`,
+`Turret Height Range Clip`, `MGRotation Speed`, `Debug Camera`. A C++ identifier cannot
+contain a space, so an exact name match is impossible and RULE 4 cannot be satisfied.
+These need a deliberate rename phase of their own (rename in the BP first, let the
+editor fix up every node, verify, commit — *then* port). Do not sneak a rename into an
+unrelated phase.
+
 ### Phase N — Move functions, one function per phase
 Order: **leaf functions first** (no callers inside the graph), working upward.
 For each: implement in C++ as `BlueprintCallable`, delete the Blueprint version, recompile.
@@ -218,13 +258,24 @@ function they call has already been moved and individually verified.**
 | 1 — Empty C++ base | ✅ PASS | `ATSTankControllerBase : AWheeledVehiclePawn` created, empty ctor. Builds; editor opens; class registers. |
 | 2 — Reparent master BP | ✅ PASS | `BP_TankController_Chaos` reparented. All **21 BP components intact** + 2 native. `Mass=30000`, `AllWheelDrive`, `IdleBrakeInput=1.0` all correct **with zero hand-copying**. T90 drove **6310 units / 3s**. Log clean — zero errors, and no `CreateWidget null class`. |
 | 3 — All six tanks | ✅ PASS | All 6 load, correct values, chain = `ATSTankControllerBase → BP_TankController_Chaos → BP_<Tank>_Controller_Chaos`. |
-| 4+ — Move variables | ⬜ next | |
+| 4 — Vars: chassis distance accumulators | ✅ PASS | `ChassisDistanceR/L`, `ChassisDeltaDistanceR/L` moved to C++. CDO now reports `owner_class: TSTankControllerBase` for exactly those 4; all other ~150 still `BP_TankController_Chaos_C`. All 16 Get/Set nodes rebound (same node IDs). BP compiles `UpToDate`, 0 errors/warnings. PIE: values accumulate correctly (see below), 0 `Accessed None`, 0 BP runtime errors. |
+| 5+ — Move more variables | ⬜ next | |
+
+**Phase 4 runtime proof** — the Blueprint graph writing the *native* properties during PIE:
+```
+START   dR=0.0000    dL=0.0000    deltaR=0.0000    deltaL=0.0000
+1.5s    dR=75.5625   dL=69.0319   deltaR=40.2997   deltaL=34.6010
+3.0s    dR=243.5395  dL=228.2148  deltaR=50.1447   deltaL=51.6305
+4.5s    dR=700.1340  dL=688.3158  deltaR=118.5525  deltaL=119.5302
+```
+Monotonic accumulation, R/L symmetric on a straight line, deltas rising with speed.
 
 **Proof the architecture is right:** every value that silently regressed in attempt 1
 (section 4 table) is correct here automatically, because it was never moved out of the
 Blueprint in the first place.
 
-Current C++ surface: `Source/Tank_Sim_V2/Tank/TSTankControllerBase.{h,cpp}` — empty by design.
+Current C++ surface: `Source/Tank_Sim_V2/Tank/TSTankControllerBase.{h,cpp}` — empty constructor
+by design, plus the 4 Phase 4 chassis distance properties.
 
 ---
 
@@ -241,6 +292,26 @@ Current C++ surface: `Source/Tank_Sim_V2/Tank/TSTankControllerBase.{h,cpp}` — 
    Baseline is ~3372 units in 3s. Anything near zero is a failure.
 4. Check log for `Accessed None`, `CreateWidget called with a null class`, physics errors.
 5. Green → commit. Red → revert this phase only; do not stack changes on a failure.
+
+### The drive test is necessary but NOT sufficient
+It only exercises what feeds physics. A variable that drives tracks, antennas, camera,
+HUD or turret can be completely broken while the tank still drives its baseline distance.
+**For each phase, additionally test the thing that phase actually touched** — for a moved
+variable, sample it live in PIE and confirm it still gets written:
+
+```
+run_pie_smoke  probe_scripts: [{at_seconds: N,
+  python: "... t.get_editor_property('<VarName>') ... unreal.log(...)"}]
+```
+A moved variable that reads 0 for the whole session while the tank moves means the
+rebind silently failed. That is the Phase 4+ analogue of attempt 1's silent regressions.
+
+### Comparing drive numbers requires the same harness
+The 7921 / 6310 baselines came from one measurement method. `run_pie_smoke` advances PIE
+at a much lower frame rate and yields much smaller absolute numbers for the same healthy
+tank — those figures are **not** comparable to the baselines. Either re-measure the
+known-good state with the identical harness before comparing, or judge that phase on a
+targeted signal instead. Do not report a pass or a regression off mismatched harnesses.
 
 ---
 

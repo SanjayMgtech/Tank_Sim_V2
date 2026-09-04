@@ -21,4 +21,28 @@ class TANK_SIM_V2_API ATSTankControllerBase : public AWheeledVehiclePawn
 
 public:
 	ATSTankControllerBase();
+
+	// ---------------------------------------------------------------------
+	// Phase 4: chassis distance accumulators.
+	//
+	// Pure runtime scratch state, written by ChassisDistanceDefinition and read
+	// by the track/spline animation. Not per-tank configuration - every child
+	// Blueprint leaves these at 0, so moving them carries no default-value risk.
+	//
+	// Names, types and category match the Blueprint variables they replace
+	// exactly, so existing Get/Set nodes rebind to these on compile (RULE 4).
+	// BP type "double" -> C++ double. Not instance-editable in the BP, so
+	// BlueprintReadWrite only (no EditAnywhere).
+	// ---------------------------------------------------------------------
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double ChassisDistanceR = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double ChassisDistanceL = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double ChassisDeltaDistanceR = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double ChassisDeltaDistanceL = 0.0;
 };
