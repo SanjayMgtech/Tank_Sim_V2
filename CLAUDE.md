@@ -218,6 +218,14 @@ reports "Variable not found" because it is already gone.
 
 Mapping rules learned:
 - BP `double` → C++ `double`; BP `float` → C++ `float`. Do not collapse them.
+  (`ForwardSpeedMPH` is the one float in the scratch set; everything else is double.)
+- BP `int` → `int32`; BP `struct:Vector` → `FVector` (`FVector::ZeroVector`);
+  `struct:Rotator` → `FRotator` (`FRotator::ZeroRotator`).
+- **Carry non-zero defaults across.** Most scratch defaults to 0, but not all —
+  `TrackSpeedModifier` defaults to `1.0`. Initialising it to 0 would silently scale
+  track animation to nothing. Read the default from the BP; never assume zero.
+- **Copy misspellings verbatim.** `CurentRPMRatio` is missing an 'r' in the Blueprint.
+  "Fixing" the spelling in C++ breaks the name match and orphans the data (RULE 4).
 - Carry the BP category string across verbatim, including `|` subcategories
   (e.g. `Category = "Hidden (Used for logic)|Chassis"`), or the details panel regroups.
 - `instance_editable: false` → `BlueprintReadWrite` only. Adding `EditAnywhere` would
@@ -289,7 +297,34 @@ function they call has already been moved and individually verified.**
 | 4 — Vars: chassis distance accumulators | ✅ PASS | `ChassisDistanceR/L`, `ChassisDeltaDistanceR/L` moved to C++. CDO now reports `owner_class: TSTankControllerBase` for exactly those 4; all other ~150 still `BP_TankController_Chaos_C`. All 16 Get/Set nodes rebound (same node IDs). BP compiles `UpToDate`, 0 errors/warnings. PIE: values accumulate correctly (see below), 0 `Accessed None`, 0 BP runtime errors. |
 | 5 — Vars: chassis accel / rot / move scratch | ✅ PASS | `ChassisAccelerationR/L`, `HullZRot`, `ChassisDistanceZRotComponentR/L`, `ChassisDistanceXMoveComponentR/L` moved. All 11 native props present on the CDO; `remove_variable` reports "not found" for the moved names. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. Graceful editor close worked — no recovery modal. |
 | 6 — Vars: turret / MG scratch (**first structs**) | ✅ PASS | `MainTurretAndGunRotation`, `TurretRotation`, `MGRotation` (FRotator), `TurretYaw`, `TurretPitch` (double), `TurretBlocking`, `IsTurretRotating` (bool). All 18 native props present; moved names gone from the BP. `TurretRotation` still 10 refs / same node IDs. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
-| 7+ — Move more variables | ⬜ next | |
+| 7 — Vars: antenna / UI / misc (**FVector, float, int32**) | ✅ PASS | 14 moved: `HullSpeedWorld`, `HullAccelerationWorldInverted`, `TurretSpeedLocalInverted` (FVector), `CrosshairTraceClamp`, `AimPointCorrectionUI`, `CurrentAmplitudeMultiplierR/L`, `FilletsCompensation`, `HullDeltaXLocation`, `DeltaSeconds`, `CurentRPMRatio`, `TrackSpeedModifier` (double), `ForwardSpeedMPH` (float), `DamageCausedUI` (int32). 32 native props total. All 6 tanks match master on every default. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. **13/14 proven at runtime; `DamageCausedUI` structural only** (see below). |
+| 8+ — Move more variables | ⬜ next | |
+
+**Phase 7 runtime proof:**
+```
+START  dt=0.00000  mph=0.000   rpm=0.0000   hullSpd=(0.00,0.00,0.00)  trackMod=1.000
+END    dt=0.33333  mph=10.069  rpm=72.5816  trackMod=1.000
+END    hullSpd=(489.87,-0.82,13.70) hullAcc=(-39.84,-0.12,-3.44) turretSpd=(473.865,-3.404,-17.593)
+END    ampR=0.6000 ampL=0.6000 fillets=3.6300 hullDX=150.0344 crosshair=27596.5469 aimCorr=82.2626 dmg=0
+```
+`ampR`/`ampL` land on exactly 0.6000, matching the `MaxSpeedInfluence` cap. `TrackSpeedModifier`
+holds 1.0, which is correct — nothing in this scenario modifies it.
+
+**`DamageCausedUI` was NOT exercised at runtime.** Its only writer is the *macro*
+`UpdateDamageCausedUI`. Macros are inlined at compile time and are not UFunctions, so unlike
+the Phase 6 `_Old` functions they cannot be invoked via `call_method`, and reaching it needs a
+real damage-caused event. It is verified structurally: present natively, absent from the BP
+variable list, and its 4 graph references still resolve. Recorded as a known gap rather than
+counted as a pass. **A variable whose only writer is a macro cannot be runtime-proven this way** —
+either drive the real gameplay event or record the gap honestly.
+
+**Guard for every future phase — compare all six tanks before moving:**
+```python
+mcdo = unreal.get_default_object(master_bp.generated_class())
+for each child BP: cdo.get_editor_property(name) != mcdo.get_editor_property(name) -> OVERRIDE
+```
+This is the direct check against attempt 1's failure mode. It becomes mandatory, not optional,
+once real tuning values (`MaxSpeedKMH`, `WheelRadius*`, `TracksAmount`) start moving.
 
 **Phase 6 runtime proof** — `FRotator` structs marshal correctly, and the legacy group was
 proven by *calling the `_Old` functions directly* rather than accepting a static check:

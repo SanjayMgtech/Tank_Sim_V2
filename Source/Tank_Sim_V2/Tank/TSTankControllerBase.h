@@ -116,4 +116,60 @@ public:
 
 	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Machine gun")
 	FRotator MGRotation = FRotator::ZeroRotator;
+
+	// ---------------------------------------------------------------------
+	// Phase 7: antenna / UI / misc runtime scratch. First FVector, float and int32.
+	//
+	// Verified against all six per-tank Blueprints: every one of these matches the
+	// master's default, so no child override can be dropped by the move.
+	//
+	// Three exact-match traps in this group - do not "tidy" any of them:
+	//   * TrackSpeedModifier defaults to 1.0, NOT 0. Zeroing it would silently
+	//     scale every track animation to nothing.
+	//   * ForwardSpeedMPH is a Blueprint float, not a double.
+	//   * CurentRPMRatio is misspelled in the Blueprint ("Curent"). The name must
+	//     match exactly or the rebind orphans the data (RULE 4).
+	// ---------------------------------------------------------------------
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Antenna")
+	FVector HullSpeedWorld = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Antenna")
+	FVector HullAccelerationWorldInverted = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Antenna")
+	FVector TurretSpeedLocalInverted = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|UI")
+	double CrosshairTraceClamp = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|UI")
+	double AimPointCorrectionUI = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|UI")
+	int32 DamageCausedUI = 0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double CurrentAmplitudeMultiplierR = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double CurrentAmplitudeMultiplierL = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double FilletsCompensation = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double HullDeltaXLocation = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	float ForwardSpeedMPH = 0.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)")
+	double DeltaSeconds = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)")
+	double CurentRPMRatio = 0.0;
+
+	// Default is 1.0 in the Blueprint - see the trap note above.
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)")
+	double TrackSpeedModifier = 1.0;
 };
