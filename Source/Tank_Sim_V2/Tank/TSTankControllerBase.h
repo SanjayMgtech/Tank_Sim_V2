@@ -520,23 +520,34 @@ public:
 	bool IsTurretSimulatedLocally() const;
 
 	// ---------------------------------------------------------------------
-	// Multiplayer fix 2: carry a client's aim UP to the server.
+	// Multiplayer fix 2: carry a client's AIM POINT up to the server.
 	//
-	// Replication is server -> client only. ReplicateControlRotation writes
-	// Rep_ControlRotation when HasAuthority OR IsLocallyControlled, but on a client
-	// that write never travels anywhere, so the server never learns where the client
-	// is aiming and the client's turret is frozen for everyone else. There has never
-	// been a Server RPC in this project.
+	// Control rotation does NOT replicate for a Pawn (it does for Character), and
+	// this pawn has bUseControllerRotationYaw=false, so the server genuinely cannot
+	// know where a client is looking. See the multiplayer section of CLAUDE.md.
 	//
-	// ShouldSendAimToServer() is true only on a locally-controlled client - the one
-	// machine that knows the aim and is not the server.
+	// The turret is aimed by a line trace from the Camera in
+	// TurretsAndGunsRotCalculation, producing a world-space TargetPoint. On the
+	// server, a remote client's camera is not looking anywhere useful, so its trace
+	// is meaningless. The owning client therefore sends its traced point up, and the
+	// server uses that instead of tracing.
 	//
-	// Unreliable on purpose: this is per-frame aim data. A reliable RPC every frame
-	// would flood the reliable buffer and can disconnect the client.
+	// An earlier attempt sent Rep_ControlRotation instead. That failed because
+	// nothing live reads it - its only readers are the dead UpdateTurretRotation_Old
+	// and UpdateMachineGunRotation_Old. Check a variable's consumers before building
+	// on its name.
+	//
+	// Unreliable: this fires every frame. A reliable RPC at that rate can disconnect
+	// the client. BlueprintCallable is required for a Server RPC invoked from a graph.
 	// ---------------------------------------------------------------------
 	UFUNCTION(BlueprintPure, Category = "Networking", meta = (ToolTip = "True only on a locally-controlled client, i.e. we must send our aim to the server."))
 	bool ShouldSendAimToServer() const;
 
+	// Written on the SERVER by ServerSetAimPoint. Not replicated: clients never need
+	// it, they receive the finished TurretsRot/GunsRot.
+	UPROPERTY(BlueprintReadWrite, Category = "Networking")
+	FVector ReceivedAimPoint = FVector::ZeroVector;
+
 	UFUNCTION(Server, Unreliable, BlueprintCallable, Category = "Networking")
-	void ServerSetControlRotation(FRotator NewControlRotation);
+	void ServerSetAimPoint(FVector NewAimPoint);
 };

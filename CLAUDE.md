@@ -823,39 +823,40 @@ Updated result table:
 | Server turret → seen by client | works, jittery | **works, smooth** ✅ |
 | Client turret → seen by server | does not work | does not work (fix 2, not attempted) |
 
-### FIX 2 APPLIED — Server RPC for client aim (awaiting multiplayer verification)
-Adds two C++ members and four nodes appended to `ReplicateControlRotation`:
+### FIX 2 (retargeted) — send the client's AIM POINT, not its control rotation
+The first attempt sent `Rep_ControlRotation` and did nothing, because nothing live reads that
+variable. Retargeted at what the turret actually consumes: the `TargetPoint` produced by the
+camera line trace.
+
+C++:
 ```cpp
 bool ShouldSendAimToServer() const { return !HasAuthority() && IsLocallyControlled(); }
-UFUNCTION(Server, Unreliable, BlueprintCallable) void ServerSetControlRotation(FRotator);
+UPROPERTY(BlueprintReadWrite) FVector ReceivedAimPoint;      // written on the SERVER only
+UFUNCTION(Server, Unreliable, BlueprintCallable) void ServerSetAimPoint(FVector);
 ```
-Graph (appended — nothing existing was rewired; both `Set Rep_ControlRotation` nodes had an
-unused `then` pin, so the new branch simply hangs off both):
+Graph, inside `TurretsAndGunsRotCalculation`:
 ```
-Set Rep_ControlRotation (Stabilization TRUE ) --\
-Set Rep_ControlRotation (Stabilization FALSE) --+-> Branch(ShouldSendAimToServer)
-                                                     True -> ServerSetControlRotation(Rep_ControlRotation)
+LineTrace -> SelectVector(hit, traceEnd, by IsThereTarget)          [existing]
+          -> SelectVector(that, ReceivedAimPoint, by IsLocallyControlled)   [NEW]
+          -> Set TargetPoint
+          -> Branch(ShouldSendAimToServer) -> ServerSetAimPoint(TargetPoint) [NEW]
+          -> Set StabilizingRotation                                [existing, both paths]
 ```
-The server writes the replicated property in `_Implementation`, so the client's aim now travels
-up and then replicates back down to everyone normally.
+So the owning client traces as before and sends the point up; the server stops trusting its own
+meaningless trace for that pawn and uses the received point. The server still runs all the turret
+maths and stays authoritative.
 
-**`Unreliable` is deliberate** — this is per-frame aim data. A reliable RPC every frame floods the
-reliable buffer and can disconnect the client.
+`ReplicateControlRotation` was restored to its original form (original OR gate, RPC nodes
+removed) since that whole path was a dead end.
 
-**`BlueprintCallable` is required.** `UFUNCTION(Server, Unreliable)` alone compiles but the graph
-refuses it: *"Function 'ServerSetControlRotation' should not be called from a Blueprint"*. A
-Server RPC invoked from a graph needs `BlueprintCallable` as well.
+Evidence the channel works (server-world probe, 3 pawns):
+```
+[2] BP_T90_Controller_Chaos_C_2  recvAim=(16064.0,173.1,-4.4)  turret0yaw=0.473
+```
+A real aim point traced on the client and stored on the server — the upward channel that has
+never existed in this project. BP `UpToDate`, 0 errored BPs, PIE clean.
 
-Single-player check: `gateLocal=True`, `sendToServer=False` — the RPC correctly does NOT fire
-offline. Rep rotation and turret values non-zero, PIE clean, 0 errors, and no LogNet warning
-naming this RPC.
-
-Unrelated pre-existing noise to ignore: `No owning connection for actor ... Function Server Slip
-Cosmetics` appears in teardown. It is a different Blueprint RPC and shows up in logs from long
-before this change (766 / 406 / 2340 occurrences in earlier sessions).
-
-**NOT YET VERIFIED IN MULTIPLAYER.** Needs the two-window test: turn the turret on the CLIENT and
-confirm the server sees it.
+**Awaiting the two-window test:** turn the turret on the CLIENT and confirm the SERVER sees it.
 
 ### If this is ever fixed, it is FEATURE work, not port repair
 1. Add a **Server RPC** carrying the locally-controlled client's aim to the server, and set

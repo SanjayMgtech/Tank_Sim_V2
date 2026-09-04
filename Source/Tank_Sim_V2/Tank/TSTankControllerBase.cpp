@@ -164,19 +164,9 @@ bool ATSTankControllerBase::ShouldSendAimToServer() const
 	return !HasAuthority() && IsLocallyControlled();
 }
 
-void ATSTankControllerBase::ServerSetControlRotation_Implementation(FRotator NewControlRotation)
+void ATSTankControllerBase::ServerSetAimPoint_Implementation(FVector NewAimPoint)
 {
-	// Runs on the server. Writing the replicated property here is what makes the
-	// client's aim visible to everyone: it now replicates back down normally.
-	Rep_ControlRotation = NewControlRotation;
-
-	// Diagnostic, first few calls only (this fires every frame, so no unthrottled
-	// logging). If multiplayer aiming still fails, the presence or absence of this
-	// line says whether the RPC reached the server at all.
-	static int32 ArrivalLogCount = 0;
-	if (ArrivalLogCount < 5)
-	{
-		++ArrivalLogCount;
-		UE_LOG(LogTemp, Warning, TEXT("TSTANK_RPC ServerSetControlRotation arrived on server: %s"), *NewControlRotation.ToString());
-	}
+	// Runs on the server. TurretsAndGunsRotCalculation uses this instead of its own
+	// camera trace for pawns this machine does not locally control.
+	ReceivedAimPoint = NewAimPoint;
 }
