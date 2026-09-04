@@ -124,9 +124,7 @@ stage commits with an explicit pathspec, never `git add -A`.
 | Anything that is a Blueprint **editor-UI** operation with no MCP action | Reordering pins, editing a macro's internals, graph-level refactors. |
 
 ### Open hand-offs (keep current)
-- **Replication test (Phase 9 gap).** Play → *Play As Listen Server*, 2 players. Rotate the
-  turret in the server window and confirm the client's turret follows. Until then treat
-  multiplayer turret/gun sync as untested, not working.
+- ~~Replication test~~ **DONE 2026-09-04.** A/B listen-server test showed identical behaviour  before and after the port. Phase 9 verified; the remaining turret faults are pre-existing  feature gaps, documented separately.
 - **Parameter renames** are only needed if a port hits shadowing. `WheelRotationDefinition`
   turned out NOT to need one (Phase 17) - its tuning arrives as parameters. Ask only when a
   concrete port is actually blocked.
@@ -351,7 +349,7 @@ function they call has already been moved and individually verified.**
 | 6 — Vars: turret / MG scratch (**first structs**) | ✅ PASS | `MainTurretAndGunRotation`, `TurretRotation`, `MGRotation` (FRotator), `TurretYaw`, `TurretPitch` (double), `TurretBlocking`, `IsTurretRotating` (bool). All 18 native props present; moved names gone from the BP. `TurretRotation` still 10 refs / same node IDs. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
 | 7 — Vars: antenna / UI / misc (**FVector, float, int32**) | ✅ PASS | 14 moved: `HullSpeedWorld`, `HullAccelerationWorldInverted`, `TurretSpeedLocalInverted` (FVector), `CrosshairTraceClamp`, `AimPointCorrectionUI`, `CurrentAmplitudeMultiplierR/L`, `FilletsCompensation`, `HullDeltaXLocation`, `DeltaSeconds`, `CurentRPMRatio`, `TrackSpeedModifier` (double), `ForwardSpeedMPH` (float), `DamageCausedUI` (int32). 32 native props total. All 6 tanks match master on every default. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. **13/14 proven at runtime; `DamageCausedUI` structural only** (see below). |
 | 8 — Vars: scratch **ARRAYS** | ✅ PASS | 11 moved: `VibrationOffset_R/L`, `FinalScattering` (TArray&lt;double&gt;), `SplinePointLocation`, `SplinePointPerpendicularVectors`, `AntennaCurrentSpeed` (TArray&lt;FVector&gt;), `CopyPointIndices` (TArray&lt;int32&gt;), `TurretsRotUnstabilized`, `TurretsRotPrevFrame`, `GunsRotUnstabilized`, `GunsRotPrevFrame` (TArray&lt;FRotator&gt;). 43 native props. All lengths match across all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. |
-| 9 — Vars: **REPLICATED** | ⚠️ STRUCTURALLY PASS — **gap now CONFIRMED BROKEN** | Properties moved correctly: 46 native props, `UPROPERTY(Replicated)` + `DOREPLIFETIME`, lengths correct on all 6 tanks, BP `UpToDate`, 0 LogNet warnings. **But the listen-server test (2026-09-04) shows the turret does NOT replicate.** Movement replicates (engine-level); turret/gun do not. Cause under investigation — see "Multiplayer turret" below. |
+| 9 — Vars: **REPLICATED** | ✅ PASS — **verified not a regression** | Properties moved correctly: 46 native props, `UPROPERTY(Replicated)` + `DOREPLIFETIME`, lengths correct on all 6 tanks, 0 LogNet warnings. A/B listen-server test (2026-09-04) at `c783cbf` vs current gives **identical** behaviour in both directions, so the port neither broke nor fixed replication. The multiplayer turret faults are PRE-EXISTING — see below. |
 | 10 — Vars: object / component **references** | ✅ PASS | 7 moved: `BaseTrackMaterial`, `RightTrackMID`, `LeftTrackMID`, `TracksInstances_R/L`, `TrackPath_L`, `VehicleMovement`. 53 native props. **All 21 SCS components still intact.** BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. 6/7 runtime-proven. |
 | 11 — Vars: first real tuning values | ❌ **FAILED, REVERTED** | Moving the four `WheelRadius*` lost **19 of 24 per-tank overrides** — every tank fell back to the master default. Reverted; all overrides restored, nothing lost. See below. |
 | 11 (retry) — vibration/sagging tuning, **middle path** | ✅ PASS | 9 moved: `SpeedInfluence`, `MaxSpeedInfluence`, `AccelerationInfluence`, `MaxAccelerationInfluence`, `TrackFrequency`, `DecayRate`, `InteractionAmplitudeMultiplier`, `SaggingMaxDistance`, `ProportionalCoefficient`. 62 native props. All 9 verified correct on master **and all 6 tanks** (`problems=0`). BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
@@ -708,82 +706,56 @@ Check for RepNotify before choosing the specifier: search the Blueprint for `OnR
 `OnRep_*` functions. This project has none, so all three are plain `Replicated`, never
 `ReplicatedUsing`.
 
-## 🔴 OPEN ISSUE — multiplayer turret does not replicate (found 2026-09-04)
+## 🟡 PRE-EXISTING FEATURE GAP — multiplayer turret aiming (A/B tested 2026-09-04)
 
-**Status: BROKEN. Cause not yet established. Do not close this until the pre-port test below
-answers it.**
+**Not caused by the port. Proven by A/B test, not by argument.** The same listen-server test was
+run at `c783cbf` (Phase 8, before replicated variables moved to C++) and at the current tip.
+Results were identical:
 
-First listen-server test (2 players) result: **hull movement replicates, turret/gun rotation
-does not.** Movement is engine-level (`bReplicateMovement`), so that says nothing about our
-work; the turret is the part this port touched.
+| Direction | Pre-port `c783cbf` | Post-port (current) |
+|---|---|---|
+| Server turret → seen by client | works, jittery | works, jittery |
+| Client turret → seen by server | does not work | does not work |
 
-### Two structural problems found by reading the graphs
-Both sit in Blueprint code the port never edited:
+Phase 9 therefore neither broke nor fixed anything, and is marked verified. What remains are two
+faults that have always been in the Blueprint:
 
-1. **`Event Tick` is ungated.** Its only condition is `NOT Destroyed` — no `HasAuthority`, no
-   `IsLocallyControlled`. So a client runs `TurretsAndGunsRotCalculation` every frame, which
-   **writes `TurretsRot`/`GunsRot` locally**. Any value the server replicates down is
-   immediately overwritten. Replication cannot win against a per-frame local write.
-2. **The client's aim never reaches the server.** `ReplicateControlRotation` writes
-   `Rep_ControlRotation` when `HasAuthority() OR IsLocallyControlled()`, but replication is
-   **server → client only** — a client writing a replicated property changes only its own copy.
-   There is no Server RPC anywhere in this Blueprint to carry the client's aim upward.
+**1. The client's aim never reaches the server.** Replication is server → client only.
+`ReplicateControlRotation` writes `Rep_ControlRotation` when `HasAuthority() OR
+IsLocallyControlled()`, so a client writes only its own copy and it never travels upward. There
+is no Server RPC anywhere in this Blueprint. Client turret aiming has never worked in multiplayer.
 
-### Why this looks pre-existing rather than port-caused
-- `TurretsRot`/`GunsRot` were already marked Replicated as Blueprint variables; Phase 9 carried
-  that across with both the specifier and the `DOREPLIFETIME` registration.
-- `Event Tick`, `ReplicateControlRotation` and `TurretsAndGunsRotCalculation` were never edited
-  by the port.
+**2. The jitter on server → client.** `Event Tick` is gated only on `NOT Destroyed` — no
+`HasAuthority`, no `IsLocallyControlled`. A client runs `TurretsAndGunsRotCalculation` every
+frame and overwrites `TurretsRot`/`GunsRot` locally, fighting the value replicated from the
+server. The two writers alternate, which is what the jitter is.
 
-**That is reasoning, not proof.** Confirm it with the test below before acting on it.
+### If this is ever fixed, it is FEATURE work, not port repair
+1. Add a **Server RPC** carrying the locally-controlled client's aim to the server, and set
+   `Rep_ControlRotation` there (authority only).
+2. **Gate the turret calculation**: a pawn that is neither authority nor locally controlled must
+   consume the replicated `TurretsRot`/`GunsRot` rather than recompute them. The
+   `HasAuthority || IsLocallyControlled` condition already used by `ReplicateControlRotation` is
+   the right gate.
 
-### PRE-PORT BASELINE MEASURED (c783cbf, Phase 8 — before replicated vars moved to C++)
-Listen-server, 2 players, tested 2026-09-04:
+Do not attempt either as part of the Blueprint → C++ port. They change gameplay behaviour, they
+need a two-window test to verify, and the port is deliberately behaviour-preserving.
 
-| Direction | Pre-port result |
-|---|---|
-| Server turret → seen by client | **WORKS**, but jittery / "not perfect" |
-| Client turret → seen by server | **DOES NOT WORK** |
+### A/B testing is how you separate "port broke it" from "always broken"
+The first test reported only "turret not replicating", which was too coarse — it could not
+distinguish the two directions, and would have led to blaming the port. Checking out the
+pre-port commit, rebuilding, and re-running the identical test settled it in one pass. Test each
+direction separately, and record the pre-port result before drawing any conclusion.
 
-Both halves are explained by the graph, and neither is caused by the port:
-- **Client → server was never possible.** Replication is server → client only, and there is no
-  Server RPC anywhere in this Blueprint to carry a client's aim upward.
-  `ReplicateControlRotation` writes `Rep_ControlRotation` locally on the client, which never
-  travels. This is a missing feature, not a regression.
-- **The jitter on server → client** is the ungated `Event Tick`: the client recomputes
-  `TurretsRot`/`GunsRot` every frame and fights the replicated value.
+### Replication — now tested (was a known gap, closed 2026-09-04)
+Phases 4–17 were verified in **standalone** PIE, which does not run client-server replication at
+all. That gap is now closed by the A/B listen-server test above. The properties exist, carry the
+specifier, are registered, hold their array lengths, are written during play, and behave
+identically before and after the port. The faults that remain are pre-existing gameplay gaps, not
+port defects.
 
-**The remaining question is narrow:** does server → client still work AFTER the port? If it does,
-the port changed nothing and both faults are pre-existing. If it does not, Phase 9 regressed it.
-Test the two directions SEPARATELY — the first test only reported "turret not replicating",
-which was too coarse to tell these apart.
-
-### THE PRE-PORT TEST (decisive)
-Check out `c783cbf` (Phase 8 — the commit *before* replicated variables moved to C++), rebuild,
-and run the same listen-server test.
-- Turret still does not follow → **pre-existing**, the port is exonerated, and fixing it is a
-  new feature (Server RPC + gating), not a port repair.
-- Turret DOES follow → **the port broke it**; fix Phase 9 before anything else.
-
-Restore afterwards with `git checkout cpp-tank-controller-port` and rebuild.
-
-### What a fix would involve (only after the test)
-1. A **Server RPC** to send the locally-controlled client's aim to the server.
-2. **Gate the turret calculation** so a tank that is neither authority nor locally controlled
-   uses the replicated value instead of recomputing it — the same
-   `HasAuthority || IsLocallyControlled` condition `ReplicateControlRotation` already uses.
-
-### KNOWN GAP — replication itself was not tested
-Everything above was verified in **standalone** PIE, which does not run client-server
-replication at all. What is proven: the properties exist, carry the specifier, are registered,
-compile, hold their array lengths, are written during play, and produce no `LogNet` warnings.
-What is **not** proven: that values actually reach a client.
-
-The available tooling (`run_pie_smoke`, `get_game_world`) only reaches one PIE world, so it
-cannot compare a server value against a client's. To close this properly, run PIE manually as
-**Play As Listen Server with 2 players**, rotate the turret on the server, and confirm the
-client's tank turret follows. Until someone does that, treat multiplayer turret/gun sync as
-untested — not as working.
+`run_pie_smoke` / `get_game_world` still reach only one PIE world, so any future replication
+question needs a manual two-window test — see the human-only task table.
 
 ### AnimBP reads these directly off the pawn
 Unlike `WheelRot*`/`SaggingDegree*` (where the AnimBP declares its own same-named copies),
