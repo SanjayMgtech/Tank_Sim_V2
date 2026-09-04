@@ -121,7 +121,7 @@ stage commits with an explicit pathspec, never `git add -A`.
 | Dismiss editor modal dialogs | A modal blocks the game thread, so MCP is unresponsive until a human clicks. Seen with "Save Content", the reload-assets confirm, and the auto-save recovery prompt after a force-kill. |
 | Run PIE as **Listen Server with 2 players** | `run_pie_smoke` / `get_game_world` reach only one PIE world, so server-vs-client values cannot be compared. This is the only way to test replication (the open Phase 9 gap). |
 | Drive real gameplay events | e.g. `DamageCausedUI` is only written by a macro reached through an actual damage-caused event; macros are inlined and cannot be invoked directly. |
-| Anything that is a Blueprint **editor-UI** operation with no MCP action | Reordering pins, editing a macro's internals, graph-level refactors. |
+| Anything that is a Blueprint **editor-UI** operation with no MCP action | Reordering pins, graph-level refactors. NOTE: editing a macro's internals was previously listed here and is WRONG - `add_node`/`connect_pins` work on a macro graph (proven on `UpdateDamageCausedUI`). Test before declaring something human-only. |
 
 ### Open hand-offs (keep current)
 - ~~Replication test~~ **DONE 2026-09-04.** A/B listen-server test showed identical behaviour  before and after the port. Phase 9 verified; the remaining turret faults are pre-existing  feature gaps, documented separately.
@@ -764,6 +764,31 @@ and the turret sits still. That is the whole bug.
 - [Networking and Multiplayer](https://dev.epicgames.com/documentation/en-us/unreal-engine/networking-and-multiplayer-in-unreal-engine)
 - [Control rotation not replicating on Pawn (forum)](https://forums.unrealengine.com/t/cant-replicate-control-rotation/1971369)
 - [AimOffset replication in multiplayer (article)](https://sohelmoon.medium.com/unreal-engine-4-aimoffset-replication-in-fps-multiplayer-6fe8594b7311)
+
+## ✅ FIXED — HUD "Accessed None" spam in multiplayer (2026-09-04)
+`UpdateDamageCausedUI` wrote to the HUD widget unconditionally:
+```
+Blueprint Runtime Error: "Accessed None trying to read (real) property HUD"
+  Node: Set Visibility / SetText (Text)   Graph: UpdateDamageCausedUI
+```
+`HUD` is created only for the pawn a player is actually looking through (written in
+`PawnSwitching` and the EventGraph). In multiplayer the server also owns the client's tank, and
+that copy has no HUD — so every damage event tried to update a widget that does not exist there.
+
+Fix: a `Branch(IsValid(HUD))` immediately after the first `Set DamageCausedUI`:
+```
+Inputs -> Set DamageCausedUI -> Branch(IsValid(HUD))
+                                  True  -> Set Visibility -> SetText -> Delay -> ... (existing)
+                                  False -> Outputs
+```
+The damage counter still accumulates; only the widget work is skipped. Pre-existing bug, not
+port-related — `HUD` was never moved to C++ (it is a Blueprint-only type, see NOT PORTABLE).
+
+**The same pattern applies to the other UI functions** — `UpdateHUD`, `UpdateHealthBar`,
+`WeaponSlotsDisplay`, `UpdateChosenWeaponUI`, `UpdateZoomRatioUI`, `UpdateChosenVehicleUI` and the
+`ReloadWeaponUI` macro all read `HUD` (58 reads across the Blueprint). They will produce the same
+errors on a non-local pawn whenever their code path runs in multiplayer. Guard them the same way
+if they show up.
 
 ## ✅ FIXED — multiplayer turret aiming (both directions verified 2026-09-04)
 
