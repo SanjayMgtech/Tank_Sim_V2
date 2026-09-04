@@ -2,6 +2,7 @@
 
 #include "Core/TSGameState.h"
 #include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameSession.h"
 #include "GameFramework/PlayerStart.h"
@@ -12,6 +13,7 @@
 #include "Player/TSVRPawn.h"
 #include "Tank/TSTank.h"
 #include "Tank/TSTankCrewComponent.h"
+#include "UI/TSUISubsystem.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -66,10 +68,19 @@ void ATSGameMode::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (bPreSpawnTeamTanks)
+	if (bPreSpawnTeamTanks && CanSpawnTeamTanks())
 	{
 		SpawnTeamTanks();
 	}
+}
+
+bool ATSGameMode::CanSpawnTeamTanks() const
+{
+	// UTSUISubsystem owns the menu-vs-gameplay map list (Config, DefaultGame.ini) and the menu-widget
+	// sweep already reads it, so asking it here keeps one list rather than two that drift apart.
+	const UGameInstance* GameInstance = GetGameInstance();
+	const UTSUISubsystem* UI = GameInstance ? GameInstance->GetSubsystem<UTSUISubsystem>() : nullptr;
+	return !UI || !UI->IsCurrentMapMenuMap();
 }
 
 int32 ATSGameMode::SpawnTeamTanks()
@@ -409,6 +420,13 @@ APawn* ATSGameMode::GetOrSpawnTankForTeam(ETSTeamId TeamId)
 	if (APawn* Existing = GS->FindTankForTeam(TeamId))
 	{
 		return Existing;
+	}
+
+	if (!CanSpawnTeamTanks())
+	{
+		UE_LOG(LogTankSim, Verbose, TEXT("ATSGameMode: refusing to spawn a tank for %s on menu map '%s'."),
+			*UTSTypeUtils::TeamIdToString(TeamId), *GetWorld()->GetMapName());
+		return nullptr;
 	}
 
 	const TSubclassOf<APawn> TankClass = GetTankClassForTeam(TeamId);

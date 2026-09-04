@@ -328,11 +328,19 @@ the RPC reference in §6 and the `ATSGameMode`/`ATSGameState` implementations in
 Three behaviours that the C++ now handles on its own, and the Editor-side wiring each one still
 needs. Everything below is a Details/World Settings change — no Blueprint graph work.
 
-### 12.1 A tank per team spawns as soon as the map starts
+### 12.1 One tank per team, spawned when the team is created
 
-`ATSGameMode::BeginPlay` calls `SpawnTeamTanks()`, which spawns the tank for TeamA…TeamN
-(`NumTeamsToPreSpawn`, default 2) instead of waiting for the first role request. Re-callable at any
-time from Blueprint; teams that already have a tank are skipped.
+A team's tank is spawned by `ATSGameMode::TryAssignTeam` — the moment that team is first created by a
+player joining it. Nothing spawns before that, and nothing spawns on the menu map at all.
+
+Two guards enforce it:
+
+- `CanSpawnTeamTanks()` returns false on any map listed in `UTSUISubsystem::MenuMapNames` (`MainMenu`
+  by default — the same list the menu-widget sweep in §12.2 uses). Every spawn path checks it,
+  including `ATSTeamMatchGameMode`'s own `GetOrSpawnTankForTeam` override, which does not call `Super`.
+- `bPreSpawnTeamTanks` is **off** by default. Turn it on only for a map that should have every team's
+  tank standing there from the start; it then spawns TeamA…TeamN (`NumTeamsToPreSpawn`) in `BeginPlay`,
+  still subject to the menu-map guard. `SpawnTeamTanks()` stays callable from Blueprint either way.
 
 In the Editor:
 
@@ -347,7 +355,6 @@ In the Editor:
    - `Team Tank Class Overrides` (base) / `Team Tank Classes` (`ATSTeamMatchGameMode`) — per-team
      tanks. `GetTankClassForTeam` is virtual: the team-match map wins where it has an entry, then the
      base map, then `Default Tank Class`.
-   - `Num Teams To Pre Spawn` = 2 (or up to `Max Teams`).
 3. **The tank Blueprint → Class Defaults → `Replicates` = true**, otherwise it exists on the host only.
 4. **Place spawn points in `WarZone`.** Any actor tagged `TSTeamSpawn_TeamA` / `_TeamB` / `_TeamC` /
    `_TeamD` works (an empty Actor or a TargetPoint is fine), as does a `PlayerStart` whose *Player
@@ -358,13 +365,31 @@ In the Editor:
    defaults to `Controller_Demo_T90`, which is where `StartTankMatch()` travels — set it to `WarZone`
    in the GameMode's Class Defaults if you use that path rather than travelling from the menu.
 
-Note that team tanks now spawn from two places, deliberately: `BeginPlay` pre-spawns TeamA…TeamN so
-the battlefield is populated before anyone picks anything, and `TryAssignTeam` still spawns on demand
-for a team beyond `NumTeamsToPreSpawn`. Both go through `GetOrSpawnTankForTeam`, which is a no-op for
-a team that already has a tank.
-
 Watch the Output Log filtered to `LogTankSim`: it reports the tank name, team and location per spawn,
-and says explicitly when `Default Tank Class` is unset (also as a red on-screen message).
+and says explicitly when no tank class is configured (also as a red on-screen message).
+
+### 12.1a Picking a role after joining a team
+
+`TryAssignTeam` sets the player's team, clears their role, and spawns the team's tank. The cleared
+role replicates back, `ATSTankPlayerController::RefreshSelectionUI` sees *team set, role none*, and
+swaps the team panel for `WBP_RoleSelection`. Picking a seat calls `NotifyRoleSelected`, which sends
+`ServerRequestRoleChange`; the server answers on `ClientRoleRequestResult` / `OnRoleRequestResult`.
+
+`UTSRoleSelectionWidget` keeps the panel honest while that happens:
+
+- It binds to `ATSGameState::OnTeamTanksChanged` and to the team tank's
+  `UTSTankCrewComponent::OnCrewChanged`, re-binding when the tank replicates in, and fires
+  **`On Role Availability Changed`** whenever the free seats might have changed.
+- `IsWaitingForTeamTank()` is true in the window between joining a team and that team's tank arriving
+  on this client. `IsRoleOccupied` reports every seat free in that window, so gate the buttons on this
+  rather than showing three clickable seats that may already be taken.
+- `GetAvailableRoles()` returns the free seats (empty while waiting); `IsRoleOccupied(Role)` answers
+  per seat; `AutoSelectRole()` takes the first free one.
+
+In the WBP: implement **On Role Availability Changed** and, from it, enable each role button on
+`not IsRoleOccupied(Role) and not IsWaitingForTeamTank()`. Without that event the panel shows whatever
+occupancy existed when it opened, and two players can race for the same seat — the server still
+rejects the loser, but they get no warning until it does.
 
 ### 12.2 Menu widgets are removed on gameplay maps
 

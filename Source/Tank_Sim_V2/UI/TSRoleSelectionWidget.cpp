@@ -5,6 +5,88 @@
 #include "Player/TSTankPlayerState.h"
 #include "Tank/TSTankCrewComponent.h"
 
+void UTSRoleSelectionWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+
+	if (ATSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ATSGameState>() : nullptr)
+	{
+		GS->OnTeamTanksChanged.AddUniqueDynamic(this, &UTSRoleSelectionWidget::HandleTeamTanksChanged);
+	}
+
+	if (ATSTankPlayerState* PS = GetOwningPlayerState<ATSTankPlayerState>())
+	{
+		PS->OnAssignmentChanged.AddUniqueDynamic(this, &UTSRoleSelectionWidget::HandleAssignmentChanged);
+	}
+
+	RefreshAvailability();
+}
+
+void UTSRoleSelectionWidget::NativeDestruct()
+{
+	if (ATSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ATSGameState>() : nullptr)
+	{
+		GS->OnTeamTanksChanged.RemoveDynamic(this, &UTSRoleSelectionWidget::HandleTeamTanksChanged);
+	}
+
+	if (ATSTankPlayerState* PS = GetOwningPlayerState<ATSTankPlayerState>())
+	{
+		PS->OnAssignmentChanged.RemoveDynamic(this, &UTSRoleSelectionWidget::HandleAssignmentChanged);
+	}
+
+	if (BoundCrew)
+	{
+		BoundCrew->OnCrewChanged.RemoveDynamic(this, &UTSRoleSelectionWidget::HandleCrewChanged);
+		BoundCrew = nullptr;
+	}
+
+	Super::NativeDestruct();
+}
+
+void UTSRoleSelectionWidget::HandleTeamTanksChanged()
+{
+	RefreshAvailability();
+}
+
+void UTSRoleSelectionWidget::HandleCrewChanged()
+{
+	RefreshAvailability();
+}
+
+void UTSRoleSelectionWidget::HandleAssignmentChanged()
+{
+	RefreshAvailability();
+}
+
+void UTSRoleSelectionWidget::RebindToTeamTank()
+{
+	APawn* Tank = GetMyTeamTank();
+	UTSTankCrewComponent* Crew = Tank ? Tank->FindComponentByClass<UTSTankCrewComponent>() : nullptr;
+	if (Crew == BoundCrew)
+	{
+		return;
+	}
+
+	if (BoundCrew)
+	{
+		BoundCrew->OnCrewChanged.RemoveDynamic(this, &UTSRoleSelectionWidget::HandleCrewChanged);
+	}
+
+	BoundCrew = Crew;
+
+	if (BoundCrew)
+	{
+		BoundCrew->OnCrewChanged.AddUniqueDynamic(this, &UTSRoleSelectionWidget::HandleCrewChanged);
+	}
+}
+
+void UTSRoleSelectionWidget::RefreshAvailability()
+{
+	RebindToTeamTank();
+	OnRoleAvailabilityChanged();
+}
+
+
 void UTSRoleSelectionWidget::NotifyRoleSelected(ETSCrewRole Role)
 {
 	OnRoleSelected.Broadcast(Role);
@@ -62,4 +144,29 @@ void UTSRoleSelectionWidget::AutoSelectRole()
 	{
 		NotifyRoleSelected(Role);
 	}
+}
+
+TArray<ETSCrewRole> UTSRoleSelectionWidget::GetAvailableRoles() const
+{
+	TArray<ETSCrewRole> Available;
+
+	if (IsWaitingForTeamTank())
+	{
+		return Available;
+	}
+
+	for (const ETSCrewRole Role : { ETSCrewRole::Driver, ETSCrewRole::Gunner, ETSCrewRole::Commander })
+	{
+		if (!IsRoleOccupied(Role))
+		{
+			Available.Add(Role);
+		}
+	}
+
+	return Available;
+}
+
+bool UTSRoleSelectionWidget::IsWaitingForTeamTank() const
+{
+	return GetMyTeamId() != ETSTeamId::None && GetMyTeamTank() == nullptr;
 }

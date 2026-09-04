@@ -35,12 +35,18 @@ public:
 	bool AreAllRolesFilled() const;
 
 	// Server only. Spawns the missing tank for every team from TeamA up to NumTeamsToPreSpawn and
-	// returns how many tanks exist afterwards. Called automatically from BeginPlay when
-	// bPreSpawnTeamTanks is set, so a hosted match has both teams' tanks standing on the map before
-	// anyone has picked a team or a seat. TryAssignTeam still spawns on demand for teams beyond
-	// NumTeamsToPreSpawn. Safe to call again at any time - teams that already have a tank are skipped.
+	// returns how many tanks exist afterwards. Off by default (bPreSpawnTeamTanks): the normal flow is
+	// one tank per team, spawned by TryAssignTeam when that team is first created. Turn it on for a
+	// map that should have every team's tank standing there from the start. Safe to call again at any
+	// time - teams that already have a tank are skipped.
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation")
 	int32 SpawnTeamTanks();
+
+	// False on menu maps (MainMenu by default - the list lives on UTSUISubsystem and is shared with
+	// the menu-widget sweep). Every spawn path checks this, so a GameMode left on the menu level, or a
+	// stray team request arriving while the menu is up, can never litter the menu with tanks.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
+	bool CanSpawnTeamTanks() const;
 
 	// TeamTankClassOverrides entry for this team if one is set, otherwise DefaultTankClass.
 	// ATSTeamMatchGameMode overrides this to consult its own TeamTankClasses map first.
@@ -80,9 +86,10 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	int32 MaxTeams = 4;
 
-	// Spawn every team's tank up front in BeginPlay rather than lazily on the first team/role request.
+	// Spawn every team's tank in BeginPlay rather than when each team is actually created. Off by
+	// default: tanks belong to teams, so one appears when TryAssignTeam creates that team.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
-	bool bPreSpawnTeamTanks = true;
+	bool bPreSpawnTeamTanks = false;
 
 	// How many teams (TeamA, TeamB, ... in order) get a tank at BeginPlay. Clamped to MaxTeams.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation", meta = (ClampMin = "1", ClampMax = "4", EditCondition = "bPreSpawnTeamTanks"))

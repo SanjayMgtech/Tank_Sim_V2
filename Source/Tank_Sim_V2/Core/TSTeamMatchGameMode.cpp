@@ -4,6 +4,7 @@
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Tank/TSTankCrewComponent.h"
+#include "Tank_Sim_V2.h"
 
 ATSTeamMatchGameMode::ATSTeamMatchGameMode()
 {
@@ -145,10 +146,19 @@ APawn* ATSTeamMatchGameMode::GetOrSpawnTankForTeam(ETSTeamId TeamId)
 		return Existing;
 	}
 
+	// This override does not call Super, so it needs the menu-map guard of its own - otherwise a team
+	// request arriving while the menu level is loaded would spawn a tank in the menu.
+	if (!CanSpawnTeamTanks())
+	{
+		UE_LOG(LogTankSim, Verbose, TEXT("ATSTeamMatchGameMode: refusing to spawn a tank for team %d on menu map '%s'."),
+			static_cast<int32>(TeamId), *GetWorld()->GetMapName());
+		return nullptr;
+	}
+
 	const TSubclassOf<APawn> TankClassToSpawn = GetTankClassForTeam(TeamId);
 	if (!TankClassToSpawn)
 	{
-		UE_LOG(LogTemp, Error, TEXT("ATSTeamMatchGameMode: No tank class configured for team %d."), static_cast<int32>(TeamId));
+		UE_LOG(LogTankSim, Error, TEXT("ATSTeamMatchGameMode: No tank class configured for team %d."), static_cast<int32>(TeamId));
 		return nullptr;
 	}
 
