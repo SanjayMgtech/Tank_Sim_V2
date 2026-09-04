@@ -675,6 +675,45 @@ the move and confirm the count is still 21.
 Use `TObjectPtr<T>`, not raw `T*`: UHT runs with `-WarningsAsErrors` and raw object pointers in
 a `UPROPERTY` can be reported as a member-pointer violation.
 
+### NOT PORTABLE — the turret/ballistics chain and the vendor structs (surveyed 2026-09-04)
+The same "C++ cannot name a Blueprint-generated type" rule that parks `HUD` and `Crosshair` also
+parks a large part of the turret system. Surveyed against the live Blueprint, not inferred:
+
+| Thing | Blocking type | Kind |
+|---|---|---|
+| `UpdateTurretRotation`, `UpdateGunRotation`, `BallisticsCalculation` | param `GunProjectile` is `class:BP_ProjectileMaster_C` | Blueprint class asset |
+| `TurretsAndGunsRotCalculation` | calls all three above | transitive |
+| `AntennaCalculation` | param `AntennaParameters` is `array:struct:S_Antenna` | Blueprint UserDefinedStruct |
+| `CamoVariations`, `TankSplineAnim`, `AntennaParameters` (variables) | `S_CamoOptions` / `S_TankSplineAnim` / `S_Antenna` | Blueprint UserDefinedStruct |
+
+`BP_ProjectileMaster` lives at `/Game/YI_TankCollection/Blueprint/Master/Projectiles/`, and the
+three structs at `/Game/YI_TankCollection/Blueprint/Master/Data/`. All are `.uasset`, so none can
+appear in a C++ signature.
+
+**`Source/Tank_Sim_V2/Tank/TSTankControllerChaosTypes.h` does NOT unblock this.** It declares
+native mirrors (`FTSTankSplineAnim`, `FTSAntenna`, `FTSCamoOptions`) written during the framework
+scaffold, but a mirror is a *different type*. Retyping the Blueprint variable from `S_Antenna` to
+`FTSAntenna` is a type change, which orphans the stored data and breaks every node — RULE 4. The
+header is currently unused by the port. Unblocking these for real means a deliberate struct
+migration phase (retype, re-author the per-tank data, re-verify all six), which buys nothing
+unless C++ needs to read them.
+
+**Consequence for planning: the turret aiming chain stays in Blueprint permanently**, including
+the `TurretsAndGunsRotCalculation` graph that carries the multiplayer aim fix.
+
+### Remaining port surface (measured 2026-09-04, after the dead-code cleanup)
+32 functions (~1,656 nodes), 5 macros (202 nodes), EventGraph (742 nodes), 73 variables.
+
+| Category | Count | Nodes | Note |
+|---|---|---|---|
+| Permanently Blueprint-resident | 11 fns | ~533 | 3 projectile + 7 UI + `TurretsAndGunsRotCalculation` |
+| Blocked on the SCS-component decision | 11 fns | ~570 | all the spline / ISM / camera functions |
+| Open with no new decision needed | 5 fns | ~304 | `ChassisDistanceDefinition` 105, `SelfCollisionCheck` 67, `ScatteringCalculation` 66, `CameraPitchLimit` 38, `RecalculateGunAndTurretRotation` 28 |
+| Last by rule | 3 fns + EventGraph | ~818 | `ThrottleControl`, `TurningControl`, `UserConstructionScript`, Tick/input |
+
+**The port cannot reach 100%, and should not.** About a third of the remaining function nodes are
+permanently Blueprint-owned by design — that is the core principle working, not a shortfall.
+
 ### NOT PORTABLE — variables typed as Blueprint-generated classes
 `HUD` (`W_MainHUD_C`), `Crosshair` (`W_Crosshair_C`) and `BPC_TankWeapon` (`BP_TankWeapon_C`)
 cannot be moved. C++ cannot name a Blueprint-generated type, and widening them to a native base
