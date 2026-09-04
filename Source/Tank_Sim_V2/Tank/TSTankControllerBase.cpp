@@ -1,6 +1,7 @@
 #include "Tank/TSTankControllerBase.h"
 
 #include "Components/SkeletalMeshComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 
@@ -88,4 +89,25 @@ void ATSTankControllerBase::HullAccelerationDefinition()
 
 	HullAccelerationWorldInverted = HullSpeedWorld - CurrentVelocity;
 	HullSpeedWorld = CurrentVelocity;
+}
+
+void ATSTankControllerBase::UpdateTracksMID(UMaterialInstanceDynamic* MaterialInstance, double ChassisDistance)
+{
+	// 1:1 port. The whole body sits inside the graph's IsValid check, so an
+	// invalid MID is a silent no-op exactly as before.
+	if (!IsValid(MaterialInstance))
+	{
+		return;
+	}
+
+	// UKismetMathLibrary::Divide_DoubleDouble and Percent_FloatFloat both return 0
+	// on a zero divisor instead of faulting; mirror that rather than dividing blind.
+	const double Scaled = FMath::IsNearlyZero(TilingSegmentLength) ? 0.0 : (ChassisDistance / TilingSegmentLength);
+	const double Wrapped = FMath::Fmod(Scaled, 1.0);
+
+	// Graph used a Select on the bool: Option 0 (false) = Wrapped, Option 1 (true)
+	// = Wrapped * -1.
+	const double Value = InvertTrackDirection ? (Wrapped * -1.0) : Wrapped;
+
+	MaterialInstance->SetScalarParameterValue(TEXT("OffsetV"), static_cast<float>(Value));
 }

@@ -306,7 +306,50 @@ function they call has already been moved and individually verified.**
 | 12 — **First function move**: `VibrationCalculation` | ✅ PASS | Ported 1:1 to C++. Call site in `PointLocationCalculation` rebound with **every pin intact, 0 orphaned**, node retargeted to `TSTankControllerBase`. Math verified **bit-exact** (delta 0.000e+00) on 3 input pairs. BP `UpToDate`, 0 errors/warnings, PIE clean. |
 | 13 — `HullAccelerationDefinition` | ✅ PASS | Ported 1:1. Call site retargeted to `TSTankControllerBase`, all pins intact, 0 orphaned. `HullSpeedWorld` matches the mesh's physics velocity **exactly** (delta 0.0000) at two sample points; inverted acceleration non-zero. BP `UpToDate`, PIE clean. |
 | 13a — `SaggingCalculation` | ⛔ **BLOCKED** | Parameter name shadows a moved member. See below. |
-| 14+ — Move more functions | ⬜ next | |
+| 14 — Tuning w/ **override re-application** + `UpdateTracksMID` | ✅ PASS | Moved `TilingSegmentLength`, `InvertTrackDirection` (both differ per tank), re-applied all overrides, then ported `UpdateTracksMID`. Overrides **survived an editor restart** (`problems=0`). Function math matches to float precision. |
+| 15+ — Move more functions | ⬜ next | |
+
+**Phase 14 — the override re-application procedure, proven end to end.**
+The loss happened exactly as predicted, then was recovered:
+```
+P14PRE     TilingSegmentLength : all six = 70.0   (lost 6)
+P14PRE     InvertTrackDirection: five = False     (lost 5)   SUMMARY lost=11
+P14APPLY   set per child + save
+P14RESTART TilingSegmentLength master=70.0 : T90=69.58 Leo=66.424 M1A2=78.66 Merk=42.56 Proxy=36.7 VK=29.15
+P14RESTART InvertTrackDirection master=False: T90..Proxy=True VK=False    problems=0
+```
+**Verify after an editor RESTART, not just in-session.** In-memory CDO values look correct
+immediately after `set_editor_property` whether or not they serialised. Only a restart proves
+the override actually reached the `.uasset`.
+
+`UpdateTracksMID` numeric proof — and note it read T90's *overrides* (69.58 / True), not the
+master defaults, which is what proves the re-application works functionally:
+```
+dist=100.0 got=-0.437194586 expected=-0.437194596 delta=1.035e-08 MATCH
+dist=250.0 got=-0.592986465 expected=-0.592986490 delta=2.587e-08 MATCH
+dist=33.3  got=-0.478585809 expected=-0.478585801 delta=8.952e-09 MATCH
+```
+Deltas ~1e-8 are float32 rounding in `SetScalarParameterValue`, not a logic difference. Expect
+that whenever a value round-trips through a float material parameter; demand 0.000e+00 only
+where the whole path is double.
+
+This function only runs when `UseGeometricTracks` is FALSE, and every tank ships True, so it
+never executes in a normal PIE session — it was verified by direct invocation.
+
+### Function port blockers — survey before picking the next one
+Every remaining small leaf function is blocked on something. Check these before starting:
+
+| Function | Blocker |
+|---|---|
+| `SaggingCalculation` | param `HullDeltaXLocation` shadows the moved member — needs a BP param rename first |
+| `SplineFilletsCompensation` | reads `TrackThickness` (per-tank); moving it would then shadow `WheelRotationDefinition`'s param |
+| `FindSplineXClosestPoint` | reads `TrackPath_R`, a Blueprint **SCS component** — C++ cannot name it without a runtime lookup shim |
+| `WheelRotationDefinition` | reads `WheelRadius*` (per-tank) and its params would shadow `TrackThickness`/`WheelSpeedCorrectionUV` |
+
+**Functions that touch SCS components need a decision, not a port.** Components stay in the
+Blueprint under RULE 1, so C++ reaching one means either a name/class lookup at runtime or a
+`TObjectPtr` cached at BeginPlay. Both are new code, not a 1:1 move — decide the pattern
+deliberately before porting any such function.
 
 **Phase 13 runtime proof:**
 ```
@@ -579,16 +622,38 @@ no assets, so RULE 1 and RULE 2 still hold.
 Add these to `run_pie_smoke` `log_patterns.must_absent` for every array phase:
 `"Attempted to access index"`, `"out of bounds"`.
 
-### PRE-EXISTING BUG (not caused by the port) — AnimBP VibrationOffset
-`ABP_Chaos_T90` reads its **own** `VibrationOffsetR` / `VibrationOffsetL` (note: **no
-underscore**, unlike the pawn's `VibrationOffset_R`) at indices up to 18 while those arrays are
-length 0 — **60 warnings per PIE session**. The pawn's `VibrationOffset_R` correctly holds 19
-elements at runtime, so the pawn→AnimBP copy is not landing before the AnimGraph reads it.
+### FIXED — AnimBP VibrationOffset warm-up race (was pre-existing, not caused by the port)
+**Fixed 2026-09-04 in all six `ABP_Chaos_*`. `run_pie_smoke` now returns `ok:true` with
+`"Attempted to access index": 0` on every tank map. Any index warning you see from here on IS a
+regression — treat it as one.**
 
-Confirmed pre-existing: present in `Tank_Sim_V2-backup-2026.09.03-20.55.50.log`, from the
-Phase 0–3 era, before any variable was moved. Zero warnings name any pawn array. **This makes
-`run_pie_smoke` report `ok:false` on any phase that checks for index warnings — do not read
-that as a regression, and do not "fix" it by dropping the pattern.** Fix the AnimBP separately.
+The bug: each `ABP_Chaos_<Tank>` reads its **own** `VibrationOffsetR` / `VibrationOffsetL` (note:
+**no underscore**, unlike the pawn's `VibrationOffset_R`) at literal indices up to 18 while those
+arrays were still at their length-0 default — **60 warnings per PIE session** on T90. Confirmed
+pre-existing: present in `Tank_Sim_V2-backup-2026.09.03-20.55.50.log`, from the Phase 0–3 era,
+before any variable was moved. Zero warnings ever named a pawn array.
+
+Root cause was a warm-up race, not a bad wire. The `Set VibrationOffsetR` node is correctly fed by
+`Get VibrationOffset_R` off `TankPawn`, but the whole copy chain sits behind
+`Event Blueprint Update Animation → Delay(0.0) → IsValid(TankPawn) → Sequence`. The latent `Delay`
+defers the copy past the first few AnimGraph evaluations, and the `IsValid` guard means the copy
+**never** runs when there is no pawn owner at all — hence the 12 warnings at frame `[0]`, before
+PIE even starts.
+
+The fix: give each AnimBP's own array a **zero-filled default** sized to `max literal index + 1`
+(`set_cdo_property`, arrays passed as a JSON list). Zero offset is exactly what the failed reads
+already returned, so the pre-copy frames render identically, and the per-frame copy overwrites the
+whole array as soon as the pawn is available. Lengths: T90 19, Leopard2A7 18, M1A2 14, Merkava 13,
+ProxyTank 13, VK1602Leopard 16 (R and L identical per tank; T90's 19 matches the pawn's runtime
+`VibrationOffset_R` length exactly).
+
+The `Delay` node was deliberately **left in place** — removing it would not fix the no-pawn frames
+and would change the copy cadence, i.e. the vibration timing. The one-frame lag between pawn and
+AnimBP values is pre-existing and intact.
+
+Generalise this: **an AnimBP array copied from the pawn must have a non-empty default whenever the
+AnimGraph indexes it with a literal.** The AnimGraph evaluates on frames the EventGraph copy has
+not reached yet, and in the editor preview it evaluates with no pawn at all.
 
 **Phase 7 runtime proof:**
 ```

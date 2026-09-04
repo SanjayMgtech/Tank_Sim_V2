@@ -397,4 +397,52 @@ public:
 	// ---------------------------------------------------------------------
 	UFUNCTION(BlueprintCallable, Category = "Default", meta = (ToolTip = "Calculates the force of inertia"))
 	void HullAccelerationDefinition();
+
+	// ---------------------------------------------------------------------
+	// Phase 14: tuning values REQUIRED BY A FUNCTION PORT, with per-tank
+	// overrides. This is the first group where the six tanks genuinely differ,
+	// so the Phase 11 failure mode applies and the overrides must be re-applied
+	// explicitly after the move (see CLAUDE.md).
+	//
+	// Moved because UpdateTracksMID reads both and cannot be ported otherwise -
+	// exactly the middle-path criterion: move a tuning value only when a C++
+	// function needs it.
+	//
+	// Recorded values that MUST survive (re-applied per child Blueprint):
+	//   TilingSegmentLength  master 70   T90 69.58  Leo 66.424  M1A2 78.66
+	//                                    Merk 42.56 Proxy 36.7  VK 29.15
+	//   InvertTrackDirection master False  T90/Leo/M1A2/Merk/Proxy True  VK False
+	//
+	// InvertTrackDirection is the dangerous one: the master default is False but
+	// five of six tanks override it to True, so a lost override silently flips
+	// track direction on five tanks.
+	// ---------------------------------------------------------------------
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis")
+	double TilingSegmentLength = 70.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Default")
+	bool InvertTrackDirection = false;
+
+	// ---------------------------------------------------------------------
+	// Phase 14: UpdateTracksMID. Third function moved.
+	//
+	// Ported 1:1:
+	//   if IsValid(MaterialInstance):
+	//       V     = fmod(ChassisDistance / TilingSegmentLength, 1.0)
+	//       Value = InvertTrackDirection ? -V : V
+	//       MaterialInstance->SetScalarParameterValue("OffsetV", Value)
+	//
+	// This is why TilingSegmentLength and InvertTrackDirection moved above - the
+	// function cannot be ported without them, which is the middle-path criterion.
+	//
+	// Impure (is_pure=false) so BlueprintCallable; two call sites in the EventGraph
+	// wire exec pins. Neither parameter name collides with a member, so no UHT
+	// shadowing problem (contrast SaggingCalculation).
+	//
+	// Only runs when UseGeometricTracks is FALSE - the UV-track path. Every tank
+	// ships with UseGeometricTracks=True, so this does NOT execute in a normal PIE
+	// session; it is verified by calling it directly.
+	// ---------------------------------------------------------------------
+	UFUNCTION(BlueprintCallable, Category = "Chassis", meta = (ToolTip = "Updates dynamic material instance"))
+	void UpdateTracksMID(UMaterialInstanceDynamic* MaterialInstance, double ChassisDistance);
 };
