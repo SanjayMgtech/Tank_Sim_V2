@@ -128,3 +128,25 @@ void ATSTankControllerBase::SaggingCalculation(double SaggingDegree, double InHu
 
 	SaggingDegreeNew = FMath::Clamp(SaggingDegree + Scaled, 0.0, 1.0);
 }
+
+void ATSTankControllerBase::WheelRotationDefinition(double Distance, double WheelRadius, double TrackThickness, double WheelSpeedCorrectionUV, double WheelStartAngleLeftGeoTracks, double WheelStartAngleRightGeoTracks, double WheelStartAngleLeftUVTracks, double WheelStartAngleRightUVTracks, bool LeftWheel, double& Degrees)
+{
+	// 1:1 port. SelectFloat(A, B, bPickA) returns A when bPickA is true.
+
+	// Graph comment: "Wheel speed correction (when using UV tracks)" - the A pin is
+	// left unconnected, i.e. literal 0.0, and is chosen when UseGeometricTracks.
+	const double SpeedCorr = UseGeometricTracks ? 0.0 : WheelSpeedCorrectionUV;
+
+	// Graph comment: "Circumference". The multiply node is 2 * sum * PI.
+	const double Circumference = 2.0 * (WheelRadius + TrackThickness + SpeedCorr) * UE_DOUBLE_PI;
+
+	// Graph comment: "WheelStartingAngle" - side first, then track mode.
+	const double StartAngleGeo = LeftWheel ? WheelStartAngleLeftGeoTracks : WheelStartAngleRightGeoTracks;
+	const double StartAngleUV = LeftWheel ? WheelStartAngleLeftUVTracks : WheelStartAngleRightUVTracks;
+	const double StartAngle = UseGeometricTracks ? StartAngleGeo : StartAngleUV;
+
+	// Kismet's Divide_DoubleDouble returns 0 on a zero divisor rather than faulting.
+	const double Revolutions = FMath::IsNearlyZero(Circumference) ? 0.0 : (Distance / Circumference);
+
+	Degrees = (-360.0 * Revolutions) + StartAngle;
+}

@@ -114,9 +114,9 @@ Check the namespace action list rather than assuming an action exists because it
 - **Replication test (Phase 9 gap).** Play → *Play As Listen Server*, 2 players. Rotate the
   turret in the server window and confirm the client's turret follows. Until then treat
   multiplayer turret/gun sync as untested, not working.
-- **Future parameter renames**, only when a port needs them: `WheelRotationDefinition` takes
-  `TrackThickness` and `WheelSpeedCorrectionUV`, which will shadow those members if they ever
-  move to C++.
+- **Parameter renames** are only needed if a port hits shadowing. `WheelRotationDefinition`
+  turned out NOT to need one (Phase 17) - its tuning arrives as parameters. Ask only when a
+  concrete port is actually blocked.
 - **Space-in-name variables** (`Player Controller`, `MG Yaw`, `Is Vehicle taken?`, ...) need a
   Blueprint rename before they could ever be ported.
 
@@ -348,7 +348,8 @@ function they call has already been moved and individually verified.**
 | 14 — Tuning w/ **override re-application** + `UpdateTracksMID` | ✅ PASS | Moved `TilingSegmentLength`, `InvertTrackDirection` (both differ per tank), re-applied all overrides, then ported `UpdateTracksMID`. Overrides **survived an editor restart** (`problems=0`). Function math matches to float precision. |
 | 15 — **Rename** `SaggingCalculation` param (manual) | ✅ PASS | `HullDeltaXLocation` -> `InHullDeltaXLocation`, done by hand in the editor. Both call sites kept their wiring; signature clean; 0 errored BPs. |
 | 16 — `SaggingCalculation` | ✅ PASS | Ported 1:1 as **BlueprintPure**. Call site retargeted, no exec pins added, 0 orphaned. Math **bit-exact** (delta 0.000e+00) across both branches and both clamp boundaries. |
-| 17+ — SCS component access pattern, then more functions | ⬜ next | |
+| 17 — `UseGeometricTracks` + `WheelRotationDefinition` | ✅ PASS | Only member the function reads is `UseGeometricTracks` (True on all 6, zero override risk). **All 8 call sites** retargeted, 0 orphaned. Math **bit-exact** across both track modes and both wheel sides. |
+| 18+ — SCS component access pattern, then more functions | ⬜ next | |
 
 **Phase 14 — the override re-application procedure, proven end to end.**
 The loss happened exactly as predicted, then was recovered:
@@ -385,7 +386,7 @@ Every remaining small leaf function is blocked on something. Check these before 
 | `SaggingCalculation` | param `HullDeltaXLocation` shadows the moved member — needs a BP param rename first |
 | `SplineFilletsCompensation` | reads `TrackThickness` (per-tank); moving it would then shadow `WheelRotationDefinition`'s param |
 | `FindSplineXClosestPoint` | reads `TrackPath_R`, a Blueprint **SCS component** — C++ cannot name it without a runtime lookup shim |
-| `WheelRotationDefinition` | reads `WheelRadius*` (per-tank) and its params would shadow `TrackThickness`/`WheelSpeedCorrectionUV` |
+| `WheelRotationDefinition` | ~~blocked~~ PORTED in Phase 17 - its tuning arrives as parameters, so nothing needed moving |
 
 **Functions that touch SCS components need a decision, not a port.** Components stay in the
 Blueprint under RULE 1, so C++ reaching one means either a name/class lookup at runtime or a
@@ -422,8 +423,7 @@ check whether a Blueprint function takes a parameter of the same name. Known col
 | Function | Parameter | Collides with | Status |
 |---|---|---|---|
 | `SaggingCalculation` | `HullDeltaXLocation` | member moved in Phase 7 | already blocked |
-| `WheelRotationDefinition` | `TrackThickness` | still a BP variable | **would block if moved** |
-| `WheelRotationDefinition` | `WheelSpeedCorrectionUV` | still a BP variable | **would block if moved** |
+| `WheelRotationDefinition` | `TrackThickness`, `WheelSpeedCorrectionUV` | still BP variables | ported anyway (Phase 17) - but NEVER move these two, it would break it |
 
 To unblock one, rename the parameter in the Blueprint first, let the editor fix up the call
 sites, verify, commit — then port. Treat that as its own phase; do not fold a rename into a function move.
@@ -476,6 +476,36 @@ sd=0.1 hx=0.0  cd=-5.0 lock=False  got=0.000000000 expected=0.000000000 delta=0.
 ```
 A single mid-range input would have passed even if the clamp or the branch select were wrong.
 Pick inputs that exercise every path through the function.
+
+### A function taking its tuning as PARAMETERS needs none of it moved
+`WheelRotationDefinition` looked like the worst case — it uses `WheelRadius`,
+`TrackThickness`, `WheelSpeedCorrectionUV` and four start angles, all per-tank values. It was
+not. Every one of those arrives as a **parameter**, passed in by the Blueprint callers. The
+only member it reads is `UseGeometricTracks`, which is True on all six tanks.
+
+So it ported with **zero** tuning values moved and **zero** override risk. Read the graph
+before assuming a function needs its tuning migrated — check whether the values come from
+`FunctionEntry` pins or from `VariableGet` nodes.
+
+### ⛔ PERMANENT — never move `TrackThickness` or `WheelSpeedCorrectionUV`
+They are parameter names of `WheelRotationDefinition`. Moving either to C++ would make the
+parameter shadow a `UPROPERTY`, which UHT rejects, retroactively breaking this port (the
+Phase 13 failure mode). C++ never needs them — they arrive as parameters. Same reasoning
+applies to any per-tank value that is only ever passed in.
+
+**Phase 17 numeric proof** — four combinations, cross-checking each other:
+```
+geo=True  left=True   got=-660.919818774 expected=-660.919818774 delta=0.000e+00
+geo=True  left=False  got=-659.919818774 expected=-659.919818774 delta=0.000e+00
+geo=False left=True   got=-665.094443949 expected=-665.094443949 delta=0.000e+00
+geo=False left=False  got=-664.094443949 expected=-664.094443949 delta=0.000e+00
+live wheels FR=-501.520 MR=-344.406 RR=-445.058
+```
+Left/right differ by exactly 1.0, matching the `lg=1, rg=2` inputs, so the side select is
+right. Geo/UV differ by the speed correction's effect on circumference, so that branch is
+right too. Distinct live wheel values show the 8 call sites feeding different per-tank radii
+through the C++ function. Test `UseGeometricTracks` both ways by setting it on the live PIE
+actor and restoring it afterwards — the UV path is otherwise never exercised.
 
 **Phase 12 numeric proof** — computed independently in Python and compared:
 ```

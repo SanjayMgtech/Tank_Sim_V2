@@ -467,4 +467,35 @@ public:
 	// ---------------------------------------------------------------------
 	UFUNCTION(BlueprintPure, Category = "Chassis", meta = (ToolTip = "Calculation of the amount of sagging tracks"))
 	void SaggingCalculation(double SaggingDegree, double InHullDeltaXLocation, double ChassisDeltaDistance, bool ChassisLocked, double& SaggingDegreeNew) const;
+
+	// ---------------------------------------------------------------------
+	// Phase 17: UseGeometricTracks + WheelRotationDefinition.
+	//
+	// UseGeometricTracks is the ONLY member WheelRotationDefinition reads; it is
+	// True on the master and all six tanks, so there is no override to lose.
+	// EditAnywhere because the Blueprint has Instance Editable CHECKED (contrast
+	// the EditDefaultsOnly tuning values above).
+	//
+	// Everything else the function needs arrives as a PARAMETER - wheel radius,
+	// track thickness, start angles, speed correction - so those per-tank values
+	// stay in the Blueprint and are passed in by the callers. A function taking its
+	// tuning as parameters does not require that tuning to be moved.
+	//
+	// !! PERMANENT CONSTRAINT !!
+	// TrackThickness and WheelSpeedCorrectionUV must NEVER be moved to C++. They are
+	// parameter names of this function, and UHT forbids a parameter shadowing a
+	// UPROPERTY - moving either would retroactively break this port (the Phase 13
+	// blocker). C++ never needs them, since they arrive as parameters.
+	// ---------------------------------------------------------------------
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chassis")
+	bool UseGeometricTracks = true;
+
+	// Ported 1:1:
+	//   SpeedCorr     = UseGeometricTracks ? 0.0 : WheelSpeedCorrectionUV
+	//   Circumference = 2 * (WheelRadius + TrackThickness + SpeedCorr) * PI
+	//   StartAngle    = UseGeometricTracks ? (LeftWheel ? LeftGeo : RightGeo)
+	//                                      : (LeftWheel ? LeftUV  : RightUV)
+	//   Degrees       = -360 * (Distance / Circumference) + StartAngle
+	UFUNCTION(BlueprintCallable, Category = "Chassis")
+	void WheelRotationDefinition(double Distance, double WheelRadius, double TrackThickness, double WheelSpeedCorrectionUV, double WheelStartAngleLeftGeoTracks, double WheelStartAngleRightGeoTracks, double WheelStartAngleLeftUVTracks, double WheelStartAngleRightUVTracks, bool LeftWheel, double& Degrees);
 };
