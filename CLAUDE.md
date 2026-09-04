@@ -299,7 +299,50 @@ function they call has already been moved and individually verified.**
 | 6 — Vars: turret / MG scratch (**first structs**) | ✅ PASS | `MainTurretAndGunRotation`, `TurretRotation`, `MGRotation` (FRotator), `TurretYaw`, `TurretPitch` (double), `TurretBlocking`, `IsTurretRotating` (bool). All 18 native props present; moved names gone from the BP. `TurretRotation` still 10 refs / same node IDs. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
 | 7 — Vars: antenna / UI / misc (**FVector, float, int32**) | ✅ PASS | 14 moved: `HullSpeedWorld`, `HullAccelerationWorldInverted`, `TurretSpeedLocalInverted` (FVector), `CrosshairTraceClamp`, `AimPointCorrectionUI`, `CurrentAmplitudeMultiplierR/L`, `FilletsCompensation`, `HullDeltaXLocation`, `DeltaSeconds`, `CurentRPMRatio`, `TrackSpeedModifier` (double), `ForwardSpeedMPH` (float), `DamageCausedUI` (int32). 32 native props total. All 6 tanks match master on every default. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. **13/14 proven at runtime; `DamageCausedUI` structural only** (see below). |
 | 8 — Vars: scratch **ARRAYS** | ✅ PASS | 11 moved: `VibrationOffset_R/L`, `FinalScattering` (TArray&lt;double&gt;), `SplinePointLocation`, `SplinePointPerpendicularVectors`, `AntennaCurrentSpeed` (TArray&lt;FVector&gt;), `CopyPointIndices` (TArray&lt;int32&gt;), `TurretsRotUnstabilized`, `TurretsRotPrevFrame`, `GunsRotUnstabilized`, `GunsRotPrevFrame` (TArray&lt;FRotator&gt;). 43 native props. All lengths match across all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. |
-| 9+ — Move more variables | ⬜ next | |
+| 9 — Vars: **REPLICATED** | ✅ PASS (with a stated gap) | `Rep_ControlRotation` (FRotator), `TurretsRot`, `GunsRot` (TArray&lt;FRotator&gt;, len 10). 46 native props. `UPROPERTY(Replicated)` + `GetLifetimeReplicatedProps`/`DOREPLIFETIME`. Lengths correct on all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs, **0 LogNet warnings**. PIE clean. **Client-server replication NOT exercised — see gap below.** |
+| 10+ — Move more variables | ⬜ next | |
+
+**Phase 9 runtime proof:**
+```
+START  turretsRot=10 gunsRot=10 rep=(0.000,0.000,0.000)  t0=(0.000,0.000,0.000)
+END    turretsRot=10 gunsRot=10 rep=(4.098,-0.036,-0.004)
+END    turrets0=(0.000,-0.602,0.000)  guns0=(5.688,0.000,0.000)
+```
+
+### Moving a replicated Blueprint variable — the least visible failure in the port
+A Blueprint variable with "Replicated" ticked **silently stops replicating** the moment it
+becomes a C++ property unless BOTH exist:
+1. the `Replicated` specifier on the `UPROPERTY`, and
+2. a `DOREPLIFETIME` entry in `GetLifetimeReplicatedProps`.
+
+Miss either and the value still reads and writes perfectly in a single-player PIE session.
+Nothing in the standard test catches it. **Any future phase that moves a replicated variable
+must add its `DOREPLIFETIME` line in the same commit.**
+
+Check for RepNotify before choosing the specifier: search the Blueprint for `OnRep` nodes and
+`OnRep_*` functions. This project has none, so all three are plain `Replicated`, never
+`ReplicatedUsing`.
+
+### KNOWN GAP — replication itself was not tested
+Everything above was verified in **standalone** PIE, which does not run client-server
+replication at all. What is proven: the properties exist, carry the specifier, are registered,
+compile, hold their array lengths, are written during play, and produce no `LogNet` warnings.
+What is **not** proven: that values actually reach a client.
+
+The available tooling (`run_pie_smoke`, `get_game_world`) only reaches one PIE world, so it
+cannot compare a server value against a client's. To close this properly, run PIE manually as
+**Play As Listen Server with 2 players**, rotate the turret on the server, and confirm the
+client's tank turret follows. Until someone does that, treat multiplayer turret/gun sync as
+untested — not as working.
+
+### AnimBP reads these directly off the pawn
+Unlike `WheelRot*`/`SaggingDegree*` (where the AnimBP declares its own same-named copies),
+`ABP_Chaos_<Tank>` has **no** `TurretsRot`/`GunsRot` variables of its own — it reads the pawn's
+through its `TankPawn` reference. So these names matter across an asset boundary too.
+
+Related trap: the AnimBP **does** declare its own `TurretRotation`, `TurretYaw`, `TurretPitch`,
+`ClippingRangeMin/Max`, `TurretRotationSpeed`, `TurretHeightRangeClip` — same names as pawn
+variables moved in Phase 6, but separate storage. Do not confuse the two.
 
 **Phase 8 runtime proof:**
 ```

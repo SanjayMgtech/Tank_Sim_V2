@@ -1,5 +1,7 @@
 #include "Tank/TSTankControllerBase.h"
 
+#include "Net/UnrealNetwork.h"
+
 ATSTankControllerBase::ATSTankControllerBase()
 {
 	// Phase 8: restore the Blueprint's pre-sized array defaults.
@@ -18,6 +20,11 @@ ATSTankControllerBase::ATSTankControllerBase()
 	GunsRotUnstabilized.Init(FRotator::ZeroRotator, 10);
 	GunsRotPrevFrame.Init(FRotator::ZeroRotator, 10);
 
+	// Phase 9: the replicated rotator arrays are pre-sized to 10 in the Blueprint
+	// exactly like their non-replicated counterparts above.
+	TurretsRot.Init(FRotator::ZeroRotator, 10);
+	GunsRot.Init(FRotator::ZeroRotator, 10);
+
 	// Otherwise deliberately empty.
 	//
 	// The Blueprint (BP_TankController_Chaos) supplies every component and every
@@ -27,4 +34,20 @@ ATSTankControllerBase::ATSTankControllerBase()
 	//
 	// Likewise, no ConstructorHelpers asset loading: FClassFinder on a Blueprint class
 	// deadlocks the editor during Blueprint compilation.
+}
+
+void ATSTankControllerBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	// Every property carrying the Replicated specifier MUST be registered here.
+	// The Blueprint replicated all three with the default condition (no RepNotify,
+	// no replication condition), so plain DOREPLIFETIME reproduces that exactly.
+	//
+	// If a future phase moves another replicated Blueprint variable, add it here in
+	// the same commit. Forgetting is silent in single-player and only breaks over
+	// the network.
+	DOREPLIFETIME(ATSTankControllerBase, Rep_ControlRotation);
+	DOREPLIFETIME(ATSTankControllerBase, TurretsRot);
+	DOREPLIFETIME(ATSTankControllerBase, GunsRot);
 }

@@ -225,4 +225,35 @@ public:
 
 	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Scattering")
 	TArray<FRotator> GunsRotPrevFrame;
+
+	// ---------------------------------------------------------------------
+	// Phase 9: REPLICATED properties. First phase needing real C++, not just
+	// declarations.
+	//
+	// A Blueprint variable with "Replicated" ticked stops replicating the moment
+	// it becomes a C++ property, unless BOTH of these are present:
+	//   1. the Replicated specifier on the UPROPERTY, and
+	//   2. an entry in GetLifetimeReplicatedProps (see the .cpp).
+	// Miss either one and the value still reads and writes correctly in a
+	// single-player PIE session - the loss only shows up over the network. This
+	// is the least visible failure mode in the whole port.
+	//
+	// Verified there are no RepNotify handlers: the Blueprint has no OnRep nodes
+	// and no OnRep_* functions, so these are plain Replicated, not ReplicatedUsing.
+	//
+	// TurretsRot and GunsRot are read by ABP_Chaos_<Tank> through its TankPawn
+	// reference (the AnimBP does NOT declare its own copies of these, unlike
+	// WheelRot*/SaggingDegree*), so the exact names matter across an asset
+	// boundary as well as inside the master Blueprint.
+	// ---------------------------------------------------------------------
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Hidden (Used for logic)|Turret")
+	FRotator Rep_ControlRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Hidden (Used for logic)|Turret")
+	TArray<FRotator> TurretsRot;
+
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Hidden (Used for logic)|Gun")
+	TArray<FRotator> GunsRot;
+
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 };
