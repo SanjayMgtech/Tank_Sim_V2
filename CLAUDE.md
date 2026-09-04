@@ -81,6 +81,45 @@ The editor scans and compiles everything under `Content/` at startup. A stray ba
 Blueprint there gets loaded and compiled. Keep backups in
 `CPP_Port_WIP_DO_NOT_USE_YET/`, never in `Content/`.
 
+### RULE 7 — When the tooling cannot do it, HAND IT OFF. Do not experiment.
+The MCP surface cannot do everything the editor UI can. When a step has no action for it,
+**stop and ask the human** instead of trying near-miss actions to see what happens. A wrong
+guess here does not just fail — it can corrupt a Blueprint in memory and cost a recovery cycle.
+
+This rule exists because of a real incident: with no rename-parameter action available,
+`set_function_params` was tried on a live function. Its description says "**Add** input/output
+parameters" and it meant it literally — it appended a duplicate of every parameter and output.
+Recovery took a package reload plus a human clicking through a modal. The human then did the
+rename by hand in about a minute.
+
+**Hand-off format — give all four, briefly:**
+1. **Why** — what is blocked and what it unblocks.
+2. **Where** — exact asset, graph, panel.
+3. **What** — the precise change, with exact names/values.
+4. **How we verify** — what will be checked afterwards to prove it worked.
+
+**Before starting any step, ask: is there an action for this?** If not, it is a hand-off.
+Check the namespace action list rather than assuming an action exists because it "should".
+
+### Things ONLY the human can do (known list — extend as found)
+| Task | Why the tooling cannot |
+|---|---|
+| Rename a Blueprint **function parameter** | No rename-parameter action; `set_function_params` is additive. Done in the function's Details panel; the editor fixes up call sites and keeps connections (verified Phase 15). |
+| Dismiss editor modal dialogs | A modal blocks the game thread, so MCP is unresponsive until a human clicks. Seen with "Save Content", the reload-assets confirm, and the auto-save recovery prompt after a force-kill. |
+| Run PIE as **Listen Server with 2 players** | `run_pie_smoke` / `get_game_world` reach only one PIE world, so server-vs-client values cannot be compared. This is the only way to test replication (the open Phase 9 gap). |
+| Drive real gameplay events | e.g. `DamageCausedUI` is only written by a macro reached through an actual damage-caused event; macros are inlined and cannot be invoked directly. |
+| Anything that is a Blueprint **editor-UI** operation with no MCP action | Reordering pins, editing a macro's internals, graph-level refactors. |
+
+### Open hand-offs (keep current)
+- **Replication test (Phase 9 gap).** Play → *Play As Listen Server*, 2 players. Rotate the
+  turret in the server window and confirm the client's turret follows. Until then treat
+  multiplayer turret/gun sync as untested, not working.
+- **Future parameter renames**, only when a port needs them: `WheelRotationDefinition` takes
+  `TrackThickness` and `WheelSpeedCorrectionUV`, which will shadow those members if they ever
+  move to C++.
+- **Space-in-name variables** (`Player Controller`, `MG Yaw`, `Is Vehicle taken?`, ...) need a
+  Blueprint rename before they could ever be ported.
+
 ---
 
 ## 3. Project Facts
