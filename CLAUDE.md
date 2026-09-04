@@ -101,6 +101,47 @@ rename by hand in about a minute.
 **Before starting any step, ask: is there an action for this?** If not, it is a hand-off.
 Check the namespace action list rather than assuming an action exists because it "should".
 
+### RULE 8 — Prefer the SIMPLEST mechanism a designer can edit
+Before writing placement, tuning or layout data as C++ properties, ask whether it could just be
+a **thing in the Blueprint** — a component, a curve, a data asset. If a human will ever want to
+adjust it, they should be able to adjust it by dragging or typing in the editor, not by editing a
+header and waiting for a rebuild.
+
+This is the same principle as RULE 1 and the core "C++ owns logic, Blueprint owns data" split,
+applied to *new* code rather than ported code. It is easy to honour the rule while porting and
+then quietly break it the moment you add something new.
+
+**Worked example — VR crew seat placement.** The first version put three `FVector` offsets on
+`ATSVRPawn` as `EditDefaultsOnly` properties, plus mesh socket names, plus fallback logic to pick
+between them. Two mechanisms, numbers typed into a header, and the same seats for all six tanks.
+
+The replacement is three **scene components** on the tank Blueprint named `DriverSeat`,
+`GunnerSeat`, `CommanderSeat`. C++ only looks them up by name; where they sit is Blueprint data.
+That is strictly better on every axis:
+- a designer drags a gizmo and sees exactly where the player's head will be
+- each per-tank Blueprint overrides its own seats — which matters, the six hulls differ
+- **it subsumes sockets**: parent the seat component to a mesh socket in the Components panel and
+  it rides that socket, with no code change
+- one mechanism instead of a socket path plus an offset fallback path
+
+Signs you are on the wrong side of this rule: a `FVector`/`FRotator`/`FTransform` UPROPERTY that
+describes *where something goes*; two code paths that exist only to choose between two ways of
+authoring the same value; a "fallback default" for data that a designer was always going to set.
+
+Keep the C++ side to a **name lookup plus a loud warning** when the Blueprint has not provided the
+thing. Silence here is the RULE 1 failure mode all over again — the crew member ends up standing
+at the tank's origin and it reads as "seating is broken" rather than "nobody placed the seat".
+
+### ⚠ A parameter or local named `Role` will not compile
+`AActor` declares a deprecated member `Role` (legacy `ENetRole`), and UHT builds with
+`-WarningsAsErrors`, so C4458 shadowing is a hard error:
+```
+error C4458: declaration of 'Role' hides class member
+```
+This has now bitten twice — `ATSGameMode::TryAssignRole` (named `RequestedRole`) and
+`ATSVRPawn::GetSeatComponentNameForRole` (named `InRole`). Use `InRole`, `CrewRole` or
+`RequestedRole`, never bare `Role`, for parameters AND locals on any `AActor` subclass.
+
 ### Spawned sessions and git worktrees — Unreal is NOT reachable from a worktree
 `.mcp.json` starts the Monolith proxy from `Plugins/Monolith/Binaries/monolith_proxy.exe`.
 `Plugins/` is **not tracked in git**, so a worktree never contains it and the proxy reports

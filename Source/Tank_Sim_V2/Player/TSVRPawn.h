@@ -40,6 +40,43 @@ public:
 	UFUNCTION()
 	void ApplyRoleMappingContext_FromPlayerState();
 
+	// ---------------------------------------------------------------------
+	// Crew station placement - "three players, one tank".
+	//
+	// Each crew member possesses their own VR pawn (nobody possesses the tank), so
+	// without this they spawn at a PlayerStart and stay there while the tank drives
+	// away. Attaching them to the hull is what makes the three of them actually ride
+	// the same vehicle.
+	//
+	// Seats are SCENE COMPONENTS on the tank Blueprint, not offsets typed in here.
+	// A designer drags them in the viewport to place a crew station, sees exactly
+	// where the player's head will be, and needs no code change or rebuild. That also
+	// keeps the placement where RULE 1 says it belongs - as Blueprint data - and lets
+	// each tank position its own crew differently.
+	//
+	// These are just the component NAMES to look for on the assigned tank.
+	// ---------------------------------------------------------------------
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
+	FName DriverSeatComponent = TEXT("DriverSeat");
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
+	FName GunnerSeatComponent = TEXT("GunnerSeat");
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
+	FName CommanderSeatComponent = TEXT("CommanderSeat");
+
+	// Server-authoritative. Attaches this pawn to its assigned tank at the station for
+	// its crew role, or detaches when it no longer has one.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew Station")
+	void UpdateCrewStationAttachment();
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew Station")
+	bool IsSeatedInTank() const;
+
+	// Parameter is InRole, not Role: AActor declares a (deprecated) member called Role
+	// (legacy ENetRole) and UHT builds with -WarningsAsErrors, so the shadow is a hard error.
+	FName GetSeatComponentNameForRole(ETSCrewRole InRole) const;
+
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank Simulation|VR")
 	TObjectPtr<USceneComponent> VROrigin;

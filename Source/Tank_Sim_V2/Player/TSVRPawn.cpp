@@ -1,6 +1,7 @@
 #include "Player/TSVRPawn.h"
 
 #include "Camera/CameraComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "CollisionQueryParams.h"
@@ -47,6 +48,11 @@ void ATSVRPawn::PossessedBy(AController* NewController)
 	{
 		ApplyRoleMappingContext(PS->GetCrewRole());
 		PS->OnAssignmentChanged.AddDynamic(this, &ATSVRPawn::ApplyRoleMappingContext_FromPlayerState);
+
+		// Cover the case where the crew assignment already existed before we were possessed
+		// (late join, or a respawn into an in-progress match) - the delegate only fires on
+		// CHANGES, so without this the player would be seated nowhere.
+		UpdateCrewStationAttachment();
 	}
 }
 
@@ -55,6 +61,93 @@ void ATSVRPawn::ApplyRoleMappingContext_FromPlayerState()
 	if (const ATSTankPlayerState* PS = GetController() ? GetController()->GetPlayerState<ATSTankPlayerState>() : nullptr)
 	{
 		ApplyRoleMappingContext(PS->GetCrewRole());
+	}
+
+	// The same signal that changes our input layout also changes which tank and seat we
+	// belong to, so keep the physical placement in step with the role.
+	UpdateCrewStationAttachment();
+}
+
+bool ATSVRPawn::IsSeatedInTank() const
+{
+	return GetAttachParentActor() != nullptr;
+}
+
+void ATSVRPawn::UpdateCrewStationAttachment()
+{
+	// Server only. Attachment is replicated by the engine (AActor::AttachmentReplication), so
+	// doing this on a client as well would fight the incoming replicated state. The delegate
+	// that calls us fires on both sides, hence the explicit guard rather than relying on where
+	// it happens to be invoked from.
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const ATSTankPlayerState* PS = GetController() ? GetController()->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	APawn* Tank = PS ? PS->GetAssignedTank() : nullptr;
+	const ETSCrewRole CrewRole = PS ? PS->GetCrewRole() : ETSCrewRole::None;
+
+	if (!Tank || CrewRole == ETSCrewRole::None)
+	{
+		// Left the crew (seat released, team change, match reset). Detach and keep our world
+		// transform: being dragged around by a tank we no longer belong to would be worse than
+		// simply standing where we were.
+		if (GetAttachParentActor())
+		{
+			DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		}
+		return;
+	}
+
+	// The seat is a scene component on the tank Blueprint. C++ only finds it by name - where it
+	// sits is Blueprint data, positioned in the viewport, and each tank can place its own.
+	const FName SeatName = GetSeatComponentNameForRole(CrewRole);
+	USceneComponent* Seat = nullptr;
+
+	if (SeatName != NAME_None)
+	{
+		TArray<USceneComponent*> SceneComponents;
+		Tank->GetComponents<USceneComponent>(SceneComponents);
+		for (USceneComponent* Component : SceneComponents)
+		{
+			if (Component && Component->GetFName() == SeatName)
+			{
+				Seat = Component;
+				break;
+			}
+		}
+	}
+
+	if (Seat)
+	{
+		AttachToComponent(Seat, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+		return;
+	}
+
+	// No seat component authored for this role yet. Ride the hull rather than being left behind,
+	// but say so loudly - a crew member standing at the origin of the tank is a placement bug,
+	// not a design, and it is otherwise easy to mistake for "seating does not work".
+	UE_LOG(LogTemp, Warning,
+		TEXT("[TSVRPawn] %s: tank '%s' has no scene component named '%s' for crew role %d. ")
+		TEXT("Add one to the tank Blueprint's Components panel and position it; attaching to the ")
+		TEXT("tank root as a fallback."),
+		*GetName(), *Tank->GetName(), *SeatName.ToString(), static_cast<int32>(CrewRole));
+
+	if (USceneComponent* Root = Tank->GetRootComponent())
+	{
+		AttachToComponent(Root, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+	}
+}
+
+FName ATSVRPawn::GetSeatComponentNameForRole(ETSCrewRole InRole) const
+{
+	switch (InRole)
+	{
+	case ETSCrewRole::Driver:    return DriverSeatComponent;
+	case ETSCrewRole::Gunner:    return GunnerSeatComponent;
+	case ETSCrewRole::Commander: return CommanderSeatComponent;
+	default:                     return NAME_None;
 	}
 }
 
