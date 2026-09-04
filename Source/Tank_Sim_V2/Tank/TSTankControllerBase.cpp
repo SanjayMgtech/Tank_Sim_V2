@@ -50,7 +50,6 @@ void ATSTankControllerBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 	// If a future phase moves another replicated Blueprint variable, add it here in
 	// the same commit. Forgetting is silent in single-player and only breaks over
 	// the network.
-	DOREPLIFETIME(ATSTankControllerBase, Rep_ControlRotation);
 	DOREPLIFETIME(ATSTankControllerBase, TurretsRot);
 	DOREPLIFETIME(ATSTankControllerBase, GunsRot);
 }
@@ -153,8 +152,8 @@ void ATSTankControllerBase::WheelRotationDefinition(double Distance, double Whee
 
 bool ATSTankControllerBase::IsTurretSimulatedLocally() const
 {
-	// Same condition ReplicateControlRotation already uses to decide whether to
-	// write Rep_ControlRotation, kept deliberately identical so the two agree.
+	// Authority owns the authoritative turret state; the locally-controlled client
+	// needs a responsive local one. Anyone else consumes the replicated value.
 	return HasAuthority() || IsLocallyControlled();
 }
 

@@ -93,14 +93,12 @@ public:
 	// from TurretsRot (the replicated ARRAY), which is deliberately NOT in this
 	// group. Replicated properties and arrays are a later phase.
 	//
-	// Two verification classes, because reference sites differ:
-	//   LIVE   - written every tick via TurretsAndGunsRotCalculation / EventGraph:
-	//            MainTurretAndGunRotation, TurretBlocking, IsTurretRotating.
-	//   LEGACY - referenced only from UpdateTurretRotation_Old and
-	//            UpdateMachineGunRotation_Old: TurretRotation, MGRotation,
-	//            TurretYaw, TurretPitch. These stay 0 in a normal PIE session by
-	//            design; that is NOT a failed rebind. They are proven by calling
-	//            those _Old functions directly and observing the writes land.
+	// All three are written every tick via TurretsAndGunsRotCalculation / EventGraph.
+	//
+	// This group originally also held TurretRotation, MGRotation, TurretYaw and
+	// TurretPitch, which were read only by UpdateTurretRotation_Old and
+	// UpdateMachineGunRotation_Old. Those two functions were dead code and have been
+	// deleted, so those four properties went with them.
 	// ---------------------------------------------------------------------
 	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
 	FRotator MainTurretAndGunRotation = FRotator::ZeroRotator;
@@ -110,18 +108,6 @@ public:
 
 	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
 	bool IsTurretRotating = false;
-
-	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
-	FRotator TurretRotation = FRotator::ZeroRotator;
-
-	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
-	double TurretYaw = 0.0;
-
-	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Turret")
-	double TurretPitch = 0.0;
-
-	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Machine gun")
-	FRotator MGRotation = FRotator::ZeroRotator;
 
 	// ---------------------------------------------------------------------
 	// Phase 7: antenna / UI / misc runtime scratch. First FVector, float and int32.
@@ -252,9 +238,6 @@ public:
 	// WheelRot*/SaggingDegree*), so the exact names matter across an asset
 	// boundary as well as inside the master Blueprint.
 	// ---------------------------------------------------------------------
-	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Hidden (Used for logic)|Turret")
-	FRotator Rep_ControlRotation = FRotator::ZeroRotator;
-
 	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Hidden (Used for logic)|Turret")
 	TArray<FRotator> TurretsRot;
 

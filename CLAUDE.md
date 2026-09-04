@@ -706,6 +706,40 @@ Check for RepNotify before choosing the specifier: search the Blueprint for `OnR
 `OnRep_*` functions. This project has none, so all three are plain `Replicated`, never
 `ReplicatedUsing`.
 
+## 🧹 DEAD CODE REMOVED (2026-09-04)
+The legacy turret subsystem is gone. It was never called, and it actively misled this session:
+`Rep_ControlRotation`'s name suggested it drove the turret, so a whole multiplayer fix was built
+around it before its only two readers turned out to be dead functions.
+
+Removed:
+| Thing | Kind | Why |
+|---|---|---|
+| `UpdateTurretRotation_Old` (79 nodes) | BP function | never called |
+| `UpdateMachineGunRotation_Old` (22 nodes) | BP function | never called |
+| `ReplicateControlRotation` (17 nodes) + its Tick call | BP function | wrote `Rep_ControlRotation` every frame; nothing read it |
+| `Rep_ControlRotation` | C++ (was **Replicated**) | 0 readers; was costing bandwidth for nothing |
+| `TurretRotation`, `MGRotation`, `TurretYaw`, `TurretPitch` | C++ | orphaned once the `_Old` functions went |
+| 10 `Old`-category variables | BP | `Turret Rotation Speed`, `Clipping Range Min/Max`, `TurretVerticalRange`, `Turret Height Range Clip`, `Turret Rotation Speed Vertical`, `MGVerticalRange`, `MGRotation Speed`, `MG Pitch`, `MG Yaw` |
+
+Native property count: **65 → 60**. The `DOREPLIFETIME` for `Rep_ControlRotation` went too, so only
+`TurretsRot` and `GunsRot` remain replicated.
+
+### How the deletion was made safe
+1. **Project-wide grep of the `.uasset` binaries**, not just per-asset node searches — Blueprint
+   function and variable names appear as strings in the packages, so
+   `grep -rl "UpdateTurretRotation_Old" --include="*.uasset"` finds every referencing asset. Both
+   names appeared **only** in the master Blueprint.
+2. **Followed the cascade.** Deleting the two `_Old` functions dropped `Rep_ControlRotation` to
+   0 reads, which made `ReplicateControlRotation` dead, which orphaned four more C++ properties.
+   Re-run `find_variable_references` after each removal rather than assuming the first pass found
+   everything.
+3. **`TurretVerticalRange` hits all six AnimBPs** in a grep — that is the AnimBP's OWN same-named
+   variable, not a reference to the pawn's. Separate storage, separate class. Do not read a
+   name collision as a dependency.
+
+Verified after: BP `UpToDate`, 0 errored BPs, PIE clean (0 `Accessed None`, 0 index warnings),
+tank drove 379 units, turret/wheels/sagging all still working.
+
 ## Unreal multiplayer — the model, and why this tank's turret does not replicate
 Researched from Epic's docs (links at the end of this section). Read this before touching
 anything networked in this project.
