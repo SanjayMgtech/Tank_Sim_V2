@@ -300,7 +300,43 @@ function they call has already been moved and individually verified.**
 | 7 — Vars: antenna / UI / misc (**FVector, float, int32**) | ✅ PASS | 14 moved: `HullSpeedWorld`, `HullAccelerationWorldInverted`, `TurretSpeedLocalInverted` (FVector), `CrosshairTraceClamp`, `AimPointCorrectionUI`, `CurrentAmplitudeMultiplierR/L`, `FilletsCompensation`, `HullDeltaXLocation`, `DeltaSeconds`, `CurentRPMRatio`, `TrackSpeedModifier` (double), `ForwardSpeedMPH` (float), `DamageCausedUI` (int32). 32 native props total. All 6 tanks match master on every default. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. **13/14 proven at runtime; `DamageCausedUI` structural only** (see below). |
 | 8 — Vars: scratch **ARRAYS** | ✅ PASS | 11 moved: `VibrationOffset_R/L`, `FinalScattering` (TArray&lt;double&gt;), `SplinePointLocation`, `SplinePointPerpendicularVectors`, `AntennaCurrentSpeed` (TArray&lt;FVector&gt;), `CopyPointIndices` (TArray&lt;int32&gt;), `TurretsRotUnstabilized`, `TurretsRotPrevFrame`, `GunsRotUnstabilized`, `GunsRotPrevFrame` (TArray&lt;FRotator&gt;). 43 native props. All lengths match across all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. |
 | 9 — Vars: **REPLICATED** | ✅ PASS (with a stated gap) | `Rep_ControlRotation` (FRotator), `TurretsRot`, `GunsRot` (TArray&lt;FRotator&gt;, len 10). 46 native props. `UPROPERTY(Replicated)` + `GetLifetimeReplicatedProps`/`DOREPLIFETIME`. Lengths correct on all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs, **0 LogNet warnings**. PIE clean. **Client-server replication NOT exercised — see gap below.** |
-| 10+ — Move more variables | ⬜ next | |
+| 10 — Vars: object / component **references** | ✅ PASS | 7 moved: `BaseTrackMaterial`, `RightTrackMID`, `LeftTrackMID`, `TracksInstances_R/L`, `TrackPath_L`, `VehicleMovement`. 53 native props. **All 21 SCS components still intact.** BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. 6/7 runtime-proven. |
+| 11+ — Move more variables | ⬜ next | |
+
+**Phase 10 runtime proof:**
+```
+midR=MID_MI_Tank_T90_Track_1   midL=MID_MI_Tank_T90_Track_0
+instR=4  instL=4
+splineL=NODE_AddSplineComponent-0   move=VehicleMovementComp   baseMat=NULL
+```
+`TrackPath_L` resolving to a `NODE_AddSplineComponent` confirms it is a runtime-created
+reference, not an SCS component. `VehicleMovement` correctly caches the native
+`VehicleMovementComp`.
+
+### A reference VARIABLE is not a COMPONENT — check before moving
+Run `get_components` first. In this Blueprint the real SCS components include `TrackPath_R`
+and `BP_TankWeapon`; the similarly-named `TrackPath_L` and `VehicleMovement` are plain
+variables holding runtime-assigned references. Note the asymmetry: **`TrackPath_R` is a
+component, `TrackPath_L` is a variable.** Moving a variable is fine; declaring a `UPROPERTY`
+over an SCS component is the RULE 1 mistake that sank attempt 1. Re-run `get_components` after
+the move and confirm the count is still 21.
+
+Use `TObjectPtr<T>`, not raw `T*`: UHT runs with `-WarningsAsErrors` and raw object pointers in
+a `UPROPERTY` can be reported as a member-pointer violation.
+
+### NOT PORTABLE — variables typed as Blueprint-generated classes
+`HUD` (`W_MainHUD_C`), `Crosshair` (`W_Crosshair_C`) and `BPC_TankWeapon` (`BP_TankWeapon_C`)
+cannot be moved. C++ cannot name a Blueprint-generated type, and widening them to a native base
+(`UUserWidget*`, `UActorComponent*`) would break every graph node that calls a Blueprint-only
+member on them — a type change also violates RULE 4. **These stay in the Blueprint permanently.**
+That is the correct end state, not a deferral: C++ owns logic, Blueprint owns data and the
+Blueprint-typed references.
+
+### `BaseTrackMaterial` — read twice, never written
+2 reads inside the `Set Track Dynamic Material` macro, **0 writes anywhere**, and `None` on the
+master and all six tanks. NULL at runtime is therefore correct and unchanged, not a broken
+rebind — verified structurally only, like `DamageCausedUI` in Phase 7. A pre-existing oddity
+(the macro reads something nothing sets, and the MIDs are still created), left alone.
 
 **Phase 9 runtime proof:**
 ```

@@ -14,6 +14,12 @@
 #include "WheeledVehiclePawn.h"
 #include "TSTankControllerBase.generated.h"
 
+class UMaterialInterface;
+class UMaterialInstanceDynamic;
+class UInstancedStaticMeshComponent;
+class USplineComponent;
+class UChaosWheeledVehicleMovementComponent;
+
 UCLASS(Blueprintable, BlueprintType)
 class TANK_SIM_V2_API ATSTankControllerBase : public AWheeledVehiclePawn
 {
@@ -256,4 +262,47 @@ public:
 	TArray<FRotator> GunsRot;
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	// ---------------------------------------------------------------------
+	// Phase 10: object / component REFERENCE variables.
+	//
+	// These are plain variables that hold references assigned at runtime - they
+	// are NOT components. Verified against the Blueprint's component list: the
+	// actual SCS components are TrackPath_R and BP_TankWeapon (plus the 19 others),
+	// and those stay in the Blueprint untouched per RULE 1. Note the deliberate
+	// asymmetry - TrackPath_R is a component, TrackPath_L is a variable.
+	//
+	// All seven default to null/empty on the master and on all six tanks, so
+	// there is no per-tank asset reference to drop.
+	//
+	// TObjectPtr rather than raw pointers: UHT runs with -WarningsAsErrors here,
+	// and raw object pointers in a UPROPERTY can be reported as a member-pointer
+	// violation.
+	//
+	// NOT PORTABLE - deliberately excluded, see CLAUDE.md:
+	//   HUD (W_MainHUD_C), Crosshair (W_Crosshair_C), BPC_TankWeapon (BP_TankWeapon_C)
+	//   are typed as Blueprint-generated classes. C++ cannot name those types, and
+	//   widening them to a native base would break the graph nodes that call
+	//   Blueprint-only members on them.
+	// ---------------------------------------------------------------------
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	TObjectPtr<UMaterialInterface> BaseTrackMaterial;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	TObjectPtr<UMaterialInstanceDynamic> RightTrackMID;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	TObjectPtr<UMaterialInstanceDynamic> LeftTrackMID;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	TArray<TObjectPtr<UInstancedStaticMeshComponent>> TracksInstances_R;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	TArray<TObjectPtr<UInstancedStaticMeshComponent>> TracksInstances_L;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Default")
+	TObjectPtr<USplineComponent> TrackPath_L;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Default")
+	TObjectPtr<UChaosWheeledVehicleMovementComponent> VehicleMovement;
 };
