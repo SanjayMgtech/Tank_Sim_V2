@@ -28,9 +28,20 @@ UTSTankCrewComponent* UTSTankWeaponComponent::GetCrewComponent() const
 	return GetOwner() ? GetOwner()->FindComponentByClass<UTSTankCrewComponent>() : nullptr;
 }
 
-static bool HasGunnerAccess(const UTSTankCrewComponent* Crew, ATSTankPlayerState* Requester)
+// Two-factor gate, and BOTH factors are load-bearing:
+//   1. the requester's ROLE grants this specific capability (the Section 8 matrix), and
+//   2. the requester actually occupies the Gunner seat ON THIS TANK.
+// Factor 2 is what stops another team's Gunner - who legitimately has the capability -
+// operating this tank's weapons.
+//
+// Capability is a PARAMETER rather than hardcoded to MainCannon. It used to be hardcoded,
+// which meant ETSCapability::TurretAim and ::MachineGun existed in the matrix but were never
+// consulted: every weapon action asked about MainCannon. That is invisible while all three
+// rows say "Gunner only", and silently wrong the moment one of them changes - the matrix
+// would say one thing and the code would do another.
+static bool HasGunnerAccess(const UTSTankCrewComponent* Crew, ATSTankPlayerState* Requester, ETSCapability Capability)
 {
-	if (!Requester || !FTSPermissions::HasFullAccess(Requester->GetCrewRole(), ETSCapability::MainCannon))
+	if (!Requester || !FTSPermissions::HasFullAccess(Requester->GetCrewRole(), Capability))
 	{
 		return false;
 	}
@@ -39,7 +50,7 @@ static bool HasGunnerAccess(const UTSTankCrewComponent* Crew, ATSTankPlayerState
 
 bool UTSTankWeaponComponent::TryAimTurret(ATSTankPlayerState* Requester, FVector_NetQuantize AimPoint)
 {
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !HasGunnerAccess(GetCrewComponent(), Requester))
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !HasGunnerAccess(GetCrewComponent(), Requester, ETSCapability::TurretAim))
 	{
 		return false;
 	}
@@ -60,7 +71,7 @@ void UTSTankWeaponComponent::OnRep_AimPoint()
 
 bool UTSTankWeaponComponent::TryFireMainCannon(ATSTankPlayerState* Requester)
 {
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !HasGunnerAccess(GetCrewComponent(), Requester))
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !HasGunnerAccess(GetCrewComponent(), Requester, ETSCapability::MainCannon))
 	{
 		return false;
 	}
@@ -93,7 +104,7 @@ void UTSTankWeaponComponent::MulticastFireMainCannon_Implementation()
 
 bool UTSTankWeaponComponent::TryFireMachineGun(ATSTankPlayerState* Requester)
 {
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !HasGunnerAccess(GetCrewComponent(), Requester))
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !HasGunnerAccess(GetCrewComponent(), Requester, ETSCapability::MachineGun))
 	{
 		return false;
 	}
@@ -126,7 +137,7 @@ void UTSTankWeaponComponent::MulticastFireMachineGun_Implementation()
 
 bool UTSTankWeaponComponent::TryReload(ATSTankPlayerState* Requester)
 {
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !HasGunnerAccess(GetCrewComponent(), Requester))
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !HasGunnerAccess(GetCrewComponent(), Requester, ETSCapability::MainCannon))
 	{
 		return false;
 	}
