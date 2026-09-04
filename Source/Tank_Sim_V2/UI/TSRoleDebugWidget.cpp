@@ -36,10 +36,10 @@ namespace
 	{
 		if (!Crew)
 		{
-			return TEXT("-");
+			return TEXT("<no crew component>");
 		}
 		const APlayerState* Occupant = Crew->GetOccupant(Role);
-		return Occupant ? Occupant->GetPlayerName() : TEXT("-");
+		return Occupant ? Occupant->GetPlayerName() : TEXT("(empty)");
 	}
 }
 
@@ -94,6 +94,8 @@ TSharedRef<SWidget> UTSRoleDebugWidget::RebuildWidget()
 			Font.Size = FontSize;
 			BodyText->SetFont(Font);
 		}
+		BodyText->SetAutoWrapText(true);
+		BodyText->SetWrapTextAt(PanelWrapWidth);
 		if (UVerticalBoxSlot* BodySlot = Column->AddChildToVerticalBox(BodyText))
 		{
 			BodySlot->SetPadding(FMargin(0.f, 6.f, 0.f, 0.f));
@@ -122,6 +124,8 @@ TSharedRef<SWidget> UTSRoleDebugWidget::RebuildWidget()
 			Font.Size = FontSize;
 			TankText->SetFont(Font);
 		}
+		TankText->SetAutoWrapText(true);
+		TankText->SetWrapTextAt(PanelWrapWidth);
 		if (UVerticalBoxSlot* TankSlot = Column->AddChildToVerticalBox(TankText))
 		{
 			TankSlot->SetPadding(FMargin(0.f, 10.f, 0.f, 0.f));
@@ -356,7 +360,7 @@ FString UTSRoleDebugWidget::DescribeTeamTanks() const
 	}
 
 	TArray<FString> Lines;
-	Lines.Add(TEXT("TEAM TANKS (Driver / Gunner / Commander)"));
+	Lines.Add(TEXT("TEAM TANKS"));
 
 	for (ETSTeamId TeamId : DebugTeams)
 	{
@@ -366,13 +370,26 @@ FString UTSRoleDebugWidget::DescribeTeamTanks() const
 			continue;
 		}
 
+		Lines.Add(FString::Printf(TEXT("  %s  -  %s"),
+			*UTSTypeUtils::TeamIdToString(TeamId), *Tank->GetName()));
+
 		const UTSTankCrewComponent* Crew = Tank->FindComponentByClass<UTSTankCrewComponent>();
-		Lines.Add(FString::Printf(TEXT("  %-8s %-22s %s / %s / %s"),
-			*UTSTypeUtils::TeamIdToString(TeamId),
-			*Tank->GetName(),
-			*OccupantName(Crew, ETSCrewRole::Driver),
-			*OccupantName(Crew, ETSCrewRole::Gunner),
-			*OccupantName(Crew, ETSCrewRole::Commander)));
+		if (!Crew)
+		{
+			// Without the component there are no seats at all, so say that rather than printing three
+			// empty ones and leaving it looking like nobody has picked a role yet.
+			Lines.Add(TEXT("      <tank has no TSTankCrewComponent - add one to the tank Blueprint>"));
+			continue;
+		}
+
+		// One line per seat, labelled. The previous single line relied on space padding to line the
+		// names up under a "(Driver / Gunner / Commander)" heading, which a proportional font does not
+		// honour - so which name sat in which seat was anyone's guess.
+		for (const ETSCrewRole Role : { ETSCrewRole::Driver, ETSCrewRole::Gunner, ETSCrewRole::Commander })
+		{
+			Lines.Add(FString::Printf(TEXT("      %s: %s"),
+				*UTSTypeUtils::CrewRoleToString(Role), *OccupantName(Crew, Role)));
+		}
 	}
 
 	if (Lines.Num() == 1)

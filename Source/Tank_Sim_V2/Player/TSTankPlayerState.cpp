@@ -11,6 +11,33 @@ void ATSTankPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(ATSTankPlayerState, AssignedTank);
 }
 
+void ATSTankPlayerState::CopyProperties(APlayerState* PlayerState)
+{
+	Super::CopyProperties(PlayerState);
+
+	if (ATSTankPlayerState* NewPlayerState = Cast<ATSTankPlayerState>(PlayerState))
+	{
+		NewPlayerState->TeamId = TeamId;
+		NewPlayerState->CrewRole = CrewRole;
+
+		// Deliberately not AssignedTank: that actor belongs to the world being left behind. The
+		// GameMode spawns the team's tank again on the new map and re-seats the crew there.
+		NewPlayerState->AssignedTank = nullptr;
+	}
+}
+
+void ATSTankPlayerState::OverrideWith(APlayerState* PlayerState)
+{
+	Super::OverrideWith(PlayerState);
+
+	if (const ATSTankPlayerState* OldPlayerState = Cast<ATSTankPlayerState>(PlayerState))
+	{
+		TeamId = OldPlayerState->TeamId;
+		CrewRole = OldPlayerState->CrewRole;
+		AssignedTank = OldPlayerState->AssignedTank;
+	}
+}
+
 void ATSTankPlayerState::SetTeamId(ETSTeamId NewTeamId)
 {
 	if (!HasAuthority() || TeamId == NewTeamId)

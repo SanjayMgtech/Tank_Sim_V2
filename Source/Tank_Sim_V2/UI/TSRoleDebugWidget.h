@@ -58,6 +58,11 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Debug", meta = (ClampMin = "6", ClampMax = "48"))
 	int32 FontSize = 13;
 
+	// Wrap width for the status lines. A spawned tank's actor name is long enough that an unwrapped
+	// line runs off the right edge of the screen, taking the crew names with it.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Debug", meta = (ClampMin = "200.0"))
+	float PanelWrapWidth = 760.f;
+
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Debug")
 	TObjectPtr<UBorder> RootBorder;
 

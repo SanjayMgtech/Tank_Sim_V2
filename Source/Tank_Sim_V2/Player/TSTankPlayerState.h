@@ -17,6 +17,13 @@ class ATSTankPlayerState : public APlayerState
 public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
+	// Carry the crew assignment across a PlayerState being replaced. The engine builds a fresh
+	// PlayerState on seamless travel (SeamlessTravelTo -> CopyProperties) and when replacing one for a
+	// returning player (OverrideWith); without these the team and seat the host assigned in the lobby
+	// silently reset to None the moment the match travels to the battle map.
+	virtual void CopyProperties(APlayerState* PlayerState) override;
+	virtual void OverrideWith(APlayerState* PlayerState) override;
+
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	ETSTeamId GetTeamId() const { return TeamId; }
 
