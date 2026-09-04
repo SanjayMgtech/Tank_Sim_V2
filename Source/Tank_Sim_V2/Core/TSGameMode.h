@@ -21,6 +21,11 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
+
+	// Seamless travel does not call PostLogin - each carried-over player arrives here instead. Their
+	// team and seat survive via ATSTankPlayerState::CopyProperties, but their tank does not (it
+	// belonged to the world we left), so this re-spawns the team tank and re-seats them.
+	virtual void HandleSeamlessTravelPlayer(AController*& C) override;
 	virtual void InitGameState() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void Logout(AController* Exiting) override;

@@ -80,6 +80,15 @@ void ATSTankPlayerController::ShowRoleDebugWidget(bool bShow)
 		return;
 	}
 
+	// Seamless travel can reuse this PlayerController, in which case RoleDebugWidget still points at
+	// the widget built for the world we just left. Drop it rather than re-adding a widget whose
+	// GetWorld() is the dead one.
+	if (RoleDebugWidget && RoleDebugWidget->GetWorld() != GetWorld())
+	{
+		RoleDebugWidget->RemoveFromParent();
+		RoleDebugWidget = nullptr;
+	}
+
 	if (!RoleDebugWidget)
 	{
 		TSubclassOf<UTSRoleDebugWidget> WidgetClass = RoleDebugWidgetClass;

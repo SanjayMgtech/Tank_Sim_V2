@@ -40,6 +40,13 @@ ATSGameMode::ATSGameMode()
 	GameStateClass = ATSGameState::StaticClass();
 	PlayerStateClass = ATSTankPlayerState::StaticClass();
 
+	// Carry PlayerControllers and PlayerStates across ServerTravel so the crews the host assigned in
+	// the lobby survive the trip to the battle map. Note the very first travel (menu -> hosted map)
+	// is still non-seamless whatever this says: that travel is what creates the server, and there is
+	// nothing to carry yet. No transition map is configured, which is fine - the engine spins up a
+	// blank one; set Project Settings > Maps & Modes > Transition Map if you want a loading screen.
+	bUseSeamlessTravel = true;
+
 	static ConstructorHelpers::FClassFinder<APawn> T90ChaosBP(TEXT("/Game/YI_TankCollection/Blueprint/Tank_T90/Controller/BP_T90_Controller_Chaos"));
 	if (T90ChaosBP.Succeeded())
 	{
@@ -127,6 +134,53 @@ TSubclassOf<APawn> ATSGameMode::GetTankClassForTeam(ETSTeamId TeamId) const
 		}
 	}
 	return DefaultTankClass;
+}
+
+void ATSGameMode::HandleSeamlessTravelPlayer(AController*& C)
+{
+	Super::HandleSeamlessTravelPlayer(C);
+
+	APlayerController* PC = Cast<APlayerController>(C);
+	ATSTankPlayerState* PS = PC ? PC->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	if (!PS)
+	{
+		return;
+	}
+
+	if (ATSGameState* GS = GetGameState<ATSGameState>())
+	{
+		if (GS->GetMatchState() == ETSMatchState::WaitingForPlayers)
+		{
+			GS->SetMatchState(ETSMatchState::TeamAndRoleSelection);
+		}
+	}
+
+	// Named SeatRole, not Role: AActor still declares a (deprecated) member called Role, and C4458
+	// correctly flags shadowing it - the same reason TryAssignRole takes a RequestedRole.
+	const ETSTeamId Team = PS->GetTeamId();
+	const ETSCrewRole SeatRole = PS->GetCrewRole();
+	if (Team == ETSTeamId::None || SeatRole == ETSCrewRole::None)
+	{
+		// Unassigned before travel, so nothing to restore - the host seats them on this map.
+		return;
+	}
+
+	// CopyProperties deliberately left AssignedTank null; TryAssignRole spawns this team's tank on
+	// the new map (or finds the one an earlier crewmate's arrival already spawned) and re-seats them.
+	PS->SetAssignedTank(nullptr);
+
+	if (TryAssignRole(PC, SeatRole))
+	{
+		UE_LOG(LogTankSim, Log, TEXT("Seamless travel: restored '%s' as %s on %s."),
+			*PS->GetPlayerName(), *UTSTypeUtils::CrewRoleToString(SeatRole), *UTSTypeUtils::TeamIdToString(Team));
+	}
+	else
+	{
+		// Leave the team intact so the host can re-seat them from the console.
+		PS->SetCrewRole(ETSCrewRole::None);
+		UE_LOG(LogTankSim, Warning, TEXT("Seamless travel: could not restore '%s' as %s on %s - seat cleared."),
+			*PS->GetPlayerName(), *UTSTypeUtils::CrewRoleToString(SeatRole), *UTSTypeUtils::TeamIdToString(Team));
+	}
 }
 
 void ATSGameMode::PostLogin(APlayerController* NewPlayer)
