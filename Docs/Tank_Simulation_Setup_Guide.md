@@ -336,13 +336,17 @@ time from Blueprint; teams that already have a tank are skipped.
 
 In the Editor:
 
-1. **`WarZone` → World Settings → GameMode Override = `BP_TSGameMode`.** `DefaultEngine.ini` sets the
-   *global* default to `Tank_GameMode` (the YI_TankCollection one), so without this override
-   `ATSGameMode` never runs and nothing spawns.
-2. **`BP_TSGameMode` → Class Defaults → Tank Simulation:**
-   - `Default Tank Class` = your tank Blueprint. It must implement `ITSTankInterface` and carry a
-     `TSTankCrewComponent`. Leave `Team Tank Class Overrides` empty unless the teams drive different
-     tanks.
+1. **`WarZone` → World Settings → GameMode Override = `BP_TSGameMode`** (or `BP_TeamMatchGameMode`,
+   which derives from it and adds auto team/role assignment). Without the override the map runs
+   whatever `DefaultEngine.ini`'s `GlobalDefaultGameMode` points at, `ATSGameMode` never runs, and
+   nothing spawns.
+2. **GameMode → Class Defaults → Tank Simulation:**
+   - `Default Tank Class` — already set in C++ to `BP_T90_Controller_Chaos` via `ConstructorHelpers`,
+     so this only needs changing if you want a different tank. It must implement `ITSTankInterface`
+     and carry a `TSTankCrewComponent`.
+   - `Team Tank Class Overrides` (base) / `Team Tank Classes` (`ATSTeamMatchGameMode`) — per-team
+     tanks. `GetTankClassForTeam` is virtual: the team-match map wins where it has an entry, then the
+     base map, then `Default Tank Class`.
    - `Num Teams To Pre Spawn` = 2 (or up to `Max Teams`).
 3. **The tank Blueprint → Class Defaults → `Replicates` = true**, otherwise it exists on the host only.
 4. **Place spawn points in `WarZone`.** Any actor tagged `TSTeamSpawn_TeamA` / `_TeamB` / `_TeamC` /
@@ -350,7 +354,14 @@ In the Editor:
    Start Tag* is that name. With no tagged actor the tanks fall back to a world-origin offset and log
    a warning.
 5. **Host with `?listen`** — `ServerTravel` to `/Game/TankSimulation/Maps/WarZone?listen`. Without it
-   the map runs standalone and clients cannot connect.
+   the map runs standalone and clients cannot connect. Note `ATSGameMode::GameplayMapName` still
+   defaults to `Controller_Demo_T90`, which is where `StartTankMatch()` travels — set it to `WarZone`
+   in the GameMode's Class Defaults if you use that path rather than travelling from the menu.
+
+Note that team tanks now spawn from two places, deliberately: `BeginPlay` pre-spawns TeamA…TeamN so
+the battlefield is populated before anyone picks anything, and `TryAssignTeam` still spawns on demand
+for a team beyond `NumTeamsToPreSpawn`. Both go through `GetOrSpawnTankForTeam`, which is a no-op for
+a team that already has a tank.
 
 Watch the Output Log filtered to `LogTankSim`: it reports the tank name, team and location per spawn,
 and says explicitly when `Default Tank Class` is unset (also as a red on-screen message).
