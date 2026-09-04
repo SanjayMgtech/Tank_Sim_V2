@@ -3,6 +3,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetMathLibrary.h"
 #include "Net/UnrealNetwork.h"
 
 ATSTankControllerBase::ATSTankControllerBase()
@@ -148,6 +149,38 @@ void ATSTankControllerBase::WheelRotationDefinition(double Distance, double Whee
 	const double Revolutions = FMath::IsNearlyZero(Circumference) ? 0.0 : (Distance / Circumference);
 
 	Degrees = (-360.0 * Revolutions) + StartAngle;
+}
+
+void ATSTankControllerBase::RecalculateGunAndTurretRotation()
+{
+	// 1:1 port. Both halves share the same Select Float: A=1.0, B=-1.0, bPickA=Stabilization,
+	// and SelectFloat returns A when bPickA is true.
+	const double Sign = Stabilization ? 1.0 : -1.0;
+
+	// --- Turrets (graph comment "Turrets") ---
+	// MakeRotator(Roll, Pitch, Yaw) is FRotator(Pitch, Yaw, Roll) - only Yaw is fed here.
+	FRotator RotCorrector = UKismetMathLibrary::MakeRotator(0.0, 0.0, GetActorRotation().Yaw * Sign);
+
+	// ComposeRotators(A, B) is FRotator(FQuat(B) * FQuat(A)) - NOT A + B. Called through
+	// Kismet so the quaternion order and normalisation match the graph exactly.
+	for (FRotator& TurretRot : TurretsRotUnstabilized)
+	{
+		TurretRot = UKismetMathLibrary::ComposeRotators(TurretRot, RotCorrector);
+	}
+
+	// --- Guns (graph comment "Guns") ---
+	// This half reads the "turret" socket's PITCH off the mesh, not the actor rotation.
+	// Mesh null-checked like HullAccelerationDefinition: the Blueprint would log
+	// "Accessed None" and continue with zero, so falling back to a zero rotator matches.
+	const USkeletalMeshComponent* MeshComp = GetMesh();
+	const double SocketPitch = MeshComp ? MeshComp->GetSocketRotation(TEXT("turret")).Pitch : 0.0;
+
+	RotCorrector = UKismetMathLibrary::MakeRotator(0.0, SocketPitch * Sign, 0.0);
+
+	for (FRotator& GunRot : GunsRotUnstabilized)
+	{
+		GunRot = UKismetMathLibrary::ComposeRotators(GunRot, RotCorrector);
+	}
 }
 
 bool ATSTankControllerBase::IsTurretSimulatedLocally() const

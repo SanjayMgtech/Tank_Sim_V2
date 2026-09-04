@@ -110,6 +110,20 @@ public:
 	bool IsTurretRotating = false;
 
 	// ---------------------------------------------------------------------
+	// Phase 18: moved so RecalculateGunAndTurretRotation can read it from C++.
+	//
+	// Pure runtime scratch - written once in the EventGraph (the stabilizer input)
+	// and read six times. Verified false on the master AND all six per-tank
+	// Blueprints before moving, so there is no override to lose.
+	//
+	// Category is "Hidden (Used for logic)" with no subcategory, unlike the
+	// Turret-suffixed group above; carried across verbatim so the details panel
+	// groups it where it was.
+	// ---------------------------------------------------------------------
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)")
+	bool Stabilization = false;
+
+	// ---------------------------------------------------------------------
 	// Phase 7: antenna / UI / misc runtime scratch. First FVector, float and int32.
 	//
 	// Verified against all six per-tank Blueprints: every one of these matches the
@@ -481,6 +495,33 @@ public:
 	//   Degrees       = -360 * (Distance / Circumference) + StartAngle
 	UFUNCTION(BlueprintCallable, Category = "Chassis")
 	void WheelRotationDefinition(double Distance, double WheelRadius, double TrackThickness, double WheelSpeedCorrectionUV, double WheelStartAngleLeftGeoTracks, double WheelStartAngleRightGeoTracks, double WheelStartAngleLeftUVTracks, double WheelStartAngleRightUVTracks, bool LeftWheel, double& Degrees);
+
+	// ---------------------------------------------------------------------
+	// Phase 18: RecalculateGunAndTurretRotation. No parameters, no outputs.
+	//
+	// Re-bases the unstabilized turret/gun rotations when the stabilizer is
+	// toggled, so the turret does not jump. Ported 1:1:
+	//
+	//   Sign        = Stabilization ? 1.0 : -1.0                (Select Float A/B)
+	//   RotCorrector = MakeRotator(0, 0, ActorRotation.Yaw * Sign)
+	//   for each i:  TurretsRotUnstabilized[i] = Compose(elem, RotCorrector)
+	//   RotCorrector = MakeRotator(0, Mesh socket "turret" Pitch * Sign, 0)
+	//   for each i:  GunsRotUnstabilized[i]    = Compose(elem, RotCorrector)
+	//
+	// RotCorrector is a function-LOCAL variable in the Blueprint, not a member -
+	// it does not appear in the variable list, so it stays a C++ local. Both
+	// loops read and write the SAME array in place (the ForEach's array pin and
+	// the SetArrayElem's target pin are two Get nodes for one variable).
+	//
+	// Only member read is Stabilization, moved just above for this port.
+	// The two arrays moved in Phase 8 and Mesh is the native pawn mesh, so
+	// nothing else needed migrating.
+	//
+	// Not BlueprintPure: get_functions reports is_pure=false and the single
+	// EventGraph call site wires exec pins.
+	// ---------------------------------------------------------------------
+	UFUNCTION(BlueprintCallable, Category = "Default")
+	void RecalculateGunAndTurretRotation();
 
 	// ---------------------------------------------------------------------
 	// Multiplayer jitter fix (NOT a port phase - this CHANGES behaviour).
