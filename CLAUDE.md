@@ -785,11 +785,25 @@ Inputs -> Set DamageCausedUI -> Branch(IsValid(HUD))
 the widget work is skipped. Pre-existing bug, not
 port-related — `HUD` was never moved to C++ (it is a Blueprint-only type, see NOT PORTABLE).
 
-**The same pattern applies to the other UI functions** — `UpdateHUD`, `UpdateHealthBar`,
-`WeaponSlotsDisplay`, `UpdateChosenWeaponUI`, `UpdateZoomRatioUI`, `UpdateChosenVehicleUI` and the
-`ReloadWeaponUI` macro all read `HUD` (58 reads across the Blueprint). They will produce the same
-errors on a non-local pawn whenever their code path runs in multiplayer. Guard them the same way
-if they show up.
+**The same guard is now applied to the other UI entry points** (2026-09-04). All of these read
+`HUD` and would fail the same way on a non-local pawn, so each gained
+`Branch(IsValid(HUD))` at its function entry, true path into the original chain, `else`
+left unconnected (they have no outputs, so execution simply ends):
+`UpdateHealthBar`, `UpdateZoomRatioUI`, `UpdateChosenVehicleUI`, `UpdateChosenWeaponUI`,
+`WeaponSlotsDisplay`.
+
+Two deliberate exclusions:
+- **`UpdateHUD` was already guarded** by the original author — its entry runs through an
+  `Is Valid` macro before anything else. Nothing to do.
+- **`ReloadWeaponUI` is deliberately NOT guarded.** Unlike the others it is not pure UI: its
+  Outputs node has TWO exec pins (`Reloaded` / `NotReloaded`) that drive caller logic, and its
+  reload progress is stored in the widget itself (`Get Percent` / `Set Percent` on the progress
+  bar). Skipping it would leave the caller with no exec path and could break reloading. A guard
+  was started, then reverted. If it ever spams, it needs a considered fix, not this pattern.
+
+**Check before guarding: is the function pure UI?** Every exec node a widget call, and no
+outputs. If it returns exec pins or stores state, gating the whole thing changes behaviour.
+
 
 ## ✅ FIXED — multiplayer turret aiming (both directions verified 2026-09-04)
 
