@@ -11,6 +11,9 @@
 
 class ATSTankPlayerState;
 class UTSSessionSubsystem;
+class UUserWidget;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FTSOnRoleRequestResult, ETSCrewRole, RequestedRole, bool, bAccepted);
 
 UCLASS()
 class ATSTankPlayerController : public APlayerController
@@ -18,11 +21,36 @@ class ATSTankPlayerController : public APlayerController
 	GENERATED_BODY()
 
 public:
+	ATSTankPlayerController();
+
+	virtual void BeginPlay() override;
+	virtual void OnRep_PlayerState() override;
+
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	APawn* GetAssignedTank() const;
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Session")
 	UTSSessionSubsystem* GetSessionSubsystem() const;
+
+	// --- UI Management --------------------------------------------------------------------------
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|UI")
+	TSubclassOf<UUserWidget> TeamSelectionWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|UI")
+	TSubclassOf<UUserWidget> RoleSelectionWidgetClass;
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void RefreshSelectionUI();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void ShowTeamSelectionUI();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void ShowRoleSelectionUI();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void HideSelectionUI();
 
 	// --- Team / role selection (validated by ATSGameMode) ---------------------------------------
 	// Named to match the Developer 1 shared contract (Tank_Simulation_Developer_Documentation.pdf
@@ -32,7 +60,22 @@ public:
 	void ServerRequestTeamChange(ETSTeamId NewTeam);
 
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
+	void ServerHostAssignPlayerToTeam(APlayerState* TargetPlayerState, ETSTeamId NewTeam);
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerRequestRoleChange(ETSCrewRole NewRole);
+
+	UFUNCTION(Client, Reliable)
+	void ClientRoleRequestResult(ETSCrewRole RequestedRole, bool bAccepted);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
+	void ReadyToSpawn();
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Crew")
+	void ServerReadyToSpawn();
+
+	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Crew")
+	FTSOnRoleRequestResult OnRoleRequestResult;
 
 	// --- Tank gameplay requests (validated by the tank's components) ----------------------------
 	// Drive/aim are Unreliable: they are sent every frame of input and a dropped packet is
@@ -62,4 +105,13 @@ public:
 
 private:
 	ATSTankPlayerState* GetTankPlayerState() const;
+
+	UFUNCTION()
+	void HandleAssignmentChanged();
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> ActiveTeamSelectionWidget = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> ActiveRoleSelectionWidget = nullptr;
 };

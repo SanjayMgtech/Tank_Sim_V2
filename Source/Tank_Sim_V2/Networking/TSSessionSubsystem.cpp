@@ -9,6 +9,8 @@
 
 namespace
 {
+	const FName LobbyCodeKey = TEXT("LOBBY_CODE");
+
 	// On-screen (not just log) confirmation of session lifecycle events - each PIE/game window prints
 	// only what happens in its own process, so running two windows side by side shows host vs. client
 	// activity separately without needing to dig through logs.
@@ -88,6 +90,97 @@ IOnlineSessionPtr UTSSessionSubsystem::GetSessionInterface() const
 	return Subsystem ? Subsystem->GetSessionInterface() : nullptr;
 }
 
+void UTSSessionSubsystem::SetStatus(ETSSessionStatus NewStatus, const FString& Message)
+{
+	CurrentStatus = NewStatus;
+	OnLobbyStatusChanged.Broadcast(CurrentStatus, Message);
+}
+
+FString UTSSessionSubsystem::GenerateLobbyCode() const
+{
+	FString Code;
+	const TCHAR Alphabet[] = TEXT("ABCDEFGHJKLMNPQRSTUVWXYZ23456789");
+	for (int32 Index = 0; Index < 6; ++Index)
+	{
+		Code.AppendChar(Alphabet[FMath::RandRange(0, UE_ARRAY_COUNT(Alphabet) - 2)]);
+	}
+	return Code;
+}
+
+void UTSSessionSubsystem::CreateLobby(int32 MaxPlayers)
+{
+	IOnlineSessionPtr Sessions = GetSessionInterface();
+	EnsureDelegatesBound(Sessions);
+
+	const ULocalPlayer* LocalPlayer = GetGameInstance() ? GetGameInstance()->GetFirstGamePlayer() : nullptr;
+	if (!Sessions || !LocalPlayer)
+	{
+		SetStatus(ETSSessionStatus::Failed, TEXT("Online session interface or local player is not available."));
+		OnCreateSessionComplete.Broadcast(false);
+		return;
+	}
+
+	CurrentLobbyCode = GenerateLobbyCode();
+	OnLobbyCodeGenerated.Broadcast(CurrentLobbyCode);
+	SetStatus(ETSSessionStatus::Creating, TEXT("Creating lobby."));
+
+	FOnlineSessionSettings SessionSettings;
+	SessionSettings.bShouldAdvertise = true;
+	SessionSettings.bAllowJoinInProgress = true;
+	SessionSettings.bAllowJoinViaPresence = true;
+	SessionSettings.bUsesPresence = true;
+	SessionSettings.bUseLobbiesIfAvailable = true;
+	SessionSettings.Set(LobbyCodeKey, CurrentLobbyCode, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+
+	SessionSettings.NumPublicConnections = FMath::Max(MaxPlayers, 3);
+	if (IOnlineSubsystem* OnlineSubsystem = Online::GetSubsystem(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr))
+	{
+		SessionSettings.bIsLANMatch = OnlineSubsystem->GetSubsystemName() == FName(TEXT("NULL"));
+	}
+
+	PrintOnScreen(FString::Printf(TEXT("[Session] Creating lobby with code '%s' (MaxPlayers=%d)..."), *CurrentLobbyCode, SessionSettings.NumPublicConnections), FColor::Yellow);
+	Sessions->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, SessionSettings);
+}
+
+void UTSSessionSubsystem::JoinLobbyByCode(const FString& LobbyCode)
+{
+	IOnlineSessionPtr Sessions = GetSessionInterface();
+	EnsureDelegatesBound(Sessions);
+
+	const ULocalPlayer* LocalPlayer = GetGameInstance() ? GetGameInstance()->GetFirstGamePlayer() : nullptr;
+	if (!Sessions || !LocalPlayer)
+	{
+		SetStatus(ETSSessionStatus::Failed, TEXT("Online session interface or local player is not available."));
+		OnFindSessionsComplete.Broadcast(false, TArray<FTSSessionSearchResult>());
+		return;
+	}
+
+	PendingJoinCode = LobbyCode.TrimStartAndEnd().ToUpper();
+	if (PendingJoinCode.IsEmpty())
+	{
+		SetStatus(ETSSessionStatus::Failed, TEXT("Enter a lobby code."));
+		OnFindSessionsComplete.Broadcast(false, TArray<FTSSessionSearchResult>());
+		return;
+	}
+
+	SetStatus(ETSSessionStatus::Searching, TEXT("Searching for lobby code."));
+
+	SessionSearch = MakeShared<FOnlineSessionSearch>();
+	SessionSearch->MaxSearchResults = 100;
+	if (IOnlineSubsystem* OnlineSubsystem = Online::GetSubsystem(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr))
+	{
+		SessionSearch->bIsLanQuery = OnlineSubsystem->GetSubsystemName() == FName(TEXT("NULL"));
+	}
+
+	PrintOnScreen(FString::Printf(TEXT("[Session] Searching for lobby code '%s'..."), *PendingJoinCode), FColor::Yellow);
+	Sessions->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(), SessionSearch.ToSharedRef());
+}
+
+void UTSSessionSubsystem::LeaveLobby()
+{
+	DestroySession();
+}
+
 void UTSSessionSubsystem::CreateSession(int32 MaxPlayers, bool bIsLAN, bool bIsPresence, FString MapPath)
 {
 	if (!MapPath.IsEmpty())
@@ -145,12 +238,21 @@ void UTSSessionSubsystem::HandleCreateSessionComplete(FName SessionName, bool bW
 
 	if (bWasSuccessful)
 	{
+		SetStatus(ETSSessionStatus::InLobby, TEXT("Lobby created."));
 		if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)
 		{
-			const FName MapToOpen = !HostMapPath.IsEmpty() ? FName(*HostMapPath) : FName(TEXT("/Game/TankSimulation/Maps/WarZone"));
-			PrintOnScreen(FString::Printf(TEXT("[Session] Host traveling to level %s ..."), *MapToOpen.ToString()), FColor::Cyan);
-			UGameplayStatics::OpenLevel(World, MapToOpen, true, TEXT("listen"));
+			const FString BaseMap = !HostMapPath.IsEmpty() ? HostMapPath : TEXT("/Game/TankSimulation/Maps/WarZone");
+			const FString TravelUrl = !CurrentLobbyCode.IsEmpty()
+				? FString::Printf(TEXT("%s?listen?LobbyCode=%s"), *BaseMap, *CurrentLobbyCode)
+				: FString::Printf(TEXT("%s?listen"), *BaseMap);
+
+			PrintOnScreen(FString::Printf(TEXT("[Session] Host traveling to level %s ..."), *TravelUrl), FColor::Cyan);
+			World->ServerTravel(TravelUrl, false);
 		}
+	}
+	else
+	{
+		SetStatus(ETSSessionStatus::Failed, TEXT("Lobby creation failed."));
 	}
 
 	OnCreateSessionComplete.Broadcast(bWasSuccessful);
@@ -191,6 +293,25 @@ void UTSSessionSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 			Entry.PingMs = Result.PingInMs;
 			Results.Add(Entry);
 		}
+	}
+
+	if (!PendingJoinCode.IsEmpty())
+	{
+		if (bWasSuccessful && SessionSearch.IsValid())
+		{
+			for (int32 Index = 0; Index < SessionSearch->SearchResults.Num(); ++Index)
+			{
+				const FOnlineSessionSearchResult& Result = SessionSearch->SearchResults[Index];
+				FString FoundCode;
+				if (Result.Session.SessionSettings.Get(LobbyCodeKey, FoundCode) && FoundCode.Equals(PendingJoinCode, ESearchCase::IgnoreCase))
+				{
+					SetStatus(ETSSessionStatus::Joining, TEXT("Joining lobby."));
+					JoinSession(Index);
+					return;
+				}
+			}
+		}
+		SetStatus(ETSSessionStatus::Failed, TEXT("No lobby found for that code."));
 	}
 
 	PrintOnScreen(FString::Printf(TEXT("[Session] Search complete: success=%s, found %d session(s)."),
@@ -241,6 +362,7 @@ void UTSSessionSubsystem::HandleJoinSessionComplete(FName SessionName, EOnJoinSe
 
 	if (bWasSuccessful)
 	{
+		SetStatus(ETSSessionStatus::InLobby, TEXT("Joined lobby."));
 		if (IOnlineSessionPtr Sessions = GetSessionInterface())
 		{
 			FString ConnectString;
@@ -261,6 +383,10 @@ void UTSSessionSubsystem::HandleJoinSessionComplete(FName SessionName, EOnJoinSe
 				PrintOnScreen(FString::Printf(TEXT("[Session] Could not resolve a connect string for session '%s' - cannot travel."), *SessionName.ToString()), FColor::Red);
 			}
 		}
+	}
+	else
+	{
+		SetStatus(ETSSessionStatus::Failed, TEXT("Join lobby failed."));
 	}
 
 	OnJoinSessionComplete.Broadcast(bWasSuccessful);
@@ -288,6 +414,10 @@ void UTSSessionSubsystem::DestroySession()
 
 void UTSSessionSubsystem::HandleDestroySessionComplete(FName SessionName, bool bWasSuccessful)
 {
+	CurrentLobbyCode.Empty();
+	PendingJoinCode.Empty();
+	SetStatus(ETSSessionStatus::Idle, bWasSuccessful ? TEXT("Left lobby.") : TEXT("No active lobby."));
+
 	if (bDestroyThenCreatePending)
 	{
 		bDestroyThenCreatePending = false;

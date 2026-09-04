@@ -20,4 +20,19 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
 	void NotifyRoleSelected(ETSCrewRole Role);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	ETSTeamId GetMyTeamId() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	APawn* GetMyTeamTank() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	bool IsRoleOccupied(ETSCrewRole Role) const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	ETSCrewRole GetNextAvailableRole() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void AutoSelectRole();
 };

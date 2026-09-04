@@ -2,12 +2,14 @@
 
 #include "Core/TSGameState.h"
 #include "EngineUtils.h"
+#include "GameFramework/GameSession.h"
 #include "Kismet/GameplayStatics.h"
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Player/TSVRPawn.h"
 #include "Tank/TSTank.h"
 #include "Tank/TSTankCrewComponent.h"
+#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -32,11 +34,43 @@ ATSGameMode::ATSGameMode()
 	PlayerControllerClass = ATSTankPlayerController::StaticClass();
 	GameStateClass = ATSGameState::StaticClass();
 	PlayerStateClass = ATSTankPlayerState::StaticClass();
+
+	static ConstructorHelpers::FClassFinder<APawn> T90ChaosBP(TEXT("/Game/YI_TankCollection/Blueprint/Tank_T90/Controller/BP_T90_Controller_Chaos"));
+	if (T90ChaosBP.Succeeded())
+	{
+		DefaultTankClass = T90ChaosBP.Class;
+	}
+}
+
+void ATSGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
+{
+	Super::InitGame(MapName, Options, ErrorMessage);
+
+	PendingLobbyCode = UGameplayStatics::ParseOption(Options, TEXT("LobbyCode"));
+}
+
+void ATSGameMode::InitGameState()
+{
+	Super::InitGameState();
+
+	if (ATSGameState* TankGameState = GetGameState<ATSGameState>())
+	{
+		TankGameState->SetLobbyCode(PendingLobbyCode.IsEmpty() ? GenerateLobbyCode() : PendingLobbyCode);
+	}
 }
 
 void ATSGameMode::PostLogin(APlayerController* NewPlayer)
 {
 	Super::PostLogin(NewPlayer);
+
+	if (GameState && GameState->PlayerArray.Num() > MaxCrewMembers)
+	{
+		if (GameSession)
+		{
+			GameSession->KickPlayer(NewPlayer, FText::FromString(TEXT("Tank crew lobby is full.")));
+		}
+		return;
+	}
 
 	if (ATSGameState* GS = GetGameState<ATSGameState>())
 	{
@@ -49,6 +83,11 @@ void ATSGameMode::PostLogin(APlayerController* NewPlayer)
 
 void ATSGameMode::Logout(AController* Exiting)
 {
+	if (ATSGameState* GS = GetGameState<ATSGameState>())
+	{
+		GS->ClearPlayerRole(Exiting ? Exiting->PlayerState : nullptr);
+	}
+
 	if (ATSTankPlayerState* PS = Exiting ? Exiting->GetPlayerState<ATSTankPlayerState>() : nullptr)
 	{
 		if (APawn* Tank = PS->GetAssignedTank())
@@ -61,6 +100,61 @@ void ATSGameMode::Logout(AController* Exiting)
 	}
 
 	Super::Logout(Exiting);
+}
+
+void ATSGameMode::StartTankMatch()
+{
+	if (!AreAllRolesFilled())
+	{
+		return;
+	}
+
+	if (GameplayMapName != NAME_None)
+	{
+		GetWorld()->ServerTravel(GameplayMapName.ToString(), true);
+	}
+}
+
+void ATSGameMode::HandlePlayerReadyToSpawn(ATSTankPlayerController* PlayerController)
+{
+	if (!PlayerController || PlayerController->GetPawn())
+	{
+		return;
+	}
+
+	const ATSTankPlayerState* TankPS = PlayerController->GetPlayerState<ATSTankPlayerState>();
+	if (!TankPS)
+	{
+		return;
+	}
+
+	const ETSTeamId TeamId = TankPS->GetTeamId();
+	if (TeamId == ETSTeamId::None)
+	{
+		return;
+	}
+
+	APawn* Tank = GetOrSpawnTankForTeam(TeamId);
+	if (Tank)
+	{
+		PlayerController->Possess(Tank);
+	}
+}
+
+bool ATSGameMode::AreAllRolesFilled() const
+{
+	return AreAllActiveTeamsFullyCrewed();
+}
+
+FString ATSGameMode::GenerateLobbyCode() const
+{
+	FString Code;
+	const TCHAR Alphabet[] = TEXT("ABCDEFGHJKLMNPQRSTUVWXYZ23456789");
+	for (int32 Index = 0; Index < 6; ++Index)
+	{
+		Code.AppendChar(Alphabet[FMath::RandRange(0, UE_ARRAY_COUNT(Alphabet) - 2)]);
+	}
+	return Code;
 }
 
 int32 ATSGameMode::CountPlayersOnTeam(ETSTeamId TeamId) const
@@ -121,6 +215,9 @@ bool ATSGameMode::TryAssignTeam(APlayerController* Player, ETSTeamId Team)
 	PS->SetTeamId(Team);
 	PS->SetCrewRole(ETSCrewRole::None);
 	PS->SetAssignedTank(nullptr);
+
+	// Immediately spawn/assign the BP_T90_Controller_Chaos tank for this team
+	GetOrSpawnTankForTeam(Team);
 
 	return true;
 }

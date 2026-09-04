@@ -19,8 +19,19 @@ class ATSGameMode : public AGameModeBase
 public:
 	ATSGameMode();
 
+	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
+	virtual void InitGameState() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void Logout(AController* Exiting) override;
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void StartTankMatch();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
+	void HandlePlayerReadyToSpawn(ATSTankPlayerController* PlayerController);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Lobby")
+	bool AreAllRolesFilled() const;
 
 	// Server only. Called from ATSTankPlayerController::ServerRequestTeamChange. Returns false if the
 	// team is full or invalid; on success the player's previous role (if any) is released. Takes
@@ -50,15 +61,24 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	int32 MaxTeams = 4;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
+	FName GameplayMapName = TEXT("Controller_Demo_T90");
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
+	int32 MaxCrewMembers = 3;
+
+	FString PendingLobbyCode;
+	FString GenerateLobbyCode() const;
+
 	// Optional actor tags ("TSTeamSpawn_TeamA" etc.) to place in the level for deterministic tank
 	// spawn locations. Falls back to a deterministic offset from the world origin if absent.
-	APawn* GetOrSpawnTankForTeam(ETSTeamId TeamId);
-	FTransform GetSpawnTransformForTeam(ETSTeamId TeamId) const;
-	bool IsTeamFull(ETSTeamId TeamId) const;
-	int32 CountPlayersOnTeam(ETSTeamId TeamId) const;
+	virtual APawn* GetOrSpawnTankForTeam(ETSTeamId TeamId);
+	virtual FTransform GetSpawnTransformForTeam(ETSTeamId TeamId) const;
+	virtual bool IsTeamFull(ETSTeamId TeamId) const;
+	virtual int32 CountPlayersOnTeam(ETSTeamId TeamId) const;
 
 	// True once every team with at least one player has all 3 crew seats filled - the actual "match
 	// has started" signal for ETSMatchState::InProgress (Section 6 step 6), as opposed to merely the
 	// first seat anywhere being filled.
-	bool AreAllActiveTeamsFullyCrewed() const;
+	virtual bool AreAllActiveTeamsFullyCrewed() const;
 };
