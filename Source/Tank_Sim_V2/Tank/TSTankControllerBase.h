@@ -518,4 +518,25 @@ public:
 	// ---------------------------------------------------------------------
 	UFUNCTION(BlueprintPure, Category = "Networking", meta = (ToolTip = "True when this machine should compute turret/gun rotation itself rather than use the replicated value."))
 	bool IsTurretSimulatedLocally() const;
+
+	// ---------------------------------------------------------------------
+	// Multiplayer fix 2: carry a client's aim UP to the server.
+	//
+	// Replication is server -> client only. ReplicateControlRotation writes
+	// Rep_ControlRotation when HasAuthority OR IsLocallyControlled, but on a client
+	// that write never travels anywhere, so the server never learns where the client
+	// is aiming and the client's turret is frozen for everyone else. There has never
+	// been a Server RPC in this project.
+	//
+	// ShouldSendAimToServer() is true only on a locally-controlled client - the one
+	// machine that knows the aim and is not the server.
+	//
+	// Unreliable on purpose: this is per-frame aim data. A reliable RPC every frame
+	// would flood the reliable buffer and can disconnect the client.
+	// ---------------------------------------------------------------------
+	UFUNCTION(BlueprintPure, Category = "Networking", meta = (ToolTip = "True only on a locally-controlled client, i.e. we must send our aim to the server."))
+	bool ShouldSendAimToServer() const;
+
+	UFUNCTION(Server, Unreliable, BlueprintCallable, Category = "Networking")
+	void ServerSetControlRotation(FRotator NewControlRotation);
 };

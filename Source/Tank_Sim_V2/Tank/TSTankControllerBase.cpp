@@ -157,3 +157,16 @@ bool ATSTankControllerBase::IsTurretSimulatedLocally() const
 	// write Rep_ControlRotation, kept deliberately identical so the two agree.
 	return HasAuthority() || IsLocallyControlled();
 }
+
+bool ATSTankControllerBase::ShouldSendAimToServer() const
+{
+	// Not the server, but we are the player aiming this tank.
+	return !HasAuthority() && IsLocallyControlled();
+}
+
+void ATSTankControllerBase::ServerSetControlRotation_Implementation(FRotator NewControlRotation)
+{
+	// Runs on the server. Writing the replicated property here is what makes the
+	// client's aim visible to everyone: it now replicates back down normally.
+	Rep_ControlRotation = NewControlRotation;
+}

@@ -764,6 +764,40 @@ Updated result table:
 | Server turret → seen by client | works, jittery | **works, smooth** ✅ |
 | Client turret → seen by server | does not work | does not work (fix 2, not attempted) |
 
+### FIX 2 APPLIED — Server RPC for client aim (awaiting multiplayer verification)
+Adds two C++ members and four nodes appended to `ReplicateControlRotation`:
+```cpp
+bool ShouldSendAimToServer() const { return !HasAuthority() && IsLocallyControlled(); }
+UFUNCTION(Server, Unreliable, BlueprintCallable) void ServerSetControlRotation(FRotator);
+```
+Graph (appended — nothing existing was rewired; both `Set Rep_ControlRotation` nodes had an
+unused `then` pin, so the new branch simply hangs off both):
+```
+Set Rep_ControlRotation (Stabilization TRUE ) --\
+Set Rep_ControlRotation (Stabilization FALSE) --+-> Branch(ShouldSendAimToServer)
+                                                     True -> ServerSetControlRotation(Rep_ControlRotation)
+```
+The server writes the replicated property in `_Implementation`, so the client's aim now travels
+up and then replicates back down to everyone normally.
+
+**`Unreliable` is deliberate** — this is per-frame aim data. A reliable RPC every frame floods the
+reliable buffer and can disconnect the client.
+
+**`BlueprintCallable` is required.** `UFUNCTION(Server, Unreliable)` alone compiles but the graph
+refuses it: *"Function 'ServerSetControlRotation' should not be called from a Blueprint"*. A
+Server RPC invoked from a graph needs `BlueprintCallable` as well.
+
+Single-player check: `gateLocal=True`, `sendToServer=False` — the RPC correctly does NOT fire
+offline. Rep rotation and turret values non-zero, PIE clean, 0 errors, and no LogNet warning
+naming this RPC.
+
+Unrelated pre-existing noise to ignore: `No owning connection for actor ... Function Server Slip
+Cosmetics` appears in teardown. It is a different Blueprint RPC and shows up in logs from long
+before this change (766 / 406 / 2340 occurrences in earlier sessions).
+
+**NOT YET VERIFIED IN MULTIPLAYER.** Needs the two-window test: turn the turret on the CLIENT and
+confirm the server sees it.
+
 ### If this is ever fixed, it is FEATURE work, not port repair
 1. Add a **Server RPC** carrying the locally-controlled client's aim to the server, and set
    `Rep_ControlRotation` there (authority only).
