@@ -364,7 +364,9 @@ function they call has already been moved and individually verified.**
 | 15 — **Rename** `SaggingCalculation` param (manual) | ✅ PASS | `HullDeltaXLocation` -> `InHullDeltaXLocation`, done by hand in the editor. Both call sites kept their wiring; signature clean; 0 errored BPs. |
 | 16 — `SaggingCalculation` | ✅ PASS | Ported 1:1 as **BlueprintPure**. Call site retargeted, no exec pins added, 0 orphaned. Math **bit-exact** (delta 0.000e+00) across both branches and both clamp boundaries. |
 | 17 — `UseGeometricTracks` + `WheelRotationDefinition` | ✅ PASS | Only member the function reads is `UseGeometricTracks` (True on all 6, zero override risk). **All 8 call sites** retargeted, 0 orphaned. Math **bit-exact** across both track modes and both wheel sides. |
-| 18+ — SCS component access pattern, then more functions | ⬜ next | |
+| 18 — `Stabilization` + `RecalculateGunAndTurretRotation` | ✅ PASS | Verified live (1 EventGraph call site) before porting. `Stabilization` false on master + all 6 tanks, no override to lose. `RotCorrector` is a BP function-LOCAL, stays a C++ local. All 8 comparisons **bit-exact** across BOTH `Stabilization` branches; turret yaw lands 18.237/21.763 mirrored around the seed of 20.0, proving the sign select. `G[0]` proves ComposeRotators is quaternion composition, not addition (`A+B` would give `(5.0,-3.339,-4.0)`). Call site retargeted, 0 orphaned pins. BP `UpToDate`, PIE `ok:true`. |
+| 19 — `SelfCollisionCheck` (needs GOLDEN-VALUE method) | ⬜ next | Last portable function. See the CORRECTION section. |
+| — SCS component access pattern | ⬜ blocked | Unlocks 11 more functions. A decision, not a port. |
 
 **Phase 14 — the override re-application procedure, proven end to end.**
 The loss happened exactly as predicted, then was recovered:
@@ -708,8 +710,49 @@ the `TurretsAndGunsRotCalculation` graph that carries the multiplayer aim fix.
 |---|---|---|---|
 | Permanently Blueprint-resident | 11 fns | ~533 | 3 projectile + 7 UI + `TurretsAndGunsRotCalculation` |
 | Blocked on the SCS-component decision | 11 fns | ~570 | all the spline / ISM / camera functions |
-| Open with no new decision needed | 5 fns | ~304 | `ChassisDistanceDefinition` 105, `SelfCollisionCheck` 67, `ScatteringCalculation` 66, `CameraPitchLimit` 38, `RecalculateGunAndTurretRotation` 28 |
+| Open with no new decision needed | **1 fn** | 67 | `SelfCollisionCheck` only — see the correction below |
 | Last by rule | 3 fns + EventGraph | ~818 | `ThrottleControl`, `TurningControl`, `UserConstructionScript`, Tick/input |
+
+### ⚠ CORRECTION — classify a function by its BODY, not its signature
+The "open" column above originally listed **five** functions. Three of them were wrong. They
+were classified from `get_functions` output — parameter and return types — which says nothing
+about what the body reads. Inspecting the graphs moved three straight into the blocked groups:
+
+| Function | Looked like | Actually reads | Verdict |
+|---|---|---|---|
+| `CameraPitchLimit` | `double` in, `double` out — pure math | `BP_TankWeapon` (`BP_TankWeapon_C`), its `Weapons` array of `S_Weapon`, and the `Camera` SCS component | NOT PORTABLE |
+| `ScatteringCalculation` | no params at all | `BP_TankWeapon` | NOT PORTABLE |
+| `ChassisDistanceDefinition` | no params at all | `TrackPath_R`, an SCS component | blocked on the SCS decision |
+
+`CameraPitchLimit` is the cautionary one: a `double`-in/`double`-out signature is exactly what a
+safe leaf function looks like, and its body reaches two Blueprint-generated types and a
+component.
+
+**Cheap way to check before committing to a port:** `search_nodes` for the known blocking
+symbols across the whole Blueprint and read off which graphs appear — one query per symbol
+covers every function at once, far cheaper than dumping each graph:
+```
+search_nodes  query: "BP_TankWeapon"      -> 26 hits across 11 graphs
+search_nodes  query: "TrackPath"          -> 52 hits across 12 graphs
+```
+Anything naming `BP_TankWeapon`, `BP_ProjectileMaster`, `HUD`, `Crosshair`, an `S_*` struct, or
+an SCS component is not a candidate.
+
+**Net remaining after Phase 18: exactly ONE portable function, `SelfCollisionCheck`.**
+It is clean — only the native pawn `Mesh`, three line traces and native math — and is called
+once, from `UpdateGunRotation` (itself permanently Blueprint-resident, which is fine; a C++ leaf
+under a Blueprint caller is the established pattern).
+
+**It needs a different verification method.** Every port from Phase 12 on was proved by a
+bit-exact numeric diff against a formula recomputed independently. `SelfCollisionCheck`'s output
+depends on three `LineTraceByChannel` calls against world geometry, so there is no closed-form
+expectation to diff against. Use golden values instead:
+1. **Before** touching anything, pin the tank's transform explicitly and call the *Blueprint*
+   version across several input sets; record the outputs.
+2. Port, rebuild, re-pin the identical transform, call the C++ version with the identical inputs.
+3. Diff against the recorded goldens.
+Capturing the goldens first is not optional — once `remove_function` runs, the reference
+implementation is gone and there is nothing left to compare against.
 
 **The port cannot reach 100%, and should not.** About a third of the remaining function nodes are
 permanently Blueprint-owned by design — that is the core principle working, not a shortfall.
