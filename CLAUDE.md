@@ -706,7 +706,7 @@ Check for RepNotify before choosing the specifier: search the Blueprint for `OnR
 `OnRep_*` functions. This project has none, so all three are plain `Replicated`, never
 `ReplicatedUsing`.
 
-## 🟡 PRE-EXISTING FEATURE GAP — multiplayer turret aiming (A/B tested 2026-09-04)
+## 🟡 PRE-EXISTING FEATURE GAP — multiplayer turret aiming (fix 1 DONE, fix 2 open)
 
 **Not caused by the port. Proven by A/B test, not by argument.** The same listen-server test was
 run at `c783cbf` (Phase 8, before replicated variables moved to C++) and at the current tip.
@@ -730,7 +730,7 @@ is no Server RPC anywhere in this Blueprint. Client turret aiming has never work
 frame and overwrites `TurretsRot`/`GunsRot` locally, fighting the value replicated from the
 server. The two writers alternate, which is what the jitter is.
 
-### FIX 1 APPLIED — jitter gate (awaiting multiplayer verification)
+### ✅ FIX 1 VERIFIED — jitter gate (tested in multiplayer 2026-09-04)
 `Event Tick` now gates the `TurretsAndGunsRotCalculation` call on a new C++ helper
 `IsTurretSimulatedLocally()` = `HasAuthority() || IsLocallyControlled()` — deliberately the same
 condition `ReplicateControlRotation` already uses.
@@ -753,8 +753,16 @@ Single-player regression check: `gate=True`, turret and gun rotations still non-
 still turning, PIE clean, 0 errors. Offline behaviour is unchanged by construction — a
 single-player pawn is both authority and locally controlled.
 
-**NOT YET VERIFIED IN MULTIPLAYER.** Needs the two-window listen-server test: does the client's
-view of the server's turret stop jittering? Until that is run, treat this as applied but unproven.
+**VERIFIED IN MULTIPLAYER 2026-09-04.** Two-window listen-server test: the client's view of the
+server's turret is now **smooth** — the jitter is gone. Wheels keep turning on the remote tank,
+confirming the False path still reaches `ExecutionSequence_0`.
+
+Updated result table:
+
+| Direction | Before fix 1 | After fix 1 |
+|---|---|---|
+| Server turret → seen by client | works, jittery | **works, smooth** ✅ |
+| Client turret → seen by server | does not work | does not work (fix 2, not attempted) |
 
 ### If this is ever fixed, it is FEATURE work, not port repair
 1. Add a **Server RPC** carrying the locally-controlled client's aim to the server, and set
