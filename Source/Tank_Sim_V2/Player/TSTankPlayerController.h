@@ -10,6 +10,8 @@
 #include "TSTankPlayerController.generated.h"
 
 class ATSTankPlayerState;
+class UTSRoleDebugWidget;
+class UTSUISubsystem;
 
 UCLASS()
 class ATSTankPlayerController : public APlayerController
@@ -17,8 +19,31 @@ class ATSTankPlayerController : public APlayerController
 	GENERATED_BODY()
 
 public:
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	APawn* GetAssignedTank() const;
+
+	// --- Local UI ownership ----------------------------------------------------------------------
+	// Section 10 makes the PlayerController the owner of this client's UI. On a gameplay map that
+	// means two things happen automatically for every local player, host and clients alike:
+	// the main-menu Login/Session Browser widgets are swept away, and the role debug panel is shown.
+
+	// Removes any main-menu widget still on screen (Login, Session Browser, ...). Delegates to
+	// UTSUISubsystem, which owns the menu-vs-gameplay map rule.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	int32 RemoveMenuWidgets();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Debug")
+	void ShowRoleDebugWidget(bool bShow);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Debug")
+	bool IsRoleDebugWidgetVisible() const;
+
+	// Console command: type "TSRoleDebug" in the ~ console to toggle the panel at runtime.
+	UFUNCTION(Exec)
+	void TSRoleDebug();
 
 	// --- Team / role selection (validated by ATSGameMode) ---------------------------------------
 	// Named to match the Developer 1 shared contract (Tank_Simulation_Developer_Documentation.pdf
@@ -56,6 +81,27 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerIssueCrewCommand(ETSCrewCommand Command);
 
+protected:
+	// Auto-create the role debug panel for this local player on gameplay maps.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
+	bool bShowRoleDebugWidgetOnGameplayMaps = true;
+
+	// Optional Blueprint restyle of the debug panel. Left empty, the pure-C++ UTSRoleDebugWidget is
+	// used, so no WBP asset is required.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
+	TSubclassOf<UTSRoleDebugWidget> RoleDebugWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
+	int32 RoleDebugWidgetZOrder = 1000;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Debug")
+	TObjectPtr<UTSRoleDebugWidget> RoleDebugWidget;
+
 private:
 	ATSTankPlayerState* GetTankPlayerState() const;
+	UTSUISubsystem* GetUISubsystem() const;
+
+	// Runs one tick after BeginPlay: the menu-map level Blueprint's own BeginPlay has finished by
+	// then, so a widget it created in the same frame is caught by the sweep rather than surviving it.
+	void ApplyLocalUIForCurrentMap();
 };

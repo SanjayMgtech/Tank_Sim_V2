@@ -19,8 +19,25 @@ class ATSGameMode : public AGameModeBase
 public:
 	ATSGameMode();
 
+	virtual void BeginPlay() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void Logout(AController* Exiting) override;
+
+	// Server only. Spawns the missing tank for every team from TeamA up to NumTeamsToPreSpawn and
+	// returns how many tanks exist afterwards. Called automatically from BeginPlay when
+	// bPreSpawnTeamTanks is set, so a hosted match has both teams' tanks standing on the map before
+	// anyone has picked a seat (previously a team's tank only appeared on its first role request).
+	// Safe to call again at any time - teams that already have a tank are skipped.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation")
+	int32 SpawnTeamTanks();
+
+	// Server only. Returns the team's existing tank, or spawns it now if the team has none.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation")
+	APawn* GetOrSpawnTankForTeam(ETSTeamId TeamId);
+
+	// TeamTankClassOverrides entry for this team if one is set, otherwise DefaultTankClass.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
+	TSubclassOf<APawn> GetTankClassForTeam(ETSTeamId TeamId) const;
 
 	// Server only. Called from ATSTankPlayerController::ServerRequestTeamChange. Returns false if the
 	// team is full or invalid; on success the player's previous role (if any) is released. Takes
@@ -47,12 +64,28 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation", meta = (MustImplement = "/Script/Tank_Sim_V2.TSTankInterface"))
 	TSubclassOf<APawn> DefaultTankClass;
 
+	// Per-team tank Blueprint. Any team without an entry here falls back to DefaultTankClass - leave
+	// the map empty when both sides drive the same tank.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation", meta = (MustImplement = "/Script/Tank_Sim_V2.TSTankInterface"))
+	TMap<ETSTeamId, TSubclassOf<APawn>> TeamTankClassOverrides;
+
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	int32 MaxTeams = 4;
 
+	// Spawn every team's tank up front in BeginPlay rather than lazily on the first role request.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
+	bool bPreSpawnTeamTanks = true;
+
+	// How many teams (TeamA, TeamB, ... in order) get a tank at BeginPlay. Clamped to MaxTeams.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation", meta = (ClampMin = "1", ClampMax = "4", EditCondition = "bPreSpawnTeamTanks"))
+	int32 NumTeamsToPreSpawn = 2;
+
+	// Fallback spacing along X between team tanks when the level has no TSTeamSpawn_* tagged actor.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
+	float FallbackTeamSpawnSpacing = 2000.f;
+
 	// Optional actor tags ("TSTeamSpawn_TeamA" etc.) to place in the level for deterministic tank
 	// spawn locations. Falls back to a deterministic offset from the world origin if absent.
-	APawn* GetOrSpawnTankForTeam(ETSTeamId TeamId);
 	FTransform GetSpawnTransformForTeam(ETSTeamId TeamId) const;
 	bool IsTeamFull(ETSTeamId TeamId) const;
 	int32 CountPlayersOnTeam(ETSTeamId TeamId) const;

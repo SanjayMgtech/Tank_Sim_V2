@@ -1,7 +1,10 @@
 #include "Core/TSGameMode.h"
 
 #include "Core/TSGameState.h"
+#include "Engine/Engine.h"
 #include "EngineUtils.h"
+#include "GameFramework/PlayerStart.h"
+#include "Tank_Sim_V2.h"
 #include "Kismet/GameplayStatics.h"
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
@@ -32,6 +35,58 @@ ATSGameMode::ATSGameMode()
 	PlayerControllerClass = ATSTankPlayerController::StaticClass();
 	GameStateClass = ATSGameState::StaticClass();
 	PlayerStateClass = ATSTankPlayerState::StaticClass();
+}
+
+void ATSGameMode::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (bPreSpawnTeamTanks)
+	{
+		SpawnTeamTanks();
+	}
+}
+
+int32 ATSGameMode::SpawnTeamTanks()
+{
+	if (!DefaultTankClass && TeamTankClassOverrides.Num() == 0)
+	{
+		const FString Message = TEXT("ATSGameMode: DefaultTankClass is not set - no team tanks can be spawned. Open your GameMode Blueprint (BP_TSGameMode) > Class Defaults > Tank Simulation > Default Tank Class and pick your tank Blueprint.");
+		UE_LOG(LogTankSim, Error, TEXT("%s"), *Message);
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(INDEX_NONE, 15.f, FColor::Red, Message);
+		}
+		return 0;
+	}
+
+	const int32 TeamCount = FMath::Clamp(NumTeamsToPreSpawn, 1, FMath::Min(MaxTeams, AllTeams.Num()));
+
+	int32 SpawnedCount = 0;
+	for (int32 Index = 0; Index < TeamCount; ++Index)
+	{
+		if (GetOrSpawnTankForTeam(AllTeams[Index]))
+		{
+			++SpawnedCount;
+		}
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("ATSGameMode::SpawnTeamTanks - %d/%d team tanks present on map '%s'."),
+		SpawnedCount, TeamCount, *GetWorld()->GetMapName());
+
+	return SpawnedCount;
+}
+
+TSubclassOf<APawn> ATSGameMode::GetTankClassForTeam(ETSTeamId TeamId) const
+{
+	if (const TSubclassOf<APawn>* Override = TeamTankClassOverrides.Find(TeamId))
+	{
+		if (*Override)
+		{
+			return *Override;
+		}
+	}
+	return DefaultTankClass;
 }
 
 void ATSGameMode::PostLogin(APlayerController* NewPlayer)
@@ -216,9 +271,20 @@ FTransform ATSGameMode::GetSpawnTransformForTeam(ETSTeamId TeamId) const
 	const FName Tag = SpawnTagForTeam(TeamId);
 	if (Tag != NAME_None)
 	{
+		// Any actor carrying the tag wins - a PlayerStart, a TargetPoint or an empty Actor all work.
 		for (TActorIterator<AActor> It(GetWorld()); It; ++It)
 		{
 			if (It->ActorHasTag(Tag))
+			{
+				return It->GetActorTransform();
+			}
+		}
+
+		// A PlayerStart whose Player Start Tag matches is the same idea via the PlayerStart-specific
+		// field, which is what people usually reach for first in the Details panel.
+		for (TActorIterator<APlayerStart> It(GetWorld()); It; ++It)
+		{
+			if (It->PlayerStartTag == Tag)
 			{
 				return It->GetActorTransform();
 			}
@@ -227,8 +293,8 @@ FTransform ATSGameMode::GetSpawnTransformForTeam(ETSTeamId TeamId) const
 
 	const int32 TeamIndex = AllTeams.IndexOfByKey(TeamId);
 	const float Offset = TeamIndex >= 0 ? static_cast<float>(TeamIndex) : 0.f;
-	UE_LOG(LogTemp, Warning, TEXT("ATSGameMode: no actor tagged '%s' found - tag a level spawn point for deterministic placement."), *Tag.ToString());
-	return FTransform(FVector(Offset * 2000.f, 0.f, 200.f));
+	UE_LOG(LogTankSim, Warning, TEXT("ATSGameMode: no actor tagged '%s' in the level - falling back to a world-origin offset. Tag a spawn point for deterministic placement."), *Tag.ToString());
+	return FTransform(FVector(Offset * FallbackTeamSpawnSpacing, 0.f, 200.f));
 }
 
 APawn* ATSGameMode::GetOrSpawnTankForTeam(ETSTeamId TeamId)
@@ -244,19 +310,31 @@ APawn* ATSGameMode::GetOrSpawnTankForTeam(ETSTeamId TeamId)
 		return Existing;
 	}
 
-	if (!DefaultTankClass)
+	const TSubclassOf<APawn> TankClass = GetTankClassForTeam(TeamId);
+	if (!TankClass)
 	{
-		UE_LOG(LogTemp, Error, TEXT("ATSGameMode: DefaultTankClass is not set - assign a tank Blueprint in the GameMode defaults."));
+		UE_LOG(LogTankSim, Error, TEXT("ATSGameMode: no tank class for %s - set Default Tank Class (or a Team Tank Class Overrides entry) in the GameMode defaults."),
+			*UTSTypeUtils::TeamIdToString(TeamId));
 		return nullptr;
 	}
 
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 
-	APawn* NewTank = GetWorld()->SpawnActor<APawn>(DefaultTankClass, GetSpawnTransformForTeam(TeamId), SpawnParams);
+	const FTransform SpawnTransform = GetSpawnTransformForTeam(TeamId);
+	APawn* NewTank = GetWorld()->SpawnActor<APawn>(TankClass, SpawnTransform, SpawnParams);
 	if (!NewTank)
 	{
+		UE_LOG(LogTankSim, Error, TEXT("ATSGameMode: SpawnActor failed for %s using class '%s'."),
+			*UTSTypeUtils::TeamIdToString(TeamId), *TankClass->GetName());
 		return nullptr;
+	}
+
+	if (!NewTank->GetIsReplicated())
+	{
+		// Without this the tank exists on the server only and clients see an empty battlefield.
+		UE_LOG(LogTankSim, Warning, TEXT("ATSGameMode: '%s' does not replicate - tick Replicates in the tank Blueprint's Class Defaults or clients will not see it."),
+			*TankClass->GetName());
 	}
 
 	if (UTSTankCrewComponent* Crew = NewTank->FindComponentByClass<UTSTankCrewComponent>())
@@ -265,9 +343,14 @@ APawn* ATSGameMode::GetOrSpawnTankForTeam(ETSTeamId TeamId)
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("ATSGameMode: spawned tank has no UTSTankCrewComponent - add one in the Blueprint's Components panel."));
+		UE_LOG(LogTankSim, Error, TEXT("ATSGameMode: spawned tank '%s' has no UTSTankCrewComponent - add one in the Blueprint's Components panel, or nobody can take a seat in it."),
+			*NewTank->GetName());
 	}
 
 	GS->RegisterTeamTank(TeamId, NewTank);
+
+	UE_LOG(LogTankSim, Log, TEXT("ATSGameMode: spawned '%s' for %s at %s."),
+		*NewTank->GetName(), *UTSTypeUtils::TeamIdToString(TeamId), *SpawnTransform.GetLocation().ToCompactString());
+
 	return NewTank;
 }

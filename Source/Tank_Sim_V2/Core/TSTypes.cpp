@@ -40,3 +40,28 @@ bool FTSPermissions::HasFullAccess(ETSCrewRole Role, ETSCapability Capability)
 {
 	return GetAccessLevel(Role, Capability) == ETSAccessLevel::Full;
 }
+
+namespace
+{
+	template <typename TEnum>
+	FString EnumDisplayName(TEnum Value)
+	{
+		const UEnum* EnumPtr = StaticEnum<TEnum>();
+		return EnumPtr ? EnumPtr->GetDisplayNameTextByValue(static_cast<int64>(Value)).ToString() : TEXT("?");
+	}
+}
+
+FString UTSTypeUtils::CrewRoleToString(ETSCrewRole Role)
+{
+	return EnumDisplayName(Role);
+}
+
+FString UTSTypeUtils::TeamIdToString(ETSTeamId TeamId)
+{
+	return EnumDisplayName(TeamId);
+}
+
+FString UTSTypeUtils::MatchStateToString(ETSMatchState State)
+{
+	return EnumDisplayName(State);
+}

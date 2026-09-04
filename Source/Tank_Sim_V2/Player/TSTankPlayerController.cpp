@@ -1,11 +1,117 @@
 #include "Player/TSTankPlayerController.h"
 
+#include "Blueprint/UserWidget.h"
 #include "Core/TSGameMode.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
 #include "Player/TSTankPlayerState.h"
+#include "Tank_Sim_V2.h"
+#include "TimerManager.h"
+#include "UI/TSRoleDebugWidget.h"
+#include "UI/TSUISubsystem.h"
 #include "Tank/TSTankCommanderComponent.h"
 #include "Tank/TSTankControlComponent.h"
 #include "Tank/TSTankCrewComponent.h"
 #include "Tank/TSTankWeaponComponent.h"
+
+void ATSTankPlayerController::BeginPlay()
+{
+	Super::BeginPlay();
+
+	// Server-side controller proxies for remote clients have no viewport of their own; only the
+	// machine that actually owns this controller builds UI for it.
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	GetWorldTimerManager().SetTimerForNextTick(this, &ATSTankPlayerController::ApplyLocalUIForCurrentMap);
+}
+
+void ATSTankPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	ShowRoleDebugWidget(false);
+
+	Super::EndPlay(EndPlayReason);
+}
+
+void ATSTankPlayerController::ApplyLocalUIForCurrentMap()
+{
+	UTSUISubsystem* UI = GetUISubsystem();
+	if (UI && UI->IsCurrentMapMenuMap())
+	{
+		// Still in the menu - leave the menu UI alone and do not add the debug panel.
+		return;
+	}
+
+	const int32 Removed = RemoveMenuWidgets();
+	if (Removed > 0)
+	{
+		UE_LOG(LogTankSim, Log, TEXT("ATSTankPlayerController: removed %d leftover menu widget(s) after entering the gameplay map."), Removed);
+	}
+
+	if (bShowRoleDebugWidgetOnGameplayMaps)
+	{
+		ShowRoleDebugWidget(true);
+	}
+}
+
+UTSUISubsystem* ATSTankPlayerController::GetUISubsystem() const
+{
+	const UGameInstance* GameInstance = GetGameInstance();
+	return GameInstance ? GameInstance->GetSubsystem<UTSUISubsystem>() : nullptr;
+}
+
+int32 ATSTankPlayerController::RemoveMenuWidgets()
+{
+	UTSUISubsystem* UI = GetUISubsystem();
+	return UI ? UI->RemoveMenuWidgets() : 0;
+}
+
+void ATSTankPlayerController::ShowRoleDebugWidget(bool bShow)
+{
+	if (!bShow)
+	{
+		if (RoleDebugWidget)
+		{
+			RoleDebugWidget->RemoveFromParent();
+			RoleDebugWidget = nullptr;
+		}
+		return;
+	}
+
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (!RoleDebugWidget)
+	{
+		TSubclassOf<UTSRoleDebugWidget> WidgetClass = RoleDebugWidgetClass;
+		if (!WidgetClass)
+		{
+			WidgetClass = UTSRoleDebugWidget::StaticClass();
+		}
+
+		RoleDebugWidget = CreateWidget<UTSRoleDebugWidget>(this, WidgetClass);
+	}
+
+	if (RoleDebugWidget && !RoleDebugWidget->IsInViewport())
+	{
+		RoleDebugWidget->AddToViewport(RoleDebugWidgetZOrder);
+		RoleDebugWidget->RefreshNow();
+	}
+}
+
+bool ATSTankPlayerController::IsRoleDebugWidgetVisible() const
+{
+	return RoleDebugWidget && RoleDebugWidget->IsInViewport();
+}
+
+void ATSTankPlayerController::TSRoleDebug()
+{
+	ShowRoleDebugWidget(!IsRoleDebugWidgetVisible());
+}
 
 ATSTankPlayerState* ATSTankPlayerController::GetTankPlayerState() const
 {

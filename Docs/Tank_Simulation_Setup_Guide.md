@@ -320,3 +320,76 @@ the caller's own `PlayerState` server-side; `AssignedTank` replicates; disconnec
 late joiners receive current state via ordinary Unreal actor-relevancy replication) trace directly onto
 the RPC reference in §6 and the `ATSGameMode`/`ATSGameState` implementations in
 [TSGameMode.cpp](../Source/Tank_Sim_V2/Core/TSGameMode.cpp).
+
+---
+
+## 12. MainMenu → WarZone bring-up checklist
+
+Three behaviours that the C++ now handles on its own, and the Editor-side wiring each one still
+needs. Everything below is a Details/World Settings change — no Blueprint graph work.
+
+### 12.1 A tank per team spawns as soon as the map starts
+
+`ATSGameMode::BeginPlay` calls `SpawnTeamTanks()`, which spawns the tank for TeamA…TeamN
+(`NumTeamsToPreSpawn`, default 2) instead of waiting for the first role request. Re-callable at any
+time from Blueprint; teams that already have a tank are skipped.
+
+In the Editor:
+
+1. **`WarZone` → World Settings → GameMode Override = `BP_TSGameMode`.** `DefaultEngine.ini` sets the
+   *global* default to `Tank_GameMode` (the YI_TankCollection one), so without this override
+   `ATSGameMode` never runs and nothing spawns.
+2. **`BP_TSGameMode` → Class Defaults → Tank Simulation:**
+   - `Default Tank Class` = your tank Blueprint. It must implement `ITSTankInterface` and carry a
+     `TSTankCrewComponent`. Leave `Team Tank Class Overrides` empty unless the teams drive different
+     tanks.
+   - `Num Teams To Pre Spawn` = 2 (or up to `Max Teams`).
+3. **The tank Blueprint → Class Defaults → `Replicates` = true**, otherwise it exists on the host only.
+4. **Place spawn points in `WarZone`.** Any actor tagged `TSTeamSpawn_TeamA` / `_TeamB` / `_TeamC` /
+   `_TeamD` works (an empty Actor or a TargetPoint is fine), as does a `PlayerStart` whose *Player
+   Start Tag* is that name. With no tagged actor the tanks fall back to a world-origin offset and log
+   a warning.
+5. **Host with `?listen`** — `ServerTravel` to `/Game/TankSimulation/Maps/WarZone?listen`. Without it
+   the map runs standalone and clients cannot connect.
+
+Watch the Output Log filtered to `LogTankSim`: it reports the tank name, team and location per spawn,
+and says explicitly when `Default Tank Class` is unset (also as a red on-screen message).
+
+### 12.2 Menu widgets are removed on gameplay maps
+
+`UTSUISubsystem` hooks `PostLoadMapWithWorld` and removes every menu widget whenever a non-menu map
+loads; `ATSTankPlayerController::BeginPlay` repeats the sweep one tick later, after the level
+Blueprint's own `BeginPlay`. A widget is "menu" if it derives from `UTSLoginWidget` or
+`UTSSessionBrowserWidget` (so `WBP_Login` and `WBP_SessionBrowser` are covered automatically), or if
+its class name contains `Login`, `SessionBrowser`, `SessionList`, `MainMenu` or `HostMenu`.
+
+`WBP_RoleSelection` and `WBP_TeamSelection` are deliberately *not* matched — they belong on the
+gameplay map.
+
+No Editor work is required. To extend it:
+
+- Menu map names and name fragments are `Config` properties — override in `DefaultGame.ini`:
+  ```ini
+  [/Script/Tank_Sim_V2.TSUISubsystem]
+  +MenuMapNames=Lobby
+  +MenuWidgetNameFragments=Credits
+  ```
+- Or call `Register Menu Widget Class` on the subsystem, or `Remove Menu Widgets` on the
+  PlayerController, from Blueprint.
+
+### 12.3 Role debug panel on every client
+
+`UTSRoleDebugWidget` builds its entire widget tree in C++, so there is **no WBP asset to create**.
+`ATSTankPlayerController` instantiates it for each local player on gameplay maps
+(`bShowRoleDebugWidgetOnGameplayMaps`, default on) and it refreshes 4× a second.
+
+It shows net mode, map and match state; this player's name/team/role/tank; every player in
+`PlayerArray` with their assignment (`>` marks the local one); and each team's tank with its
+Driver/Gunner/Commander occupants.
+
+- Toggle at runtime: `TSRoleDebug` in the `~` console, or `Show Role Debug Widget` from Blueprint.
+- Turn it off for shipping: `BP_TSGameMode`'s PlayerController Blueprint → Class Defaults →
+  Tank Simulation|Debug → uncheck *Show Role Debug Widget On Gameplay Maps*.
+- To restyle it, create a Blueprint child of `TSRoleDebugWidget` and set it as *Role Debug Widget Class*.
+- It is a screen-space widget, so it will not appear inside an HMD — read it on the mirror window, or
+  put a Widget Component in the cockpit pointing at the same class if you need it in VR.
