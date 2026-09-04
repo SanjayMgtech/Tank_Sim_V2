@@ -765,7 +765,17 @@ and the turret sits still. That is the whole bug.
 - [Control rotation not replicating on Pawn (forum)](https://forums.unrealengine.com/t/cant-replicate-control-rotation/1971369)
 - [AimOffset replication in multiplayer (article)](https://sohelmoon.medium.com/unreal-engine-4-aimoffset-replication-in-fps-multiplayer-6fe8594b7311)
 
-## 🟡 PRE-EXISTING FEATURE GAP — multiplayer turret aiming (fix 1 DONE, fix 2 open)
+## ✅ FIXED — multiplayer turret aiming (both directions verified 2026-09-04)
+
+**FINAL STATE — both directions work.**
+
+| Direction | Originally | After fix 1 | After fix 2 |
+|---|---|---|---|
+| Server turret → seen by client | works, jittery | **smooth** ✅ | smooth ✅ |
+| Client turret → seen by server | **never worked** | never worked | **works** ✅ |
+
+Neither fault was caused by the Blueprint → C++ port; both were pre-existing, proven by an A/B
+test at `c783cbf` before any replicated variable moved to C++.
 
 **Not caused by the port. Proven by A/B test, not by argument.** The same listen-server test was
 run at `c783cbf` (Phase 8, before replicated variables moved to C++) and at the current tip.
@@ -823,7 +833,7 @@ Updated result table:
 | Server turret → seen by client | works, jittery | **works, smooth** ✅ |
 | Client turret → seen by server | does not work | does not work (fix 2, not attempted) |
 
-### FIX 2 (retargeted) — send the client's AIM POINT, not its control rotation
+### ✅ FIX 2 VERIFIED (retargeted) — send the client's AIM POINT, not its control rotation
 The first attempt sent `Rep_ControlRotation` and did nothing, because nothing live reads that
 variable. Retargeted at what the turret actually consumes: the `TargetPoint` produced by the
 camera line trace.
@@ -856,7 +866,9 @@ Evidence the channel works (server-world probe, 3 pawns):
 A real aim point traced on the client and stored on the server — the upward channel that has
 never existed in this project. BP `UpToDate`, 0 errored BPs, PIE clean.
 
-**Awaiting the two-window test:** turn the turret on the CLIENT and confirm the SERVER sees it.
+**VERIFIED 2026-09-04.** Two-window listen-server test: the client's turret is now visible on the
+server, and the server -> client direction remains smooth. Multiplayer turret aiming works in
+both directions for the first time in this project.
 
 ### If this is ever fixed, it is FEATURE work, not port repair
 1. Add a **Server RPC** carrying the locally-controlled client's aim to the server, and set
