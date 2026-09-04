@@ -305,4 +305,55 @@ public:
 
 	UPROPERTY(BlueprintReadWrite, Category = "Default")
 	TObjectPtr<UChaosWheeledVehicleMovementComponent> VehicleMovement;
+
+	// ---------------------------------------------------------------------
+	// Phase 11 (retry, MIDDLE PATH): vibration + sagging tuning.
+	//
+	// The first Phase 11 attempt moved the WheelRadius* group and lost 19 of 24
+	// per-tank overrides. See CLAUDE.md - moving a variable to C++ discards child
+	// Blueprint Class Defaults overrides. That attempt was reverted.
+	//
+	// The middle path: move a tuning value ONLY when a C++ function will read it,
+	// and prefer values with no override risk. Every variable below is verified
+	// IDENTICAL across all six tanks, so there is no override to lose. The 18
+	// values that genuinely differ per tank stay in the Blueprint until a function
+	// port actually needs them, and then only with the full re-application
+	// procedure in CLAUDE.md.
+	//
+	// Why these nine: they are the vibration/sagging subsystem's tuning, ported as
+	// a unit. Two are read directly by the smallest leaf functions -
+	// VibrationCalculation reads TrackFrequency and nothing else; SaggingCalculation
+	// reads SaggingMaxDistance and nothing else (everything else in both is passed
+	// as a parameter). The remaining seven are read by their callers.
+	//
+	// EditDefaultsOnly: these are designer-tunable configuration, and the Blueprint
+	// has Instance Editable unchecked. Without an Edit specifier they would vanish
+	// from Class Defaults and could never be re-tuned.
+	// ---------------------------------------------------------------------
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis|Vibration")
+	double SpeedInfluence = 0.3;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis|Vibration")
+	double MaxSpeedInfluence = 0.6;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis|Vibration")
+	double AccelerationInfluence = 0.2;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis|Vibration")
+	double MaxAccelerationInfluence = 1.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis|Vibration")
+	double TrackFrequency = 1500.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis|Vibration")
+	double DecayRate = 0.3;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis|Vibration")
+	double InteractionAmplitudeMultiplier = 0.4;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis")
+	double SaggingMaxDistance = 20.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis")
+	double ProportionalCoefficient = 5.0;
 };

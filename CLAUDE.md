@@ -302,7 +302,30 @@ function they call has already been moved and individually verified.**
 | 9 — Vars: **REPLICATED** | ✅ PASS (with a stated gap) | `Rep_ControlRotation` (FRotator), `TurretsRot`, `GunsRot` (TArray&lt;FRotator&gt;, len 10). 46 native props. `UPROPERTY(Replicated)` + `GetLifetimeReplicatedProps`/`DOREPLIFETIME`. Lengths correct on all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs, **0 LogNet warnings**. PIE clean. **Client-server replication NOT exercised — see gap below.** |
 | 10 — Vars: object / component **references** | ✅ PASS | 7 moved: `BaseTrackMaterial`, `RightTrackMID`, `LeftTrackMID`, `TracksInstances_R/L`, `TrackPath_L`, `VehicleMovement`. 53 native props. **All 21 SCS components still intact.** BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. 6/7 runtime-proven. |
 | 11 — Vars: first real tuning values | ❌ **FAILED, REVERTED** | Moving the four `WheelRadius*` lost **19 of 24 per-tank overrides** — every tank fell back to the master default. Reverted; all overrides restored, nothing lost. See below. |
-| 11 (retry) — tuning values with override re-application | ⬜ next | |
+| 11 (retry) — vibration/sagging tuning, **middle path** | ✅ PASS | 9 moved: `SpeedInfluence`, `MaxSpeedInfluence`, `AccelerationInfluence`, `MaxAccelerationInfluence`, `TrackFrequency`, `DecayRate`, `InteractionAmplitudeMultiplier`, `SaggingMaxDistance`, `ProportionalCoefficient`. 62 native props. All 9 verified correct on master **and all 6 tanks** (`problems=0`). BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
+| 12+ — Move functions (leaf-first) | ⬜ next | |
+
+**Phase 11 retry runtime proof** — consumers show the values are actually read:
+```
+START  trackFreq=1500.0 sagMax=20.0 propCoef=5.0 decay=0.30 maxSpdInf=0.60
+END    consumers: sagR=1.0000 sagL=1.0000 ampR=0.6000 vibR0=-0.9278 vibLen=19
+```
+`ampR` = exactly 0.6000, the `MaxSpeedInfluence` cap. `sagR`/`sagL` = 1.0000 is
+`SaggingCalculation`'s `Clamp(0,1)` result from dividing by `SaggingMaxDistance`.
+
+### THE MIDDLE PATH — the rule for tuning values from here on
+Move a tuning value **only** when a C++ function will actually read it, and prefer values with
+no override risk.
+
+- **Safe to move:** the 26 values identical across all six tanks. No override exists to lose.
+- **Move only when a function port needs it:** the 18 values that genuinely differ. Each one
+  requires the full re-application procedure above — record, move with an `Edit` specifier,
+  re-apply all six overrides, re-verify. Do not batch these for convenience.
+- **Never move "for completeness."** A tuning value sitting in the Blueprint costs nothing.
+  Moving one buys nothing unless C++ reads it, and it carries permanent regression risk.
+
+Run the six-tank comparison on **every** tuning-value phase, even when the values are known to
+be identical. It is cheap, and it is the only thing that catches the failure mode.
 
 ## ⚠ THE BIG ONE — child Blueprint overrides do NOT survive the move
 
