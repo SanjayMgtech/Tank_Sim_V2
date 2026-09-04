@@ -1,5 +1,6 @@
 #include "Tank/TSTankControllerBase.h"
 
+#include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 
 ATSTankControllerBase::ATSTankControllerBase()
@@ -50,4 +51,18 @@ void ATSTankControllerBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 	DOREPLIFETIME(ATSTankControllerBase, Rep_ControlRotation);
 	DOREPLIFETIME(ATSTankControllerBase, TurretsRot);
 	DOREPLIFETIME(ATSTankControllerBase, GunsRot);
+}
+
+void ATSTankControllerBase::VibrationCalculation(double VibrationAmplitude, double VibrationPhase, double& VibrationOffset)
+{
+	// 1:1 port of the Blueprint graph. Node order there was:
+	//   GetTimeSeconds -> (* TrackFrequency) -> (+ VibrationPhase) -> DegSin
+	//                  -> (* VibrationAmplitude) -> VibrationOffset
+	//
+	// UKismetMathLibrary::DegSin is Sin(PI/180 * A), so DegreesToRadians here is
+	// the same operation, not a re-derivation.
+	const double TimeSeconds = UGameplayStatics::GetTimeSeconds(this);
+	const double Phase = VibrationPhase + TimeSeconds * TrackFrequency;
+
+	VibrationOffset = VibrationAmplitude * FMath::Sin(FMath::DegreesToRadians(Phase));
 }

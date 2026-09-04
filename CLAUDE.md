@@ -303,7 +303,49 @@ function they call has already been moved and individually verified.**
 | 10 — Vars: object / component **references** | ✅ PASS | 7 moved: `BaseTrackMaterial`, `RightTrackMID`, `LeftTrackMID`, `TracksInstances_R/L`, `TrackPath_L`, `VehicleMovement`. 53 native props. **All 21 SCS components still intact.** BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. 6/7 runtime-proven. |
 | 11 — Vars: first real tuning values | ❌ **FAILED, REVERTED** | Moving the four `WheelRadius*` lost **19 of 24 per-tank overrides** — every tank fell back to the master default. Reverted; all overrides restored, nothing lost. See below. |
 | 11 (retry) — vibration/sagging tuning, **middle path** | ✅ PASS | 9 moved: `SpeedInfluence`, `MaxSpeedInfluence`, `AccelerationInfluence`, `MaxAccelerationInfluence`, `TrackFrequency`, `DecayRate`, `InteractionAmplitudeMultiplier`, `SaggingMaxDistance`, `ProportionalCoefficient`. 62 native props. All 9 verified correct on master **and all 6 tanks** (`problems=0`). BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
-| 12+ — Move functions (leaf-first) | ⬜ next | |
+| 12 — **First function move**: `VibrationCalculation` | ✅ PASS | Ported 1:1 to C++. Call site in `PointLocationCalculation` rebound with **every pin intact, 0 orphaned**, node retargeted to `TSTankControllerBase`. Math verified **bit-exact** (delta 0.000e+00) on 3 input pairs. BP `UpToDate`, 0 errors/warnings, PIE clean. |
+| 13+ — Move more functions | ⬜ next | |
+
+**Phase 12 numeric proof** — computed independently in Python and compared:
+```
+amp=2.0 phase=30.0   got=0.412081776  expected=0.412081776  delta=0.000e+00 MATCH
+amp=0.5 phase=123.4  got=-0.494520258 expected=-0.494520258 delta=0.000e+00 MATCH
+amp=3.0 phase=0.0    got=2.003125004  expected=2.003125004  delta=0.000e+00 MATCH
+```
+
+## Moving a FUNCTION — the procedure
+
+Functions behave differently from variables in one important way: **a name clash is a hard
+compile error, not an auto-resolve.** With the C++ function added and the Blueprint one still
+present you get:
+```
+The function name in node VibrationCalculation is already used
+Overriden function is not compatible with the parent function. Check flags: Exec, Final, Static.
+```
+That is the expected intermediate state. Add C++ first, then `remove_function` on the
+Blueprint, then recompile — the call sites rebind by name. Doing it in this order keeps the
+call site resolving to *something* the whole time.
+
+### Signature must match exactly — pins rebind by NAME
+Read the Blueprint signature with `get_function_signature` before writing any C++.
+- **`is_pure: false` → `BlueprintCallable`, never `BlueprintPure`.** An impure Blueprint
+  function's call site wires exec pins; a pure C++ function has none, orphaning them.
+- **A NAMED output must become an out-parameter with that exact name.** `VibrationCalculation`
+  outputs `VibrationOffset`; returning a `double` from C++ produces a pin called `ReturnValue`
+  and silently orphans the link. `void F(..., double& VibrationOffset)` preserves it.
+- **Parameter names must match** — pins are matched by name, not position.
+- Carry `Category` and the description across (`meta=(ToolTip=...)`) so the node reads the same.
+
+### Verify a moved function numerically, not just "it ran"
+Call the C++ function directly in PIE with several input pairs and compare against the formula
+computed independently. `delta=0.000e+00` proves a 1:1 port; "the tank still drives" does not.
+Then confirm the downstream consumers still populate.
+
+Confirming the rebind: `get_node_details` on the call site should show the title retargeted
+(`Target is TSTank Controller Base`) and every pin with `is_orphaned: false`.
+
+Kismet equivalents: `DegSin(A)` is `FMath::Sin(FMath::DegreesToRadians(A))` — same operation,
+not a re-derivation. Check the Kismet source before substituting any math node.
 
 **Phase 11 retry runtime proof** — consumers show the values are actually read:
 ```

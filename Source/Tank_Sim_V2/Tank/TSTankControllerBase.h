@@ -356,4 +356,25 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Chassis")
 	double ProportionalCoefficient = 5.0;
+
+	// ---------------------------------------------------------------------
+	// Phase 12: FIRST FUNCTION MOVE.
+	//
+	// Ported 1:1 from the Blueprint graph, which was:
+	//   VibrationOffset = VibrationAmplitude
+	//                   * DegSin(VibrationPhase + GetTimeSeconds() * TrackFrequency)
+	//
+	// Signature matching rules learned here - the call site rebinds by NAME, so
+	// every part of the signature has to match the Blueprint's exactly:
+	//   * BlueprintCallable, NOT BlueprintPure. The Blueprint function is impure
+	//     (is_pure=false) and its call site wires exec pins. A pure function has no
+	//     exec pins, which would break that connection.
+	//   * The output is a NAMED output pin, "VibrationOffset". Returning a double
+	//     from C++ would produce a pin called "ReturnValue" instead and orphan the
+	//     link, so it is an out-parameter with the exact original name.
+	//   * Parameter names must match too - pins are matched by name, not position.
+	//   * Category and tooltip carried across so the node looks identical.
+	// ---------------------------------------------------------------------
+	UFUNCTION(BlueprintCallable, Category = "Chassis", meta = (ToolTip = "Track vibration calculation"))
+	void VibrationCalculation(double VibrationAmplitude, double VibrationPhase, double& VibrationOffset);
 };
