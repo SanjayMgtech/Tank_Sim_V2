@@ -12,6 +12,8 @@
 
 #include "CoreMinimal.h"
 #include "WheeledVehiclePawn.h"
+#include "Core/TSTypes.h"
+#include "Tank/TSTankInterface.h"
 #include "TSTankControllerBase.generated.h"
 
 class UMaterialInterface;
@@ -21,7 +23,7 @@ class USplineComponent;
 class UChaosWheeledVehicleMovementComponent;
 
 UCLASS(Blueprintable, BlueprintType)
-class TANK_SIM_V2_API ATSTankControllerBase : public AWheeledVehiclePawn
+class TANK_SIM_V2_API ATSTankControllerBase : public AWheeledVehiclePawn, public ITSTankInterface
 {
 	GENERATED_BODY()
 
@@ -574,4 +576,34 @@ public:
 
 	UFUNCTION(Server, Unreliable, BlueprintCallable, Category = "Networking")
 	void ServerSetAimPoint(FVector NewAimPoint);
+
+	// =====================================================================
+	// ITSTankInterface - the stable contract the multiplayer framework calls.
+	//
+	// This is the join between the C++ framework and this tank. The framework
+	// decides WHO may act (team, crew role, permission matrix); these five
+	// functions are HOW this particular tank carries the action out.
+	//
+	// They are BlueprintNativeEvents, so the BLUEPRINT is expected to override
+	// every one of them - that is the point. The tank's real behaviour lives in
+	// Blueprint graphs (ThrottleControl, TurningControl, the weapon component,
+	// the turret chain), and most of it can never move to C++ because it touches
+	// Blueprint-generated types. See CLAUDE.md "NOT PORTABLE".
+	//
+	// The C++ defaults below therefore do NOT implement tank behaviour. They log
+	// a warning, so a missing Blueprint override is loud instead of silent - the
+	// failure mode otherwise is "the tank simply does not respond" with nothing
+	// in the log to explain it.
+	//
+	// We deliberately do NOT drive the vehicle directly here (e.g. calling
+	// SetThrottleInput on the movement component). That would bypass
+	// ThrottleControl/TurningControl, which carry the gearing, speed limiting,
+	// MoveRightAxis state and the PoliceTurn behaviour. Bypassing them would
+	// "work" in a smoke test and be wrong in every real case.
+	// =====================================================================
+	virtual void BP_SetDriveInput_Implementation(float Throttle, float Steering) override;
+	virtual void BP_AimTurret_Implementation(FVector_NetQuantize AimDirection) override;
+	virtual void BP_FireMainCannon_Implementation() override;
+	virtual void BP_FireMachineGun_Implementation() override;
+	virtual void BP_UpdateCommanderIntel_Implementation(const FTSCommanderIntel& Intel) override;
 };
