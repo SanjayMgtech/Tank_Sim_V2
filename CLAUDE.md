@@ -765,7 +765,7 @@ and the turret sits still. That is the whole bug.
 - [Control rotation not replicating on Pawn (forum)](https://forums.unrealengine.com/t/cant-replicate-control-rotation/1971369)
 - [AimOffset replication in multiplayer (article)](https://sohelmoon.medium.com/unreal-engine-4-aimoffset-replication-in-fps-multiplayer-6fe8594b7311)
 
-## ✅ FIXED — HUD "Accessed None" spam in multiplayer (2026-09-04)
+## ✅ FIXED & VERIFIED — HUD "Accessed None" spam in multiplayer (2026-09-04)
 `UpdateDamageCausedUI` wrote to the HUD widget unconditionally:
 ```
 Blueprint Runtime Error: "Accessed None trying to read (real) property HUD"
@@ -781,7 +781,8 @@ Inputs -> Set DamageCausedUI -> Branch(IsValid(HUD))
                                   True  -> Set Visibility -> SetText -> Delay -> ... (existing)
                                   False -> Outputs
 ```
-The damage counter still accumulates; only the widget work is skipped. Pre-existing bug, not
+**Verified in a multiplayer session: no HUD errors.** The damage counter still accumulates; only
+the widget work is skipped. Pre-existing bug, not
 port-related — `HUD` was never moved to C++ (it is a Blueprint-only type, see NOT PORTABLE).
 
 **The same pattern applies to the other UI functions** — `UpdateHUD`, `UpdateHealthBar`,
