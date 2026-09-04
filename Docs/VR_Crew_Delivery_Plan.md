@@ -21,7 +21,7 @@ Source/Tank_Sim_V2/
 ├─ Core/        TSGameInstance, TSGameMode (273 lines), TSGameState, TSTypes
 ├─ Networking/  TSSessionSubsystem (188 lines)
 ├─ Player/      TSTankPlayerController, TSTankPlayerState, TSVRPawn (216 lines)
-├─ Tank/        TSTank, TSTankInterface, Crew/Control/Weapon/Commander components
+├─ Tank/        TSTankInterface, Crew/Control/Weapon/Commander components
 ├─ UI/          Login, SessionBrowser, Team, Role, Crew/Driver/Gunner/Commander HUD bases
 ├─ Voice/       TSVoiceSubsystem
 └─ Data/        TSRoleDefinition, TSTankDefinition
@@ -47,13 +47,18 @@ accordingly.
 | VR pawn Blueprint | ❌ C++ class exists, no BP subclass, never spawned |
 | Widget Blueprints | ❌ C++ bases exist, no WBP built on them |
 | Crew seating / interiors | 🟡 interior meshes are being authored (untracked in `Content/.../Interior/`) |
-| Blueprint→C++ port | 🟡 phases 0–17 green, phase 18+ open |
+| Blueprint→C++ port | 🟡 phases 0–18 green; only `SelfCollisionCheck` left as portable |
 
 ---
 
 ## 1. Two blockers to settle before anyone writes parallel code
 
-### Blocker A — `ATSTank` is the wrong base class, and nothing uses it
+### Blocker A — `ATSTank` is the wrong base class, and nothing uses it — ✅ **RESOLVED**
+
+> Done during the dead-code sweep. `TSTank.{h,cpp}` deleted, `GetTankForTeam` widened to `APawn*`,
+> and the stale Path A wording corrected across the headers and the two scaffold docs. What remains
+> of this blocker is the positive half: actually adding `ITSTankInterface` to
+> `ATSTankControllerBase` and its five `BP_*` implementations.
 
 `Source/Tank_Sim_V2/Tank/TSTank.h` declares `ATSTank : public APawn`. Our real tank is
 `ATSTankControllerBase : public AWheeledVehiclePawn`, which the master Blueprint has been
@@ -140,67 +145,145 @@ The same discipline applies with three humans: **always stage with an explicit p
 
 ## 3. The VR workstream
 
-The genuinely new build. Nothing below exists today.
+Staged so each stage produces something testable and de-risks the next. Stage order matters:
+V0 can invalidate art scope, and V1 must be proved on a flat screen before a headset is involved.
 
-### 3.1 Enable and prove the VR runtime — do this first, alone
+### What already exists (do not rebuild it)
+`ATSVRPawn` (216 lines) is further along than it looks. It creates `VROrigin`, `Camera`,
+`LeftHand`, `RightHand`; declares 16 Input Action slots; swaps role mapping contexts via
+`ApplyRoleMappingContext`, already hooked to PlayerState role changes; and **binds 12 actions and
+routes them through the PlayerController RPCs** — `Input_Drive` → `ServerSetDriveInput`,
+`Input_FireMainCannon` → `ServerFireMainCannon`, and so on.
 
-OpenXR is enabled as a plugin but has no project configuration. Before designing anything,
-establish that a headset renders this project at an acceptable frame rate.
+So the command path is written. What is missing is everything around it: runtime config, the
+Input Action assets, a Blueprint subclass, seating, world-space UI, and voice.
 
-**This is a gate, not a task.** The startup map is 170 MB and the tanks are high-poly assets
-built for flat-screen rendering. VR is roughly 2× the pixels at a hard 90 Hz deadline, and a
-miss is nausea rather than a dropped frame. If the existing content cannot hit frame budget, the
-answer is a scope conversation about a VR-specific map and LODs — and it is far cheaper to have
-that conversation in week 1 than in month 2.
+---
 
-Deliverable: a bare VR test map, `ATSVRPawn` subclass spawned, headset tracking, a frame-time
-number from `stat unit` on the real target hardware.
+### V0 — Prove the VR runtime. This is a GATE, not a task.
+**Nothing about VR is configured.** The only rendering line in `DefaultEngine.ini` is
+`r.DefaultFeature.MotionBlur=False`. Everything else sits at UE5 engine defaults, and four of
+those defaults are actively hostile to VR:
 
-### 3.2 Crew seating
+| Default | Problem in VR |
+|---|---|
+| Lumen GI + Lumen Reflections | Far too expensive for a 90 Hz stereo budget |
+| Virtual Shadow Maps | Very costly at VR resolutions |
+| TSR / TAA | Ghosts and smears badly in stereo, especially on a moving vehicle |
+| Deferred renderer | Blocks MSAA, which VR benefits from more than any post-AA |
 
-Three VR pawns must ride a physics-simulated tank. Attaching a camera to a fast-moving Chaos
-vehicle is a known source of jitter and motion sickness, and it is the highest-risk unknown in
-the VR layer.
+Add the startup map at **170 MB** with high-poly tanks authored for flat-screen rendering, and
+the honest position is: **we do not yet know this project can hit VR frame budget at all.**
 
-Run a **spike** before committing to an approach: attach a VR pawn to the tank mesh at a socket,
-drive over rough terrain, and judge comfort. Compare against the alternative of a smoothed
-follow rather than a rigid attach. Decide on evidence.
+Deliverable: a bare test map, a `BP_TSVRPawn` spawned in it, headset tracking, and a real
+`stat unit` figure on the actual target headset and GPU.
 
-Each role needs a seat transform and a sensible default view:
-- **Driver** — forward, low, periscope or hatch view.
-- **Gunner** — turret-mounted so the view rotates with the turret; sight/optics view.
-- **Commander** — cupola, all-round view, plus the radar/intel surface.
+Then decide from measurement, not preference: forward shading + MSAA vs deferred + TSR; Lumen off
+with baked/simpler GI; conventional shadow maps; instanced stereo on; a starting `vr.PixelDensity`.
 
-The interior meshes currently being authored under
-`Content/YI_TankCollection/Mesh/WW2_VK1602Leopard_Interior/` are on this critical path. Until
-they land, seat positions are provisional — build against sockets, not hardcoded offsets.
+It is a gate because a bad answer changes art scope — possibly a VR-specific map and an LOD pass.
+That conversation costs days in week 1 and months in month 3.
 
-### 3.3 VR input
+---
 
-All 27 existing `IA_*` actions are desktop/gamepad. VR needs its own.
+### V1 — One seat, proved on a flat screen first
+Settle **Blocker B** before writing VR code: nobody possesses the tank; all three crew possess
+their own `ATSVRPawn`.
 
-- Shared actions: Interact, Grab, Primary, Secondary, Menu, Recenter (`ATSVRPawn` already
-  declares the slots and `51d4dc2` added Primary/Secondary).
-- One Input Mapping Context per role, swapped by the existing
-  `ATSVRPawn::ApplyRoleMappingContext`, which is already wired to fire on PlayerState role
-  changes.
-- **Input never reaches the tank directly.** It becomes a request on the PlayerController. The
-  tank's own Enhanced Input bindings stay for desktop/debug play but are not the VR path.
+1. Create `BP_TSVRPawn` from `ATSVRPawn`.
+2. Author the VR Input Actions and `IMC_Shared` + `IMC_Driver` / `IMC_Gunner` / `IMC_Commander`.
+   All 27 existing `IA_*` are desktop/gamepad and are **not** the VR set — leave them alone.
+3. Assign them to the pawn's `EditDefaultsOnly` slots (per RULE 2, C++ never loads them).
+4. Implement `BP_SetDriveInput` on the tank so it calls the **existing** `ThrottleControl` /
+   `TurningControl`. Do not reimplement driving; those functions are the proven path.
 
-### 3.4 VR UI
+Prove the whole chain with a gamepad, no headset: input → `ServerSetDriveInput` → permission
+check → `BP_SetDriveInput` → tank moves, and a Gunner pressing drive is rejected server-side.
+Debugging authority bugs and VR bugs at the same time is how weeks vanish.
 
-Screen-space UMG does not work in VR. Every widget the crew sees in-headset must be a
-`WidgetComponent` in world space — a physical panel in the cockpit — with laser-pointer or
-touch interaction. The C++ widget bases are done; the WBPs and their VR placement are not.
+---
+
+### V2 — Crew seating
+Three VR pawns riding a physics-simulated Chaos vehicle. **Highest comfort risk in the project**:
+a camera rigidly attached to a vehicle over rough terrain is a classic nausea source.
+
+Run a spike before committing: rigid attach to a socket vs a smoothed follow. Drive rough
+terrain and judge comfort. Decide on evidence, not theory.
+
+Seat viewpoints: **Driver** forward and low (periscope/hatch); **Gunner** turret-mounted so the
+view rotates with the turret; **Commander** cupola with all-round view plus the intel surface.
+
+Build against **sockets on the interior mesh**, never hardcoded offsets. The interior meshes
+under `Content/YI_TankCollection/Mesh/WW2_VK1602Leopard_Interior/` are on this critical path, and
+they are currently untracked in git — they need committing before anyone depends on them.
+
+---
+
+### V3 — Fix the aim path. This is a DESIGN DECISION, not wiring.
+The single genuine conflict in the VR layer. Three components disagree about what "aim" is:
+
+| Where | Representation | Evidence |
+|---|---|---|
+| `ATSVRPawn::Input_AimTurret` | 2D stick axis packed into a vector | `ServerAimTurret(FVector_NetQuantize(Axis.X, Axis.Y, 0.f))` |
+| `UTSTankWeaponComponent` | a **direction** | `CurrentAimDirection`, defaults to `(1,0,0)` |
+| The actual tank turret | a **world-space point** | `ReceivedAimPoint` → `TargetPoint` in `TurretsAndGunsRotCalculation` |
+
+None of these are compatible, and `BP_AimTurret` is not implemented on the tank at all yet, so
+nothing currently fails loudly — it would simply never aim.
+
+**Recommendation: standardise on the world-space POINT.** Reasons: it is what the turret actually
+consumes; it is already proven working over the network (the `ServerSetAimPoint` fix, verified in
+a two-window listen-server test); and a point survives the tank rotating underneath the gunner,
+whereas a direction has to be re-based every frame. Rename the contract `AimPoint`, not
+`AimDirection`, so the type mismatch cannot silently reappear.
+
+Then, in VR: the Gunner aims with head or controller ray → line trace → world point →
+`ServerAimTurret(Point)` → `TryAimTurret` validates Gunner access → replicated → `BP_AimTurret`
+feeds the existing turret maths.
+
+**Retire the tank's own `ServerSetAimPoint`** in favour of the PlayerController RPC. This is not
+optional: a Server RPC is silently dropped if the calling client does not own the actor, and once
+the Gunner possesses a VR pawn rather than the tank, they no longer own the tank. Keeping the
+current call would fail with no error at the call site — the exact trap documented in the
+networking section.
+
+---
+
+### V4 — World-space UI
+Screen-space UMG does not render in VR. Every in-headset widget must be a `UWidgetComponent` in
+world space — a physical panel in the cockpit — driven by laser pointer or touch.
+
+The C++ widget bases are written (`UTSDriverHUDWidget`, `UTSGunnerHUDWidget`,
+`UTSCommanderHUDWidget`, ...); the WBPs and their cockpit placement are not. Role HUDs read
+replicated state only and never mutate it — every server-affecting action goes through
+`ATSTankPlayerController`.
 
 Menus (login, session browser, team, role) can be a floating panel in a neutral pre-game space
-rather than cockpit-mounted.
+rather than cockpit-mounted, since they run before anyone is seated.
 
-### 3.5 Voice
+Keep comfort settings and recentre **local** to the VR layer — they are per-player preferences
+and must never touch authoritative state.
 
-`UTSVoiceSubsystem` exists as an abstraction with no backend. First milestone is one crew
-channel. Note `OnlineSubsystemNull` is LAN-only with no voice backend — a real provider
-(EOS being the usual choice) has to be enabled before voice can be tested at all.
+---
+
+### V5 — Voice
+`UTSVoiceSubsystem` is an abstraction with no backend. **`OnlineSubsystemNull` has no voice
+support at all**, so a real provider (EOS is the usual choice) has to be enabled before crew
+voice can even be tested. First milestone is one crew channel; push-to-talk, radio channels and
+commander broadcast come later.
+
+---
+
+### VR risk register
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| Project cannot hit 90 Hz with current art | **High** | V0 gate in week 1, before any VR design work |
+| Seat jitter on the physics vehicle causes nausea | **High** | V2 spike; compare rigid attach vs smoothed follow |
+| Aim path mismatch shipped as-is | **High** | V3 decision before any Gunner VR work |
+| Server RPC silently dropped once the Gunner stops owning the tank | Medium | Route all aim through `ATSTankPlayerController` |
+| Interior meshes untracked in git | Medium | Commit them before seating work depends on them |
+| No voice backend | Medium | Enable EOS early; it is a project-settings change, not code |
 
 ---
 
@@ -213,7 +296,7 @@ written, so their package is re-cut toward wiring, proving and hardening rather 
 |---|---|---|
 | **Dev 1 — Multiplayer** | Wiring the framework in: GameMode/GameInstance config, session flow, team/role assignment, tank spawn/assignment, disconnect handling. Hardening the existing C++ against real multi-client tests. | Host + 2 clients join, land in one team, occupy three distinct roles, verified in `UTSTankCrewComponent`'s seats |
 | **Dev 2 — Tank gameplay** | Blocker A and Blocker B. `ITSTankInterface` on `ATSTankControllerBase`, crew/control/weapon/commander components added to the Blueprint, the turret aim path rebuilt onto the Gunner. **Sole owner of every tank Blueprint.** Also owns the remaining port phases. | Driver drives and Gunner aims through the validated path, with the permission matrix rejecting the wrong role |
-| **Dev 3 — VR/UI/Voice** | §3 in full. | §3.1's frame-time gate, then seating spike |
+| **Dev 3 — VR/UI/Voice** | §3 (V0–V5) in full. | The **V0 frame-time gate**, then the V2 seating spike |
 
 Dev 2 is the critical path and the contention point — both blockers and exclusive Blueprint
 ownership sit there. Expect to load-balance toward them.
