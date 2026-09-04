@@ -45,4 +45,37 @@ public:
 
 	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
 	double ChassisDeltaDistanceL = 0.0;
+
+	// ---------------------------------------------------------------------
+	// Phase 5: remaining chassis runtime scratch.
+	//
+	// Same risk class as Phase 4 - default 0, written by ChassisDistanceDefinition,
+	// read only by ChassisDistanceDefinition and TrackPathAnimations. Confirmed not
+	// referenced by ABP_Chaos_<Tank> (which touches only its own ChassisLockedL/R),
+	// so nothing outside the master Blueprint consumes these.
+	//
+	// Deliberately EXCLUDES SaggingDegreeR/L and the WheelRot* group: the AnimBPs
+	// read those across an asset boundary, which is a different risk class and gets
+	// its own phase with its own test.
+	// ---------------------------------------------------------------------
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double ChassisAccelerationR = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double ChassisAccelerationL = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double HullZRot = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double ChassisDistanceZRotComponentR = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double ChassisDistanceZRotComponentL = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double ChassisDistanceXMoveComponentR = 0.0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hidden (Used for logic)|Chassis")
+	double ChassisDistanceXMoveComponentL = 0.0;
 };

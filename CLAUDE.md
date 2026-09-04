@@ -231,6 +231,23 @@ attempt-1 failure mode. Move those first. Save variables that hold real tuning v
 (`MaxSpeedKMH`, `WheelRadius*`, `TracksAmount`, ...) for later phases, and verify the
 child override survives the move.
 
+**Check the AnimBPs before moving anything chassis-related.** `ABP_Chaos_<Tank>` declares
+its *own* variables with the same names as several pawn variables — it Sets them in its
+EventGraph (copying from the pawn) and Gets them in the AnimGraph. Confirmed on
+`ABP_Chaos_T90`:
+- Externally consumed → **higher risk class, own phase, own test:** `SaggingDegreeR/L`,
+  `WheelRotFrontL/R`, `WheelRotMiddleL/R`, `WheelRotRearL/R`, `WheelRotAccessoryL/R`.
+- Only its own bools, no pawn coupling → safe: `ChassisLockedL/R`.
+- Not referenced at all: `HullZRot`, `ChassisAcceleration*`, `ChassisDistance*Component*`.
+
+Because names are preserved exactly, an external consumer should keep resolving — but it
+widens the blast radius, so these get their own phase and a test that checks the *animation*
+(wheels turning, track sag), not just that the value is non-zero on the pawn.
+
+Watch for a naming trap here: some `ABP_Chaos_T90` nodes read `WheelRot AccessoryR`
+**with a space**, while the pawn's variable is `WheelRotAccessoryR` without one. They are
+two different variables that look identical at a glance.
+
 **Variables with spaces in the name cannot be ported directly** — `Player Controller`,
 `Is Vehicle taken?`, `Turret Rotation Speed`, `MG Yaw`, `Clipping Range Min/Max`,
 `Turret Height Range Clip`, `MGRotation Speed`, `Debug Camera`. A C++ identifier cannot
@@ -259,7 +276,21 @@ function they call has already been moved and individually verified.**
 | 2 — Reparent master BP | ✅ PASS | `BP_TankController_Chaos` reparented. All **21 BP components intact** + 2 native. `Mass=30000`, `AllWheelDrive`, `IdleBrakeInput=1.0` all correct **with zero hand-copying**. T90 drove **6310 units / 3s**. Log clean — zero errors, and no `CreateWidget null class`. |
 | 3 — All six tanks | ✅ PASS | All 6 load, correct values, chain = `ATSTankControllerBase → BP_TankController_Chaos → BP_<Tank>_Controller_Chaos`. |
 | 4 — Vars: chassis distance accumulators | ✅ PASS | `ChassisDistanceR/L`, `ChassisDeltaDistanceR/L` moved to C++. CDO now reports `owner_class: TSTankControllerBase` for exactly those 4; all other ~150 still `BP_TankController_Chaos_C`. All 16 Get/Set nodes rebound (same node IDs). BP compiles `UpToDate`, 0 errors/warnings. PIE: values accumulate correctly (see below), 0 `Accessed None`, 0 BP runtime errors. |
-| 5+ — Move more variables | ⬜ next | |
+| 5 — Vars: chassis accel / rot / move scratch | ✅ PASS | `ChassisAccelerationR/L`, `HullZRot`, `ChassisDistanceZRotComponentR/L`, `ChassisDistanceXMoveComponentR/L` moved. All 11 native props present on the CDO; `remove_variable` reports "not found" for the moved names. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. Graceful editor close worked — no recovery modal. |
+| 6+ — Move more variables | ⬜ next | |
+
+**Phase 5 runtime proof:**
+```
+START   accelR=0.0000   accelL=0.0000   HullZRot=0.0000  ZRotR/L=0.0000   XMoveR/L=0.0000
+2.0s    accelR=-0.4364  accelL=0.5112   HullZRot=-1.4377 ZRotR/L=-7.1887  XMoveR/L=130.1542
+4.5s    accelR=12.5046  accelL=13.4533  HullZRot=-1.3081 ZRotR/L=-6.5403  XMoveR/L=688.2112
+```
+`ZRot`/`XMove` are exactly R==L (correct on a straight line), and `XMove`=688.21 at 4.5s
+independently agrees with the Phase 4 `ChassisDistance` reading at the same timestamp.
+
+**First valid same-harness drive comparison:** Phase 4 end X=-369.93, Phase 5 end X=-367.84
+from the same start (230.1 vs 232.2 units). <1% apart — no regression. Use `run_pie_smoke`
+numbers only against other `run_pie_smoke` numbers, never against the 7921/6310 baselines.
 
 **Phase 4 runtime proof** — the Blueprint graph writing the *native* properties during PIE:
 ```
