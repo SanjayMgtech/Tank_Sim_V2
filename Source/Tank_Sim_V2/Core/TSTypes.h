@@ -36,6 +36,17 @@ enum class ETSMatchState : uint8
 	Ended					UMETA(DisplayName = "Ended")
 };
 
+UENUM(BlueprintType)
+enum class ETSSessionStatus : uint8
+{
+	Idle		UMETA(DisplayName = "Idle"),
+	Creating	UMETA(DisplayName = "Creating"),
+	InLobby		UMETA(DisplayName = "In Lobby"),
+	Searching	UMETA(DisplayName = "Searching"),
+	Joining		UMETA(DisplayName = "Joining"),
+	Failed		UMETA(DisplayName = "Failed")
+};
+
 // Capabilities gated by the Section 8 permission matrix.
 UENUM(BlueprintType)
 enum class ETSCapability : uint8

@@ -20,24 +20,32 @@ public:
 	ATSGameMode();
 
 	virtual void BeginPlay() override;
+	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
+	virtual void InitGameState() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void Logout(AController* Exiting) override;
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void StartTankMatch();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
+	void HandlePlayerReadyToSpawn(ATSTankPlayerController* PlayerController);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Lobby")
+	bool AreAllRolesFilled() const;
 
 	// Server only. Spawns the missing tank for every team from TeamA up to NumTeamsToPreSpawn and
 	// returns how many tanks exist afterwards. Called automatically from BeginPlay when
 	// bPreSpawnTeamTanks is set, so a hosted match has both teams' tanks standing on the map before
-	// anyone has picked a seat (previously a team's tank only appeared on its first role request).
-	// Safe to call again at any time - teams that already have a tank are skipped.
+	// anyone has picked a team or a seat. TryAssignTeam still spawns on demand for teams beyond
+	// NumTeamsToPreSpawn. Safe to call again at any time - teams that already have a tank are skipped.
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation")
 	int32 SpawnTeamTanks();
 
-	// Server only. Returns the team's existing tank, or spawns it now if the team has none.
-	UFUNCTION(BlueprintCallable, Category = "Tank Simulation")
-	APawn* GetOrSpawnTankForTeam(ETSTeamId TeamId);
-
 	// TeamTankClassOverrides entry for this team if one is set, otherwise DefaultTankClass.
+	// ATSTeamMatchGameMode overrides this to consult its own TeamTankClasses map first.
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
-	TSubclassOf<APawn> GetTankClassForTeam(ETSTeamId TeamId) const;
+	virtual TSubclassOf<APawn> GetTankClassForTeam(ETSTeamId TeamId) const;
 
 	// Server only. Called from ATSTankPlayerController::ServerRequestTeamChange. Returns false if the
 	// team is full or invalid; on success the player's previous role (if any) is released. Takes
@@ -72,7 +80,7 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	int32 MaxTeams = 4;
 
-	// Spawn every team's tank up front in BeginPlay rather than lazily on the first role request.
+	// Spawn every team's tank up front in BeginPlay rather than lazily on the first team/role request.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	bool bPreSpawnTeamTanks = true;
 
@@ -84,14 +92,24 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	float FallbackTeamSpawnSpacing = 2000.f;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
+	FName GameplayMapName = TEXT("Controller_Demo_T90");
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
+	int32 MaxCrewMembers = 3;
+
+	FString PendingLobbyCode;
+	FString GenerateLobbyCode() const;
+
 	// Optional actor tags ("TSTeamSpawn_TeamA" etc.) to place in the level for deterministic tank
 	// spawn locations. Falls back to a deterministic offset from the world origin if absent.
-	FTransform GetSpawnTransformForTeam(ETSTeamId TeamId) const;
-	bool IsTeamFull(ETSTeamId TeamId) const;
-	int32 CountPlayersOnTeam(ETSTeamId TeamId) const;
+	virtual APawn* GetOrSpawnTankForTeam(ETSTeamId TeamId);
+	virtual FTransform GetSpawnTransformForTeam(ETSTeamId TeamId) const;
+	virtual bool IsTeamFull(ETSTeamId TeamId) const;
+	virtual int32 CountPlayersOnTeam(ETSTeamId TeamId) const;
 
 	// True once every team with at least one player has all 3 crew seats filled - the actual "match
 	// has started" signal for ETSMatchState::InProgress (Section 6 step 6), as opposed to merely the
 	// first seat anywhere being filled.
-	bool AreAllActiveTeamsFullyCrewed() const;
+	virtual bool AreAllActiveTeamsFullyCrewed() const;
 };

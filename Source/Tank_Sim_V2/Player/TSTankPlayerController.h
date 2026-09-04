@@ -11,7 +11,11 @@
 
 class ATSTankPlayerState;
 class UTSRoleDebugWidget;
+class UTSSessionSubsystem;
 class UTSUISubsystem;
+class UUserWidget;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FTSOnRoleRequestResult, ETSCrewRole, RequestedRole, bool, bAccepted);
 
 UCLASS()
 class ATSTankPlayerController : public APlayerController
@@ -19,11 +23,37 @@ class ATSTankPlayerController : public APlayerController
 	GENERATED_BODY()
 
 public:
+	ATSTankPlayerController();
+
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void OnRep_PlayerState() override;
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	APawn* GetAssignedTank() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Session")
+	UTSSessionSubsystem* GetSessionSubsystem() const;
+
+	// --- UI Management --------------------------------------------------------------------------
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|UI")
+	TSubclassOf<UUserWidget> TeamSelectionWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|UI")
+	TSubclassOf<UUserWidget> RoleSelectionWidgetClass;
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void RefreshSelectionUI();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void ShowTeamSelectionUI();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void ShowRoleSelectionUI();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void HideSelectionUI();
 
 	// --- Local UI ownership ----------------------------------------------------------------------
 	// Section 10 makes the PlayerController the owner of this client's UI. On a gameplay map that
@@ -53,7 +83,22 @@ public:
 	void ServerRequestTeamChange(ETSTeamId NewTeam);
 
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
+	void ServerHostAssignPlayerToTeam(APlayerState* TargetPlayerState, ETSTeamId NewTeam);
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerRequestRoleChange(ETSCrewRole NewRole);
+
+	UFUNCTION(Client, Reliable)
+	void ClientRoleRequestResult(ETSCrewRole RequestedRole, bool bAccepted);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
+	void ReadyToSpawn();
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Crew")
+	void ServerReadyToSpawn();
+
+	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Crew")
+	FTSOnRoleRequestResult OnRoleRequestResult;
 
 	// --- Tank gameplay requests (validated by the tank's components) ----------------------------
 	// Drive/aim are Unreliable: they are sent every frame of input and a dropped packet is
@@ -104,4 +149,13 @@ private:
 	// Runs one tick after BeginPlay: the menu-map level Blueprint's own BeginPlay has finished by
 	// then, so a widget it created in the same frame is caught by the sweep rather than surviving it.
 	void ApplyLocalUIForCurrentMap();
+
+	UFUNCTION()
+	void HandleAssignmentChanged();
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> ActiveTeamSelectionWidget = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> ActiveRoleSelectionWidget = nullptr;
 };
