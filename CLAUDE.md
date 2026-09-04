@@ -351,7 +351,7 @@ function they call has already been moved and individually verified.**
 | 6 — Vars: turret / MG scratch (**first structs**) | ✅ PASS | `MainTurretAndGunRotation`, `TurretRotation`, `MGRotation` (FRotator), `TurretYaw`, `TurretPitch` (double), `TurretBlocking`, `IsTurretRotating` (bool). All 18 native props present; moved names gone from the BP. `TurretRotation` still 10 refs / same node IDs. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
 | 7 — Vars: antenna / UI / misc (**FVector, float, int32**) | ✅ PASS | 14 moved: `HullSpeedWorld`, `HullAccelerationWorldInverted`, `TurretSpeedLocalInverted` (FVector), `CrosshairTraceClamp`, `AimPointCorrectionUI`, `CurrentAmplitudeMultiplierR/L`, `FilletsCompensation`, `HullDeltaXLocation`, `DeltaSeconds`, `CurentRPMRatio`, `TrackSpeedModifier` (double), `ForwardSpeedMPH` (float), `DamageCausedUI` (int32). 32 native props total. All 6 tanks match master on every default. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. **13/14 proven at runtime; `DamageCausedUI` structural only** (see below). |
 | 8 — Vars: scratch **ARRAYS** | ✅ PASS | 11 moved: `VibrationOffset_R/L`, `FinalScattering` (TArray&lt;double&gt;), `SplinePointLocation`, `SplinePointPerpendicularVectors`, `AntennaCurrentSpeed` (TArray&lt;FVector&gt;), `CopyPointIndices` (TArray&lt;int32&gt;), `TurretsRotUnstabilized`, `TurretsRotPrevFrame`, `GunsRotUnstabilized`, `GunsRotPrevFrame` (TArray&lt;FRotator&gt;). 43 native props. All lengths match across all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs. |
-| 9 — Vars: **REPLICATED** | ✅ PASS (with a stated gap) | `Rep_ControlRotation` (FRotator), `TurretsRot`, `GunsRot` (TArray&lt;FRotator&gt;, len 10). 46 native props. `UPROPERTY(Replicated)` + `GetLifetimeReplicatedProps`/`DOREPLIFETIME`. Lengths correct on all 6 tanks. BP `UpToDate`, 0 errors/warnings, 0 errored BPs, **0 LogNet warnings**. PIE clean. **Client-server replication NOT exercised — see gap below.** |
+| 9 — Vars: **REPLICATED** | ⚠️ STRUCTURALLY PASS — **gap now CONFIRMED BROKEN** | Properties moved correctly: 46 native props, `UPROPERTY(Replicated)` + `DOREPLIFETIME`, lengths correct on all 6 tanks, BP `UpToDate`, 0 LogNet warnings. **But the listen-server test (2026-09-04) shows the turret does NOT replicate.** Movement replicates (engine-level); turret/gun do not. Cause under investigation — see "Multiplayer turret" below. |
 | 10 — Vars: object / component **references** | ✅ PASS | 7 moved: `BaseTrackMaterial`, `RightTrackMID`, `LeftTrackMID`, `TracksInstances_R/L`, `TrackPath_L`, `VehicleMovement`. 53 native props. **All 21 SCS components still intact.** BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. 6/7 runtime-proven. |
 | 11 — Vars: first real tuning values | ❌ **FAILED, REVERTED** | Moving the four `WheelRadius*` lost **19 of 24 per-tank overrides** — every tank fell back to the master default. Reverted; all overrides restored, nothing lost. See below. |
 | 11 (retry) — vibration/sagging tuning, **middle path** | ✅ PASS | 9 moved: `SpeedInfluence`, `MaxSpeedInfluence`, `AccelerationInfluence`, `MaxAccelerationInfluence`, `TrackFrequency`, `DecayRate`, `InteractionAmplitudeMultiplier`, `SaggingMaxDistance`, `ProportionalCoefficient`. 62 native props. All 9 verified correct on master **and all 6 tanks** (`problems=0`). BP `UpToDate`, 0 errors/warnings, 0 errored BPs. PIE clean. |
@@ -707,6 +707,50 @@ must add its `DOREPLIFETIME` line in the same commit.**
 Check for RepNotify before choosing the specifier: search the Blueprint for `OnRep` nodes and
 `OnRep_*` functions. This project has none, so all three are plain `Replicated`, never
 `ReplicatedUsing`.
+
+## 🔴 OPEN ISSUE — multiplayer turret does not replicate (found 2026-09-04)
+
+**Status: BROKEN. Cause not yet established. Do not close this until the pre-port test below
+answers it.**
+
+First listen-server test (2 players) result: **hull movement replicates, turret/gun rotation
+does not.** Movement is engine-level (`bReplicateMovement`), so that says nothing about our
+work; the turret is the part this port touched.
+
+### Two structural problems found by reading the graphs
+Both sit in Blueprint code the port never edited:
+
+1. **`Event Tick` is ungated.** Its only condition is `NOT Destroyed` — no `HasAuthority`, no
+   `IsLocallyControlled`. So a client runs `TurretsAndGunsRotCalculation` every frame, which
+   **writes `TurretsRot`/`GunsRot` locally**. Any value the server replicates down is
+   immediately overwritten. Replication cannot win against a per-frame local write.
+2. **The client's aim never reaches the server.** `ReplicateControlRotation` writes
+   `Rep_ControlRotation` when `HasAuthority() OR IsLocallyControlled()`, but replication is
+   **server → client only** — a client writing a replicated property changes only its own copy.
+   There is no Server RPC anywhere in this Blueprint to carry the client's aim upward.
+
+### Why this looks pre-existing rather than port-caused
+- `TurretsRot`/`GunsRot` were already marked Replicated as Blueprint variables; Phase 9 carried
+  that across with both the specifier and the `DOREPLIFETIME` registration.
+- `Event Tick`, `ReplicateControlRotation` and `TurretsAndGunsRotCalculation` were never edited
+  by the port.
+
+**That is reasoning, not proof.** Confirm it with the test below before acting on it.
+
+### THE PRE-PORT TEST (decisive)
+Check out `c783cbf` (Phase 8 — the commit *before* replicated variables moved to C++), rebuild,
+and run the same listen-server test.
+- Turret still does not follow → **pre-existing**, the port is exonerated, and fixing it is a
+  new feature (Server RPC + gating), not a port repair.
+- Turret DOES follow → **the port broke it**; fix Phase 9 before anything else.
+
+Restore afterwards with `git checkout cpp-tank-controller-port` and rebuild.
+
+### What a fix would involve (only after the test)
+1. A **Server RPC** to send the locally-controlled client's aim to the server.
+2. **Gate the turret calculation** so a tank that is neither authority nor locally controlled
+   uses the replicated value instead of recomputing it — the same
+   `HasAuthority || IsLocallyControlled` condition `ReplicateControlRotation` already uses.
 
 ### KNOWN GAP — replication itself was not tested
 Everything above was verified in **standalone** PIE, which does not run client-server
