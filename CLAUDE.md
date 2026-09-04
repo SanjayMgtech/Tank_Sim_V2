@@ -385,8 +385,37 @@ check whether a Blueprint function takes a parameter of the same name. Known col
 | `WheelRotationDefinition` | `WheelSpeedCorrectionUV` | still a BP variable | **would block if moved** |
 
 To unblock one, rename the parameter in the Blueprint first, let the editor fix up the call
-sites, verify, commit — then port. Treat that as its own phase; do not fold a rename into a
-function move.
+sites, verify, commit — then port. Treat that as its own phase; do not fold a rename into a function move.
+
+### ⚠ `set_function_params` CANNOT rename — it is purely ADDITIVE
+Do not reach for it to rename a parameter. Passing the full intended signature does not
+replace the old one; it **appends a second copy of every parameter**, suffixing name clashes:
+```
+inputs: SaggingDegree, HullDeltaXLocation, ChassisDeltaDistance, ChassisLocked,
+        SaggingDegree1, InHullDeltaXLocation, ChassisDeltaDistance1, ChassisLocked1
+outputs: SaggingDegreeNew, SaggingDegreeNew1
+```
+There is no rename-parameter action in the MCP surface (`rename_variable` and `rename_function`
+exist; a parameter equivalent does not). **Renaming a function parameter is a manual edit in
+the Blueprint editor's function Details panel**, where UE renames the pins and fixes up every
+call site itself.
+
+**Recovery, if it happens anyway:** the damage is in memory only until something saves. Check
+`git status` first — if the `.uasset` is unmodified, nothing has been lost. Then either close
+the editor and answer *Don't Save*, or revert in place with:
+```python
+pkg = unreal.load_package('/Game/.../BP_TankController_Chaos')
+unreal.EditorLoadingAndSavingUtils.reload_packages([pkg])
+```
+That raises a modal ("Would you like to reload these assets? This will revert any changes") —
+answer **Yes**, which blocks MCP until a human clicks it. Verified full recovery afterwards:
+signature back to 4 inputs / 1 output, both call sites pin-for-pin identical to the captured
+baseline, BP `UpToDate`, 0 errored BPs, and PIE healthy with the Phase 14 overrides intact
+(`sagR=1.0000 tile=69.58 invert=True`).
+
+**Capture the baseline before touching a signature.** `get_node_details` on every call site,
+recording each pin and the variable feeding it, is what made it possible to prove the recovery
+was exact rather than merely plausible.
 
 **Phase 12 numeric proof** — computed independently in Python and compared:
 ```
