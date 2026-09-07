@@ -11,9 +11,47 @@ ATSTeamMatchGameMode::ATSTeamMatchGameMode()
 	// Default to team match setup
 }
 
+bool ATSTeamMatchGameMode::ShouldDesignateAsHost(const APlayerController* NewPlayer) const
+{
+	// TEMPORARY - VR bring-up. With the test flag on nobody is host, so the single local player
+	// gets ATSVRPawn and a crew seat instead of the admin free-cam.
+	if (bVRTestAutoAssign)
+	{
+		return false;
+	}
+
+	return Super::ShouldDesignateAsHost(NewPlayer);
+}
+
 void ATSTeamMatchGameMode::PostLogin(APlayerController* NewPlayer)
 {
 	Super::PostLogin(NewPlayer);
+
+	// TEMPORARY - VR bring-up. Runs before bAutoAssignOnJoin so an explicitly chosen test seat
+	// always wins over the load-balancing auto-assign.
+	if (bVRTestAutoAssign && NewPlayer)
+	{
+		UE_LOG(LogTankSim, Warning,
+			TEXT("ATSTeamMatchGameMode: bVRTestAutoAssign is ON - forcing '%s' into team %d as role %d. ")
+			TEXT("This bypasses the host-admin rule and MUST be turned off before a real match."),
+			*GetNameSafe(NewPlayer), static_cast<int32>(VRTestTeam), static_cast<int32>(VRTestRole));
+
+		if (!TryAssignTeam(NewPlayer, VRTestTeam))
+		{
+			UE_LOG(LogTankSim, Error, TEXT("ATSTeamMatchGameMode: VR test could not put '%s' on team %d."),
+				*GetNameSafe(NewPlayer), static_cast<int32>(VRTestTeam));
+			return;
+		}
+
+		if (!TryAssignRole(NewPlayer, VRTestRole))
+		{
+			// Most likely another player already holds that seat on this team.
+			UE_LOG(LogTankSim, Error, TEXT("ATSTeamMatchGameMode: VR test could not give '%s' role %d - seat taken?"),
+				*GetNameSafe(NewPlayer), static_cast<int32>(VRTestRole));
+		}
+
+		return;
+	}
 
 	if (bAutoAssignOnJoin && NewPlayer)
 	{

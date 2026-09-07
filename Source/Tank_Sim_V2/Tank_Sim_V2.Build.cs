@@ -22,6 +22,10 @@ public class Tank_Sim_V2 : ModuleRules
 			"OnlineSubsystem",
 			"OnlineSubsystemUtils",
 			"HeadMountedDisplay",
+			// UHeadMountedDisplayFunctionLibrary moved into the XRBase PLUGIN in UE5; only the
+			// types (EHMDTrackingOrigin, ...) still live in the HeadMountedDisplay module above.
+			// Both are needed - one for the enum, one for the calls.
+			"XRBase",
 		});
 
 		// The VoiceChat module is header-only (interfaces resolved at runtime via IModularFeatures) and

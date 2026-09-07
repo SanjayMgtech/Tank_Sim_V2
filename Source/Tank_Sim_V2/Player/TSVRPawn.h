@@ -7,10 +7,12 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
 #include "Core/TSTypes.h"
+#include "HeadMountedDisplayTypes.h"
 #include "TSVRPawn.generated.h"
 
 class UCameraComponent;
 class UMotionControllerComponent;
+class UWidgetInteractionComponent;
 class UInputMappingContext;
 class UInputAction;
 struct FInputActionValue;
@@ -31,6 +33,36 @@ public:
 	virtual void NotifyControllerChanged() override;
 	virtual void OnRep_PlayerState() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+	virtual void Tick(float DeltaSeconds) override;
+
+	// ---------------------------------------------------------------------
+	// VR vs desktop - decided at runtime, per client, never at build time.
+	//
+	// The same build runs both ways. On possession this pawn asks whether a headset is connected
+	// and, if so, switches stereo on; with nothing plugged in it stays on the flat screen and the
+	// mouse drives the view instead. Nothing here is replicated - stereo is a property of the
+	// local viewport, so the server neither knows nor cares.
+	// ---------------------------------------------------------------------
+
+	// True when this pawn has stereo running. False on a desktop client, on every remote copy of
+	// this pawn, and on the server's copy of a client's pawn.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|VR")
+	bool IsVRCrewMode() const;
+
+	// Switch stereo on if a headset is present. Called automatically on possession; exposed so a
+	// Blueprint or a console-driven test can re-run the decision (e.g. headset plugged in late).
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|VR")
+	void ApplyVRMode();
+
+	// Turn stereo on only when a headset is actually connected. Off makes this pawn stay flat
+	// even in a headset, which is useful for a spectator/debug build.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR")
+	bool bAutoEnableVRWhenHMDPresent = true;
+
+	// Seated origin (Local) is correct for a tank crew: tracking is centred on where the headset
+	// was at start, so the player's head sits at the seat component rather than on the tank floor.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR")
+	TEnumAsByte<EHMDTrackingOrigin::Type> VRTrackingOrigin = EHMDTrackingOrigin::Local;
 
 	// Called by ATSTankPlayerController (directly, or via PlayerState's OnAssignmentChanged) whenever
 	// this player's CrewRole changes, so the correct role-specific Input Mapping Context is applied.
@@ -96,6 +128,26 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew Station")
 	bool IsSeatedInTank() const;
 
+	// ---------------------------------------------------------------------
+	// VR widget interaction (scaffold - no crew widgets exist yet).
+	//
+	// Call this when a role widget is shown or hidden. It points the laser, and swaps in
+	// VRWidgetMappingContext at a higher priority so the trigger clicks rather than fires.
+	// Deliberately manual: nothing should guess when a widget is up.
+	// ---------------------------------------------------------------------
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|VR")
+	void SetVRWidgetInteractionEnabled(bool bEnabled);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|VR")
+	bool IsVRWidgetInteractionEnabled() const { return bVRWidgetInteractionEnabled; }
+
+	// Traces from the eye and sends the world point the Gunner is looking at to the server.
+	// Driven by IA_AimTurret on a desktop and by Tick in VR - in a headset the player aims by
+	// turning their head, which fires no input action at all, so an input-only path would leave
+	// the turret frozen for the entire session.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|VR")
+	void UpdateGunnerAim();
+
 	// Parameter is InRole, not Role: AActor declares a (deprecated) member called Role
 	// (legacy ENetRole) and UHT builds with -WarningsAsErrors, so the shadow is a hard error.
 	FName GetSeatComponentNameForRole(ETSCrewRole InRole) const;
@@ -113,6 +165,12 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank Simulation|VR")
 	TObjectPtr<UMotionControllerComponent> RightHand;
 
+	// Laser pointer for 3D widgets, on the right hand. Deactivated by default: there are no crew
+	// widgets yet, and an always-on pointer both costs a trace every frame and puts a visible
+	// beam through the cockpit. SetVRWidgetInteractionEnabled turns it on when a widget appears.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank Simulation|VR")
+	TObjectPtr<UWidgetInteractionComponent> WidgetInteraction;
+
 	// --- Enhanced Input assets - assign in a Blueprint subclass or the C++ defaults (Section 12) ---
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
@@ -126,6 +184,18 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputMappingContext> CommanderMappingContext;
+
+	// Applied on top of the role context ONLY while stereo is on. The role contexts already carry
+	// the motion-controller keys, so this is for bindings that would be actively wrong on a
+	// desktop (snap turn, height recentre, hand poses) rather than a duplicate of them. Optional.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputMappingContext> VRMappingContext;
+
+	// Added at a HIGHER priority than the role context while a VR widget is up, so the trigger
+	// clicks the widget instead of firing the gun. Removed again when the widget closes.
+	// See SetVRWidgetInteractionEnabled.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputMappingContext> VRWidgetMappingContext;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputAction> IA_Interact;
@@ -208,4 +278,17 @@ private:
 	// a controller/actor rotation would not.
 	float SeatViewYaw = 0.f;
 	float SeatViewPitch = 0.f;
+
+	// Desktop only. Turns a mouse/stick delta into the seated view rotation; a no-op while the
+	// headset drives the camera, where writing a relative rotation would fight the tracked pose.
+	void ApplySeatViewDelta(const FVector2D& LookDelta);
+
+	// True only for the local player who currently holds the Gunner seat.
+	bool IsLocalGunner() const;
+
+	// Ticking exists solely for the VR Gunner's head aim, so it is switched on and off with the
+	// role rather than left running on every crew pawn in the level.
+	void UpdateAimTickEnabled();
+
+	bool bVRWidgetInteractionEnabled = false;
 };

@@ -125,8 +125,10 @@ protected:
 	virtual UClass* GetDefaultPawnClassForController_Implementation(AController* InController) override;
 	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
 
-	// True if NewPlayer should be designated host. Called from PostLogin before the pawn is spawned.
-	bool ShouldDesignateAsHost(const APlayerController* NewPlayer) const;
+	// True if NewPlayer should be designated host. Called from PostLogin before the pawn is
+	// spawned, which is why it must stay virtual: a subclass that wants the local player to be a
+	// crew member instead has to say so before GetDefaultPawnClassForController reads bIsHost.
+	virtual bool ShouldDesignateAsHost(const APlayerController* NewPlayer) const;
 
 	bool HasDesignatedHost() const;
 
