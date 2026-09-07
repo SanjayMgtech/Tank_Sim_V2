@@ -1531,6 +1531,73 @@ changes add `UPROPERTY`s, so Live Coding cannot carry them.
 
 ---
 
+## ⚙ `bRequiresControllerForInputs` — the flag the whole crew model depends on
+
+**Verified 2026-09-07 by reading the Chaos source and measuring, after this cost a long
+debugging session.** An earlier note in this file claimed the flag was already False on all six
+tanks. It was **True on all seven Blueprints, master included** — the value had never persisted.
+
+`ChaosVehicleMovementComponent.cpp:1177`:
+```cpp
+bool bProcessLocally = bRequiresControllerForInputs
+    ? (Controller && Controller->IsLocalController()) : true;
+
+if (bProcessLocally && PVehicleOutput)
+{
+    // automatic gear shift 0 -> 1 lives HERE
+    // CalcThrottleBrakeInput  lives HERE
+    // the entire mechanical simulation lives HERE
+}
+```
+Nobody possesses the tank under the three-crew model, so `Controller` is null and
+`bProcessLocally` was false.
+
+**The failure mode is silent and looks exactly like success.** `SetThrottleInput` still stores
+`RawThrottleInput = 1.0`, so `GetThrottleInput()` reads 1.0 and every log line up the chain looks
+right. What does not happen: the gearbox never leaves **Neutral (gear 0)** and the engine never
+revs above its **600 RPM idle**. Symptom: "the tank does not move" with no error anywhere.
+
+| | before | after |
+|---|---|---|
+| gear | 0, never shifts | 0 → 1 → 2 |
+| engine RPM | 600 (idle) | 804 |
+| forward speed | ~100 cm/s (sliding downhill) | 513 cm/s under power |
+
+**Children do NOT inherit the master's value.** Each per-tank Blueprint holds its own stored
+override, so setting it on `BP_TankController_Chaos` alone changes nothing. Set it on all seven
+and verify:
+```python
+mv = [c for c in cdo.get_components_by_class(unreal.ChaosVehicleMovementComponent)][0]
+mv.set_editor_property('bRequiresControllerForInputs', False)
+```
+`set_component_property` also works, and works on children too, despite the human-only table's
+warning about inherited-component overrides — that warning is about creating a *new* override;
+changing one that already exists is fine.
+
+### ⚠ Speed is NOT evidence on a sloped map
+The WarZone spawn is on an incline and an unpowered tank rolls at **~100 cm/s with
+`CurrentDriveInput = (0,0)`**. Forward speed and displacement therefore cannot distinguish
+"driving" from "sliding downhill", and were used to wrongly report success twice in one session.
+Assert on **gear** and **engine RPM** instead, or on speed well above the roll rate.
+
+### ⚠ Injecting an input ACTION skips the key mapping
+`pie_inject_input_action` calls `InjectInputForAction`, which starts at the Input Action and
+therefore proves nothing about the IMC key bindings — the exact layer UE 5.7's
+`DefaultKeyMappings` deprecation breaks. A pass there means "the action is wired", not "W works".
+To test the key layer you need a human at the keyboard, or a check of the live
+`DefaultKeyMappings` array.
+
+### Open question for multiplayer
+With the flag False, `bProcessLocally` is true on **every** machine, so each client runs the
+mechanical simulation on its own copy rather than only the authority. Epic leaves a comment right
+above that line asking the same thing:
+```cpp
+// IsLocallyControlled will fail if the owner is unpossessed (i.e. Controller == nullptr);
+// Should we remove input instead of relying on replicated state in that case?
+```
+Untested here. Watch for the same class of fault as the turret jitter (two writers fighting) in a
+two-window listen-server test. Single-player and server-side driving are verified.
+
 ## 6. Test Procedure (run after every phase)
 
 1. Close editor fully. Rebuild C++ (Rule 5). Relaunch.
