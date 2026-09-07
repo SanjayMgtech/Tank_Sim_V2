@@ -588,7 +588,30 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Networking")
 	float DefaultAimDistance = 100000.f;
 
+	// Run the Chaos vehicle simulation on the SERVER ONLY, and let clients take the tank's motion
+	// from replication.
+	//
+	// The Blueprints must ship bRequiresControllerForInputs = False or the tank does not move at all
+	// (nobody possesses it, so Chaos skips gear shifting and the whole mechanical simulation - see
+	// ChaosVehicleMovementComponent.cpp:1177). But False means bProcessLocally is true on EVERY
+	// machine, so each client would also run its own unsynchronised sim from the replicated drive
+	// input. That is not client prediction: there is no reconciliation, so the two sims drift and
+	// then movement replication yanks the client copy back - the same two-writers-fighting fault as
+	// the turret jitter documented in CLAUDE.md.
+	//
+	// So BeginPlay puts the flag back to True on clients, where the absence of a controller then
+	// makes Chaos skip the sim exactly as before this was ever touched. The flag is a plain
+	// (non-replicated) bool, so this per-machine split is safe.
+	//
+	// Turn this off to let every client simulate locally - do that only with a two-window listen
+	// server test in front of you.
+	UPROPERTY(EditDefaultsOnly, Category = "Networking")
+	bool bSimulateVehicleOnAuthorityOnly = true;
+
 	virtual void BeginPlay() override;
+
+	// Server simulates, clients replicate. See bSimulateVehicleOnAuthorityOnly.
+	void ApplyVehicleSimulationAuthorityPolicy();
 
 	UFUNCTION(Server, Unreliable, BlueprintCallable, Category = "Networking")
 	void ServerSetAimPoint(FVector NewAimPoint);

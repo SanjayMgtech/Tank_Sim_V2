@@ -1,5 +1,7 @@
 #include "Tank/TSTankControllerBase.h"
 
+#include "ChaosVehicleMovementComponent.h"
+
 #include "Components/SkeletalMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Kismet/GameplayStatics.h"
@@ -7,6 +9,7 @@
 #include "Net/UnrealNetwork.h"
 #include "GameFramework/PlayerController.h"
 #include "Player/TSTankPlayerState.h"
+#include "Tank_Sim_V2.h"
 #include "Engine/World.h"
 
 ATSTankControllerBase::ATSTankControllerBase()
@@ -294,6 +297,33 @@ void ATSTankControllerBase::BeginPlay()
 	// zero default is not "unset" to that maths, it is the world origin, so a tank spawned away
 	// from the origin swung its turret round to point back at it the moment it appeared.
 	ReceivedAimPoint = GetActorLocation() + GetActorForwardVector() * DefaultAimDistance;
+
+	ApplyVehicleSimulationAuthorityPolicy();
+}
+
+void ATSTankControllerBase::ApplyVehicleSimulationAuthorityPolicy()
+{
+	if (!bSimulateVehicleOnAuthorityOnly)
+	{
+		return;
+	}
+
+	UChaosVehicleMovementComponent* Move = Cast<UChaosVehicleMovementComponent>(GetVehicleMovementComponent());
+	if (!Move)
+	{
+		return;
+	}
+
+	// True on a client makes Chaos require a controller; nothing possesses the tank, so bProcessLocally
+	// is false there and the client stops running its own sim. The server keeps False and remains the
+	// single simulator. See the header for why this cannot just be one value in the Blueprint.
+	const bool bRequiresController = !HasAuthority();
+	Move->SetRequiresControllerForInputs(bRequiresController);
+
+	UE_LOG(LogTankSim, Log, TEXT("[Tank] %s: vehicle sim %s (bRequiresControllerForInputs=%s)"),
+		*GetName(),
+		HasAuthority() ? TEXT("ENABLED (authority)") : TEXT("disabled (client - motion comes from replication)"),
+		bRequiresController ? TEXT("true") : TEXT("false"));
 }
 
 void ATSTankControllerBase::BP_AimTurret_Implementation(FVector_NetQuantize AimPoint)
