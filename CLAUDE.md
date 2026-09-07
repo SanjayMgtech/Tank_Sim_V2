@@ -167,6 +167,11 @@ This has now bitten twice — `ATSGameMode::TryAssignRole` (named `RequestedRole
 `ATSVRPawn::GetSeatComponentNameForRole` (named `InRole`). Use `InRole`, `CrewRole` or
 `RequestedRole`, never bare `Role`, for parameters AND locals on any `AActor` subclass.
 
+**`Mesh` is the same trap.** `AWheeledVehiclePawn` declares a member `Mesh`, so a loop variable
+`for (USkeletalMeshComponent* Mesh : Meshes)` inside `ATSTankControllerBase` is also a hard error.
+Name it `MeshComp`. Assume any short, obvious name (`Mesh`, `Role`, `Owner`, `Controller`) is
+already taken somewhere in the `AActor` chain.
+
 ### Spawned sessions and git worktrees — Unreal is NOT reachable from a worktree
 `.mcp.json` starts the Monolith proxy from `Plugins/Monolith/Binaries/monolith_proxy.exe`.
 `Plugins/` is **not tracked in git**, so a worktree never contains it and the proxy reports
@@ -1632,6 +1637,109 @@ the very next tick; a single call measures a stationary tank and looks like a fa
 calling a drive RPC in a Python loop — every call lands in one frame.
 
 **Still human-only:** judging whether the client's *view* is smooth. Logs prove values, not jitter.
+
+## 🪑 Crew seats, the interior mesh, and the turret (2026-09-08)
+
+### Seats were all bolted to the HULL — two of the three were wrong
+`DriverSeat` / `GunnerSeat` / `CommanderSeat` are SCS scene components at the root of
+`BP_TankController_Chaos`, i.e. attached to the hull. That is correct for the Driver and wrong for
+the other two: a Gunner and Commander sit in the turret basket and must traverse with the gun, or
+the turret swings around them while they stay facing the hull's forward.
+
+**It cannot be fixed by parenting in the Blueprint through this tooling.** The seats are SCS
+components and the turret bone lives on `VehicleMesh`, an inherited NATIVE component;
+`reparent_component` only sees SCS nodes and answers `New parent component not found: VehicleMesh`.
+So `ATSTankControllerBase::AttachTurretCrewSeats()` does it at BeginPlay instead, with
+**KeepWorldTransform** — designers keep placing seats in the viewport in hull space exactly as
+before, and the attach only changes what they RIDE. RULE 8 stays intact: placement is still
+Blueprint data.
+
+`TurretSocketName` (default `turret`) and `TurretMountedSeatComponents` (Gunner + Commander, the
+Driver deliberately absent) are `EditDefaultsOnly`. The vendor meshes share the `turret` bone name
+— verified on both the VK1602 and the T90.
+
+Measured with the turret at 135°: Driver moved 0.6uu (stayed in the hull), Gunner 65uu and
+Commander 69uu (swung with the turret).
+
+### Interior crew compartment is a SEPARATE skeletal mesh with its own skeleton
+On the VK1602 it is the `Tank_SkeletalMesh` component (asset `Tank_New`, skeleton
+`Tank_New_Skeleton`) — **not** the hull's `SK_VK1602Leopard`. It had **no AnimClass at all**, so
+nothing drove its bones and the interior turret basket never moved.
+
+`ABP_VK1602Leopard_Interior` now drives bone `b_Upper` from `GetInteriorTurretRotation()`, which
+reads `TurretsRot[0].Yaw` — the same array the exterior turret uses, so the two cannot drift apart.
+
+**Transform (Modify) Bone must be Additive in COMPONENT space.** Bone space put the yaw onto the
+bone's *pitch* (its local frame is rolled ~90°), and Replace mode wipes the bind orientation
+entirely. Verified: turret +135.145 -> bone +135.11 from bind, turret -44.870 -> bone -44.90, with
+pitch ~0 and roll preserved.
+
+`USkeletalMeshComponent` has **no** `SetBoneRotationByName` — that is on `UPoseableMeshComponent`.
+An AnimBP is the only route for a skeletal mesh.
+
+Other bones on that skeleton, unused so far: `b_Lower`, `b_Brake`, `b_Brake_001`, `b_Gas`,
+`b_L_Lever`, `b_R_Lever` (driver controls).
+
+### ⚠ Interior animation lagged a frame behind the gun — it was TICK ORDER
+`TurretsAndGunsRotCalculation` writes `TurretsRot` in the pawn's Event Tick, but the interior mesh
+could evaluate its AnimBP *before* that ran, drawing last frame's angle while the exterior gun drew
+this frame's. Only the interior shows it, because `VehicleMesh` is the root and does not have the
+problem. `SyncInteriorMeshTickToPawn()` calls `AddTickPrerequisiteActor(this)` on every non-root
+skeletal mesh. The root is deliberately skipped — it carries the vehicle physics.
+
+Logs prove ordering, never smoothness. **Whether the lag is visually gone still needs a human.**
+
+## 🎯 Team spawn points
+
+`ATSGameMode::GetSpawnTransformForTeam` takes any actor tagged `TSTeamSpawn_TeamA`..`TeamD`, or a
+`PlayerStart` with that `PlayerStartTag`. WarZone had none, so tanks fell in at a world-origin
+offset of z=200.
+
+Two `TargetPoint`s are now placed and tagged, on ground chosen by a slope survey (sample a 600uu
+footprint, take the spots with the smallest height spread):
+```
+TSTeamSpawn_TeamA  (-4000, -1000, -277.8)  yaw  90   ground spread 11.7uu
+TSTeamSpawn_TeamB  (-4000,  1800, -389.5)  yaw -90   ground spread 20.3uu
+```
+**Flat ground is not cosmetic.** The first attempt put TeamA on a slope where the tank slid
+backwards, and `ThrottleControl` then correctly applied FULL BRAKE (`Select(Throttle, Throttle*-1,
+bPickA = Throttle>0 AND ForwardSpeedMPH < -1)`) — so pressing forward locked the tank. It read as
+"driving is broken" and was not. On the flat spawn the tank reports `speed=0.0` at rest, which also
+makes speed a usable signal again.
+
+### ⚠ `unreal.Rotator(a, b, c)` is (ROLL, PITCH, YAW)
+Passing a yaw into the second slot pitches the spawn point 90°, and the tank arrives **upside
+down**. That is what happened on the first attempt.
+
+### ⚠ WarZone.umap is GITIGNORED
+`.gitignore:86` excludes `/Content/TankSimulation/Maps`, so these spawn points do NOT survive a
+fresh clone. Un-ignore that folder, or re-place them per checkout.
+
+### ⚠ Python `Vector` will not convert to `Vector_NetQuantize`
+`pc.server_aim_turret(unreal.Vector(...))` throws `NativizeStructInstance: Cannot nativize
+'Vector' as 'Vector_NetQuantize'`. Two test runs were misread as "the turret does not respond"
+before the type error was spotted. Use `unreal.Vector_NetQuantize(x, y, z)`.
+
+## 🔫 Firing
+
+The tank's real firing is `StartShooting` / `StopShooting` on `BP_TankWeapon` — a hold-to-fire
+pair, while `ITSTankInterface`'s fire events are single discrete requests. `BP_TankWeapon_C` is a
+Blueprint-generated type C++ cannot name, so the master Blueprint implements two one-node events,
+`BP_WeaponStartShooting` / `BP_WeaponStopShooting`, and C++ keeps the timing:
+- `BP_FireMainCannon` holds the trigger `MainCannonTriggerHoldSeconds` (0.15) then releases.
+- `BP_FireMachineGun` starts on the first request and pushes the release out
+  `MachineGunReleaseDelaySeconds` (0.25) each frame, so the gun stops when requests stop arriving.
+  Must comfortably exceed one frame — `ServerFireMachineGun` is Unreliable.
+
+Verified reaching `StartShooting -> FireWeapon -> UpdateWeaponAmmo -> ReloadWeapon`.
+
+### `WeaponReloadUI` was an infinite per-tick loop without a HUD
+It is `Switch on Int -> Reload Weapon UI macro -> NotReloaded -> Delay Until Next Tick -> retry`.
+The macro reads `HUD`, which no tank has under the crew model (nobody possesses the tank), so it
+never completed and span every tick on every server tank after the first shot. Now guarded with
+`Branch(IsValid(HUD))` at the event entry. This is the exception to the earlier note that
+`ReloadWeaponUI` must not be guarded — that warning was about the *function's* two exec outputs;
+this event's only consumer is its own retry loop.
 
 ## 6. Test Procedure (run after every phase)
 
