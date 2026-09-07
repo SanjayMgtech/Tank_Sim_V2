@@ -185,7 +185,7 @@ stage commits with an explicit pathspec, never `git add -A`.
 |---|---|
 | Rename a Blueprint **function parameter** | No rename-parameter action; `set_function_params` is additive. Done in the function's Details panel; the editor fixes up call sites and keeps connections (verified Phase 15). |
 | Dismiss editor modal dialogs | A modal blocks the game thread, so MCP is unresponsive until a human clicks. Seen with "Save Content", the reload-assets confirm, and the auto-save recovery prompt after a force-kill. |
-| Run PIE as **Listen Server with 2 players** | `run_pie_smoke` / `get_game_world` reach only one PIE world, so server-vs-client values cannot be compared. This is the only way to test replication (the open Phase 9 gap). |
+| ~~Run PIE as Listen Server with 2 players~~ **NO LONGER HUMAN-ONLY** | `run_pie_smoke` still reaches one PIE world, but two `-game` processes give a real listen server + client that a script can drive end to end. See *Automated listen-server testing* below. A human is still needed to JUDGE SMOOTHNESS - logs cannot see jitter. |
 | Drive real gameplay events | e.g. `DamageCausedUI` is only written by a macro reached through an actual damage-caused event; macros are inlined and cannot be invoked directly. |
 | Anything that is a Blueprint **editor-UI** operation with no MCP action | Reordering pins, graph-level refactors. NOTE: editing a macro's internals was previously listed here and is WRONG - `add_node`/`connect_pins` work on a macro graph (proven on `UpdateDamageCausedUI`). Test before declaring something human-only. |
 | Override an **inherited** component's property on a CHILD Blueprint | `set_component_property` only sees a Blueprint's own SCS ("Component not found: DriverSeat" on the child). The override lives in the Inheritable Component Handler, which neither the MCP surface nor Python can create. `SubobjectDataSubsystem` can *read* it (`k2_gather_subobject_data_for_blueprint`). Select the component in the child's Components panel and type the value; verify with `get_inherited_component_override`. |
@@ -1597,6 +1597,41 @@ above that line asking the same thing:
 ```
 Untested here. Watch for the same class of fault as the turret jitter (two writers fighting) in a
 two-window listen-server test. Single-player and server-side driving are verified.
+
+## 🤖 Automated listen-server testing (added 2026-09-07)
+
+Two `-game` processes give a real server/client pair with a real NetDriver, which `run_pie_smoke`
+cannot. The blocker used to be that a tank only spawns when a host clicks the lobby UI; the
+`TSAuto*` URL options remove that.
+
+```bash
+# server
+MSYS_NO_PATHCONV=1 "C:/Program Files/Epic Games/UE_5.7/Engine/Binaries/Win64/UnrealEditor.exe" \
+  "C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" "/Game/TankSimulation/Maps/WarZone?listen" \
+  -game -windowed -resx=800 -resy=450 -log -abslog="C:\Projects\Tank_Sim_V2\Saved\Logs\MPServer.log" &
+
+# client - assigns itself and drives, unattended
+MSYS_NO_PATHCONV=1 "C:/Program Files/Epic Games/UE_5.7/Engine/Binaries/Win64/UnrealEditor.exe" \
+  "C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" "127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoDrive=1,0,8" \
+  -game -windowed -resx=800 -resy=450 -log -abslog="C:\Projects\Tank_Sim_V2\Saved\Logs\MPClient.log" &
+```
+Wait on `grep -aq "TSAuto: sequence complete"` in the client log, then diff the two logs. Close
+both with `CloseMainWindow()`, never a kill.
+
+**`-ExecCmds` does NOT work for this.** It runs during engine init, long before a PlayerController
+or PlayerState exists, so an exec routes nowhere and logs *nothing at all* — which reads as "the
+command is broken" rather than "it ran too early". That dead end is why the URL options exist.
+
+Console commands (also usable by hand in `~`): `TSTeam A|B|C|D`, `TSRole Driver|Gunner|Commander`,
+`TSClear`, `TSStartMatch`, `TSDrive <throttle> <steering> <seconds>`, `TSTankStatus`. They route
+through the same Server RPCs the UI uses, so server validation is unchanged and they grant no extra
+authority. Bodies compile out of Shipping.
+
+**`TSDrive` holds the input on a timer, and must.** One `ServerSetDriveInput` is cleared by Chaos on
+the very next tick; a single call measures a stationary tank and looks like a failure. Same trap as
+calling a drive RPC in a Python loop — every call lands in one frame.
+
+**Still human-only:** judging whether the client's *view* is smooth. Logs prove values, not jitter.
 
 ## 6. Test Procedure (run after every phase)
 
