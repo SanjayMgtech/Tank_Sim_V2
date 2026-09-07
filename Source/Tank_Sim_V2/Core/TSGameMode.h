@@ -98,6 +98,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	APawn* GetTankForTeam(ETSTeamId Team) const;
 
+#if WITH_DEV_AUTOMATION_TESTS
+	// Test-only. DefaultTankClass is EditDefaultsOnly (Blueprint data, per RULE 2), so an
+	// automation test spawning a raw C++ ATSGameMode has no tank class and every role assignment
+	// fails. This lets the flow test inject a native stand-in without exposing a setter to
+	// gameplay code.
+	void SetDefaultTankClassForTesting(TSubclassOf<APawn> InClass) { DefaultTankClass = InClass; }
+#endif
+
 protected:
 	// Tank Blueprint to spawn per team. Must implement ITSTankInterface directly - the MustImplement
 	// metadata below enforces it in the class picker.
