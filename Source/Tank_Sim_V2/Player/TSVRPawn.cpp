@@ -4,6 +4,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "TimerManager.h"
 #include "CollisionQueryParams.h"
 #include "WorldCollision.h"
 #include "EnhancedInputComponent.h"
@@ -95,7 +96,9 @@ void ATSVRPawn::RefreshCrewBinding()
 	PS->OnAssignmentChanged.AddDynamic(this, &ATSVRPawn::ApplyRoleMappingContext_FromPlayerState);
 	BoundPlayerState = PS;
 
-	// ApplyVRMode re-applies the role context itself, so it replaces the direct call here.
+	// The context swap is plain Enhanced Input bookkeeping and is safe during possession, so it
+	// happens now. Only the stereo switch has to wait - see ApplyVRMode.
+	ApplyRoleMappingContext(PS->GetCrewRole());
 	ApplyVRMode();
 
 	// Cover the case where the crew assignment already existed before we got here (late join, or a
@@ -131,6 +134,25 @@ bool ATSVRPawn::IsVRCrewMode() const
 
 void ATSVRPawn::ApplyVRMode()
 {
+	// DEFERRED BY ONE TICK, AND THAT IS NOT COSMETIC.
+	//
+	// This is reached from PossessedBy, which runs inside AGameModeBase::RestartPlayer inside
+	// PostLogin. Possession is still in progress at this point and SetupPlayerInputComponent
+	// has not run yet. Toggling stereo rebuilds the viewport and its render target, and doing
+	// that mid-restart pulls the ground out from under the input setup that runs immediately
+	// afterwards - which is exactly where it crashed, in SetupPlayerInputComponent, with the
+	// PostLogin frames still on the stack.
+	//
+	// One tick later the pawn, controller, local player and input component are all fully
+	// built, and flipping stereo touches nothing that is still under construction.
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimerForNextTick(this, &ATSVRPawn::ApplyVRModeDeferred);
+	}
+}
+
+void ATSVRPawn::ApplyVRModeDeferred()
+{
 	const APlayerController* PC = Cast<APlayerController>(GetController());
 	if (!PC || !PC->IsLocalController())
 	{
@@ -147,13 +169,16 @@ void ATSVRPawn::ApplyVRMode()
 
 	UTSVRModeLibrary::SetVRModeEnabled(bWantVR, VRTrackingOrigin);
 
-	if (bWantVR)
+	// A fresh recentre puts the player's forward where they are actually facing as they drop
+	// into the seat. Guarded on head tracking actually running: called any earlier the XR
+	// session has not produced a pose yet and the engine just logs
+	// "Could not retrieve a valid head pose for recentering" and does nothing. If tracking is
+	// not up yet the player still has the Recenter button.
+	if (bWantVR && UTSVRModeLibrary::IsHeadTrackingActive())
 	{
-		// A fresh recentre puts the player's forward where they are actually facing as they drop
-		// into the seat, rather than wherever the headset happened to be pointing at startup.
 		UTSVRModeLibrary::RecenterHMD();
 	}
-	else
+	else if (!bWantVR)
 	{
 		// Flat screen: the mouse owns the view, so start from a clean seat-forward rotation rather
 		// than whatever the previous possession left on the camera.

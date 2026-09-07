@@ -290,5 +290,9 @@ private:
 	// role rather than left running on every crew pawn in the level.
 	void UpdateAimTickEnabled();
 
+	// The real body of ApplyVRMode, run one tick later. See ApplyVRMode for why the delay is
+	// not optional.
+	void ApplyVRModeDeferred();
+
 	bool bVRWidgetInteractionEnabled = false;
 };

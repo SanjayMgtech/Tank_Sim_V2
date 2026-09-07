@@ -32,7 +32,14 @@ bool UTSVRModeLibrary::SetVRModeEnabled(bool bEnable, TEnumAsByte<EHMDTrackingOr
 		return false;
 	}
 
-	UHeadMountedDisplayFunctionLibrary::EnableHMD(bEnable);
+	// Only touch the device when the state actually has to change. This is the difference
+	// between a no-op and a viewport rebuild: under Play > VR Preview stereo is ALREADY on, so
+	// an unconditional EnableHMD(true) re-initialises the stereo device for nothing - and if it
+	// lands mid-possession it takes the input setup down with it.
+	if (IsVRModeActive() != bEnable)
+	{
+		UHeadMountedDisplayFunctionLibrary::EnableHMD(bEnable);
+	}
 
 	if (bEnable)
 	{
