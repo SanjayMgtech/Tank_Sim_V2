@@ -17,9 +17,10 @@ framework was added to it directly rather than as a separate `TankSimulation` mo
 | `ATSGameMode` | [TSGameMode.h](../Source/Tank_Sim_V2/Core/TSGameMode.h) | team/role validation, tank spawn/assign |
 | `ATSGameState` | [TSGameState.h](../Source/Tank_Sim_V2/Core/TSGameState.h) | match state, public team→tank map |
 | `UTSGameInstance` | [TSGameInstance.h](../Source/Tank_Sim_V2/Core/TSGameInstance.h) | convenience accessor to the session subsystem |
-| `ATSTankPlayerState` | [TSTankPlayerState.h](../Source/Tank_Sim_V2/Player/TSTankPlayerState.h) | TeamId / CrewRole / AssignedTank |
+| `ATSTankPlayerState` | [TSTankPlayerState.h](../Source/Tank_Sim_V2/Player/TSTankPlayerState.h) | TeamId / CrewRole / AssignedTank / IsHost |
 | `ATSTankPlayerController` | [TSTankPlayerController.h](../Source/Tank_Sim_V2/Player/TSTankPlayerController.h) | every Server RPC (table below) |
 | `ATSVRPawn` | [TSVRPawn.h](../Source/Tank_Sim_V2/Player/TSVRPawn.h) | HMD/motion controllers, Enhanced Input routing |
+| `ATSHostCameraPawn` | [TSHostCameraPawn.h](../Source/Tank_Sim_V2/Player/TSHostCameraPawn.h) | the host's free-roam camera (see §11) |
 | `ATSTank` | [TSTank.h](../Source/Tank_Sim_V2/Tank/TSTank.h) | Path A convenience base (see §4) |
 | `UTSTankCrewComponent` | [TSTankCrewComponent.h](../Source/Tank_Sim_V2/Tank/TSTankCrewComponent.h) | TeamId + seat occupancy/access checks |
 | `UTSTankControlComponent` | [TSTankControlComponent.h](../Source/Tank_Sim_V2/Tank/TSTankControlComponent.h) | drive request validation |
@@ -28,7 +29,7 @@ framework was added to it directly rather than as a separate `TankSimulation` mo
 | `UTSSessionSubsystem` | [TSSessionSubsystem.h](../Source/Tank_Sim_V2/Networking/TSSessionSubsystem.h) | create/find/join/destroy session |
 | `UTSVoiceSubsystem` | [TSVoiceSubsystem.h](../Source/Tank_Sim_V2/Voice/TSVoiceSubsystem.h) | `IVoiceChat` wrapper |
 | `UTSRoleDefinition` / `UTSTankDefinition` | [TSRoleDefinition.h](../Source/Tank_Sim_V2/Data/TSRoleDefinition.h) / [TSTankDefinition.h](../Source/Tank_Sim_V2/Data/TSTankDefinition.h) | Data Asset classes |
-| 8 UMG widget base classes | `Source/Tank_Sim_V2/UI/` | see §5 |
+| 9 UMG widget base classes | `Source/Tank_Sim_V2/UI/` | see §5 |
 
 Plus a small internal helper not in the doc's class table: `UTSHUDWidgetBase`
 ([TSHUDWidgetBase.h](../Source/Tank_Sim_V2/UI/TSHUDWidgetBase.h)), which the four HUD widgets share to
@@ -178,6 +179,7 @@ visible until they do.
    | `WBP_SessionBrowser` | `UTSSessionBrowserWidget` | buttons calling `CreateSession` / `RefreshSessions` / `JoinSession`; implement `OnSessionListUpdated` to populate a list |
    | `WBP_TeamSelection` | `UTSTeamSelectionWidget` | 4 buttons calling `NotifyTeamSelected` |
    | `WBP_RoleSelection` | `UTSRoleSelectionWidget` | 3 buttons calling `NotifyRoleSelected` |
+   | `WBP_HostAdmin` | `UTSHostAdminWidget` | gate `Visibility` on `IsLocalPlayerHost`; implement `OnRosterUpdated` to list `GetAssignablePlayers`, with per-row buttons calling `AssignTeamAndRole` / `ClearAssignment` |
    | `WBP_CrewHUD` | `UTSCrewHUDWidget` | implement `OnAssignmentRefreshed` / `OnCommandReceived` |
    | `WBP_DriverHUD` | `UTSDriverHUDWidget` | implement `OnSpeedUpdated` |
    | `WBP_GunnerHUD` | `UTSGunnerHUDWidget` | implement `OnWeaponStateChanged`, read the `Get*Ammo`/`GetAimDirection`/`IsReloading` getters |
@@ -186,6 +188,11 @@ visible until they do.
 5. **GameInstance Blueprint** (optional) — derive from `UTSGameInstance` and set it as the project's
    Game Instance Class if you want the `GetSessionSubsystem` convenience node; the subsystem works
    without this too (`GetGameInstance()->GetSubsystem<UTSSessionSubsystem>()`).
+6. **Host camera Blueprint** (optional) — derive from `ATSHostCameraPawn` and set it as the GameMode's
+   `HostCameraPawnClass` if you want to tune FOV/speed or add an Enhanced Input `HostMappingContext`.
+   The C++ default already flies with WASD + mouse out of the box (see §11).
+7. **`TSHostSpawn` level tag** (optional) — tag one actor in the level with `TSHostSpawn` to place the
+   host's camera deliberately; without it the host uses a normal `PlayerStart`, like everyone else.
 
 ## 6. Server RPC reference (Section 10/15)
 
@@ -197,6 +204,9 @@ each player's own controller, which always has one.
 |---|---|---|---|
 | `ServerRequestTeamChange` | Reliable | Team is a real team, not already full | `ATSGameMode::TryAssignTeam` |
 | `ServerRequestRoleChange` | Reliable | Player has a team; seat free | `ATSGameMode::TryAssignRole`, spawns the team's tank on first request |
+| `ServerHostAssignTeam` | Reliable | Sender is the host; target is not | `ATSGameMode::HostAssignTeam` → same checks as `TryAssignTeam` |
+| `ServerHostAssignRole` | Reliable | Sender is the host; target is not | `ATSGameMode::HostAssignRole` → same checks as `TryAssignRole` |
+| `ServerHostClearAssignment` | Reliable | Sender is the host; target is not | `ATSGameMode::HostClearAssignment` — frees the seat, clears team |
 | `ServerSetDriveInput` | Unreliable | Finite floats in range; sender is the tank's Driver | `UTSTankControlComponent::TryApplyDriveInput` |
 | `ServerAimTurret` | Unreliable | Non-NaN vector; sender is the Gunner | `UTSTankWeaponComponent::TryAimTurret` |
 | `ServerFireMainCannon` | Reliable | Sender is the Gunner; ammo > 0; fire-rate cooldown | `UTSTankWeaponComponent::TryFireMainCannon` |
@@ -281,6 +291,7 @@ no code changes on the framework side.
 | # | Item | How to verify |
 |---|---|---|
 | 1 | Host creates a session, clients join | `WBP_SessionBrowser` → Create, then Join from a second client/PIE instance |
+| 1b | The host is an admin, not a player | The host spawns into `ATSHostCameraPawn` and flies freely; `IsHost()` is true; `GetTeamId()`/`GetCrewRole()` stay `None` even if it clicks team/role selection; it never counts toward a team's 3-player cap |
 | 2 | Teams/roles are server-authoritative | Try `ServerRequestRoleChange` from a client with no team assigned — `ATSGameMode::TryAssignRole` returns false |
 | 3 | Each team has one tank | `ATSGameState::GetTeamTankEntries` has ≤1 entry per `ETSTeamId` |
 | 4 | 3 clients occupy Driver/Gunner/Commander on the same tank | 3 PIE clients pick the same team, different roles; `UTSTankCrewComponent`'s 3 seats fill |
@@ -289,8 +300,85 @@ no code changes on the framework side.
 | 7 | Crew voice works | `IsVoiceChatAvailable()` true after enabling a voice backend (§8); 3 crew hear each other |
 | 8 | VR input reaches the correct command path | VR controller trigger → `ATSVRPawn::Input_FireMainCannon` → `ServerFireMainCannon` |
 | 9 | C++ widgets expose bindable events without owning gameplay authority | Every widget's server-affecting action goes through `ATSTankPlayerController`, never mutates state directly |
+| 10 | The host can assign every other player's team and role | From `WBP_HostAdmin`, seat 3 clients as Driver/Gunner/Commander; a non-host calling `ServerHostAssignTeam` is rejected by `ATSGameMode::HostAssignTeam` |
 
-## 11. Developer 1 (Multiplayer) contract mapping
+## 11. The session host (match admin)
+
+The player who creates the session is a **match admin, not a participant**. It never joins a team,
+never takes a crew seat and never enters a tank; its whole job is assigning the *other* players'
+teams and roles, and watching the match from a free-roam camera.
+
+### How the host is identified
+
+`ATSTankPlayerState::bIsHost` (replicated) is the single source of truth, and only `ATSGameMode` sets
+it, in `PostLogin`:
+
+- **Listen server** (the normal case — `CreateSession` then `ServerTravel("...?listen")`): the host is
+  the one player controller local to the authority, i.e. the machine that created the session.
+- **Dedicated server**: no player is local, so the first client to connect is designated host. Turn
+  `bFirstPlayerHostsOnDedicatedServer` off in the GameMode defaults for a hostless server. If that host
+  disconnects, the next client to join is promoted.
+- **Standalone**: there is no session, so there is no host — the lone local player spawns into the
+  normal `ATSVRPawn` and plays. Without this carve-out a plain single-player PIE run would put you in
+  the free camera with no way to play.
+
+Designation happens *before* `Super::PostLogin`, because `AGameModeBase::PostLogin` restarts the player
+and `GetDefaultPawnClassForController` reads `bIsHost` to decide which pawn to spawn. It is also
+re-derived on every travel, so a non-seamless map change keeps the same host without any state carried
+across.
+
+### What being host means
+
+| | Host | Player |
+|---|---|---|
+| Pawn | `ATSHostCameraPawn` (free-roam camera) | `ATSVRPawn` (crew) |
+| `TeamId` | always `None` — `AssignTeamToPlayerState` rejects a host outright | Team A–D |
+| `CrewRole` | always `None` — `AssignRoleToPlayerState` rejects a host outright | Driver / Gunner / Commander |
+| Crew seat | never occupies one | one seat on its team's tank |
+| Counts toward a team's 3-player cap | no (`CountPlayersOnTeam` skips hosts) | yes |
+| Counts toward "all teams crewed" → `InProgress` | no (`AreAllActiveTeamsFullyCrewed` skips hosts) | yes |
+| Can assign *other* players | yes | no |
+
+### Assigning teams and roles
+
+The host's three Server RPCs (§6) route into `ATSGameMode::HostAssignTeam` / `HostAssignRole` /
+`HostClearAssignment`, which check the caller is the designated host and the target is not, then hand
+off to `AssignTeamToPlayerState` / `AssignRoleToPlayerState` — **the same functions the players' own
+self-service requests use**. There is exactly one team/role validation path in the framework regardless
+of who initiated the request, so the team-capacity and seat-occupancy rules cannot drift apart between
+the two flows.
+
+Build the panel as a `WBP_HostAdmin` deriving from `UTSHostAdminWidget` (§5):
+
+- `IsLocalPlayerHost()` — gate the whole panel's visibility on this.
+- `GetAssignablePlayers()` — the roster, i.e. every connected player except the host.
+- `GetOccupantForTeamRole(Team, Role)` — who already holds a seat, so taken seats can be greyed out.
+- `AssignTeamAndRole(Player, Team, Role)` / `ClearAssignment(Player)` — the actions.
+- `OnRosterUpdated` — implement to rebuild the list; it fires on construct, on join/leave
+  (`ATSGameState::OnPlayerRosterChanged`) and on any assignment change
+  (`ATSTankPlayerState::OnAssignmentChanged`), so the panel never has to poll.
+
+`WBP_TeamSelection` and `WBP_RoleSelection` stay as they are — a host clicking them is a no-op on both
+ends (the widgets skip the RPC, and the GameMode would reject it anyway), so hiding them for the host
+is a presentation choice, not a correctness requirement.
+
+### The free camera
+
+`ATSHostCameraPawn` derives from `ASpectatorPawn` purely for the free-flight plumbing that already
+brings: `USpectatorPawnMovement` plus `ADefaultPawn`'s built-in `MoveForward`/`MoveRight`/`MoveUp`/
+`Turn`/`LookUp` axis bindings, which the engine registers itself — so WASD + mouse flight works with
+**no input assets to author**. On top of that:
+
+- Collision is disabled outright (`ASpectatorPawn`'s default "Spectator" profile still blocks world
+  static), so the host can roam anywhere, including through terrain and buildings.
+- `bOnlyRelevantToOwner = true` — the pawn is never replicated to the players, so it can't show up in
+  their view or their relevancy set.
+- An explicit `UCameraComponent` (rather than `APawn::CalcCamera`'s eye-height fallback) so a host
+  wearing an HMD gets head tracking via `bLockToHmd`, and designers have a component for FOV/post.
+- `HostMappingContext` is an optional Enhanced Input slot for projects that want VR or custom bindings
+  layered on top of the default axis bindings.
+
+## 12. Developer 1 (Multiplayer) contract mapping
 
 `Tank_Simulation_Developer_Documentation.pdf` (the three-developer delivery plan) assigns a specific
 ownership area and "Suggested API" (its Section 3) to Developer 1: sessions, GameMode/GameState/

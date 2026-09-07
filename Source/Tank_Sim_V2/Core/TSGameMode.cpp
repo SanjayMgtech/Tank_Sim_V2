@@ -3,6 +3,7 @@
 #include "Core/TSGameState.h"
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
+#include "Player/TSHostCameraPawn.h"
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Player/TSVRPawn.h"
@@ -24,6 +25,9 @@ namespace
 		default: return NAME_None;
 		}
 	}
+
+	// Optional level actor tag marking where the host's free-roam camera starts.
+	const FName HostSpawnTag(TEXT("TSHostSpawn"));
 }
 
 ATSGameMode::ATSGameMode()
@@ -32,10 +36,22 @@ ATSGameMode::ATSGameMode()
 	PlayerControllerClass = ATSTankPlayerController::StaticClass();
 	GameStateClass = ATSGameState::StaticClass();
 	PlayerStateClass = ATSTankPlayerState::StaticClass();
+	HostCameraPawnClass = ATSHostCameraPawn::StaticClass();
 }
 
 void ATSGameMode::PostLogin(APlayerController* NewPlayer)
 {
+	// Must happen before Super: AGameModeBase::PostLogin restarts the player, and
+	// GetDefaultPawnClassForController reads bIsHost to decide between the free-roam camera and the
+	// VR crew pawn. Designating the host afterwards would spawn it into the wrong pawn.
+	if (ATSTankPlayerState* PS = NewPlayer ? NewPlayer->GetPlayerState<ATSTankPlayerState>() : nullptr)
+	{
+		if (ShouldDesignateAsHost(NewPlayer))
+		{
+			PS->SetIsHost(true);
+		}
+	}
+
 	Super::PostLogin(NewPlayer);
 
 	if (ATSGameState* GS = GetGameState<ATSGameState>())
@@ -63,6 +79,83 @@ void ATSGameMode::Logout(AController* Exiting)
 	Super::Logout(Exiting);
 }
 
+bool ATSGameMode::HasDesignatedHost() const
+{
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		const ATSTankPlayerState* PS = It->Get() ? It->Get()->GetPlayerState<ATSTankPlayerState>() : nullptr;
+		if (PS && PS->IsHost())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool ATSGameMode::ShouldDesignateAsHost(const APlayerController* NewPlayer) const
+{
+	if (!NewPlayer || HasDesignatedHost())
+	{
+		return false;
+	}
+
+	switch (GetNetMode())
+	{
+	case NM_ListenServer:
+		// The host is the machine that created the session, i.e. the one player controller local to
+		// the authority.
+		return NewPlayer->IsLocalController();
+
+	case NM_DedicatedServer:
+		// Nobody is local, so fall back to whoever connected first (opt-out via
+		// bFirstPlayerHostsOnDedicatedServer for deployments that want a hostless server). Note this
+		// also promotes a late joiner if the current host disconnects.
+		return bFirstPlayerHostsOnDedicatedServer;
+
+	default:
+		// Standalone: there is no session and therefore no host. Designating the lone local player as
+		// one would spawn them into the free camera with no way to play - exactly the wrong thing on
+		// a plain single-player Play-In-Editor run.
+		return false;
+	}
+}
+
+bool ATSGameMode::IsHostController(const APlayerController* Player) const
+{
+	const ATSTankPlayerState* PS = Player ? Player->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	return PS && PS->IsHost();
+}
+
+UClass* ATSGameMode::GetDefaultPawnClassForController_Implementation(AController* InController)
+{
+	const ATSTankPlayerState* PS = InController ? InController->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	if (PS && PS->IsHost() && HostCameraPawnClass)
+	{
+		return HostCameraPawnClass;
+	}
+
+	return Super::GetDefaultPawnClassForController_Implementation(InController);
+}
+
+AActor* ATSGameMode::ChoosePlayerStart_Implementation(AController* Player)
+{
+	// Same convention as the per-team tank spawns: tag an actor in the level to place the host's
+	// camera deliberately (e.g. overlooking the battlefield). Falls back to a normal PlayerStart.
+	const ATSTankPlayerState* PS = Player ? Player->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	if (PS && PS->IsHost())
+	{
+		for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+		{
+			if (It->ActorHasTag(HostSpawnTag))
+			{
+				return *It;
+			}
+		}
+	}
+
+	return Super::ChoosePlayerStart_Implementation(Player);
+}
+
 int32 ATSGameMode::CountPlayersOnTeam(ETSTeamId TeamId) const
 {
 	int32 Count = 0;
@@ -70,7 +163,8 @@ int32 ATSGameMode::CountPlayersOnTeam(ETSTeamId TeamId) const
 	{
 		if (const ATSTankPlayerState* PS = It->Get() ? It->Get()->GetPlayerState<ATSTankPlayerState>() : nullptr)
 		{
-			if (PS->GetTeamId() == TeamId)
+			// The host occupies no seat, so it must never count against a team's 3-player capacity.
+			if (!PS->IsHost() && PS->GetTeamId() == TeamId)
 			{
 				++Count;
 			}
@@ -87,13 +181,18 @@ bool ATSGameMode::IsTeamFull(ETSTeamId TeamId) const
 
 bool ATSGameMode::TryAssignTeam(APlayerController* Player, ETSTeamId Team)
 {
-	if (!Player)
+	return AssignTeamToPlayerState(Player ? Player->GetPlayerState<ATSTankPlayerState>() : nullptr, Team);
+}
+
+bool ATSGameMode::AssignTeamToPlayerState(ATSTankPlayerState* PS, ETSTeamId Team)
+{
+	if (!PS || Team == ETSTeamId::None)
 	{
 		return false;
 	}
 
-	ATSTankPlayerState* PS = Player->GetPlayerState<ATSTankPlayerState>();
-	if (!PS || Team == ETSTeamId::None)
+	// The host runs the match, it does not play in it - it can never hold a team.
+	if (PS->IsHost())
 	{
 		return false;
 	}
@@ -127,13 +226,18 @@ bool ATSGameMode::TryAssignTeam(APlayerController* Player, ETSTeamId Team)
 
 bool ATSGameMode::TryAssignRole(APlayerController* Player, ETSCrewRole RequestedRole)
 {
-	if (!Player)
+	return AssignRoleToPlayerState(Player ? Player->GetPlayerState<ATSTankPlayerState>() : nullptr, RequestedRole);
+}
+
+bool ATSGameMode::AssignRoleToPlayerState(ATSTankPlayerState* PS, ETSCrewRole RequestedRole)
+{
+	if (!PS || PS->GetTeamId() == ETSTeamId::None || RequestedRole == ETSCrewRole::None)
 	{
 		return false;
 	}
 
-	ATSTankPlayerState* PS = Player->GetPlayerState<ATSTankPlayerState>();
-	if (!PS || PS->GetTeamId() == ETSTeamId::None || RequestedRole == ETSCrewRole::None)
+	// Belt and braces: a host has no team, so it cannot reach here - but never let it take a seat.
+	if (PS->IsHost())
 	{
 		return false;
 	}
@@ -164,6 +268,57 @@ bool ATSGameMode::TryAssignRole(APlayerController* Player, ETSCrewRole Requested
 	return true;
 }
 
+void ATSGameMode::ClearAssignmentForPlayerState(ATSTankPlayerState* PS)
+{
+	if (!PS)
+	{
+		return;
+	}
+
+	if (APawn* Tank = PS->GetAssignedTank())
+	{
+		if (UTSTankCrewComponent* Crew = Tank->FindComponentByClass<UTSTankCrewComponent>())
+		{
+			Crew->ReleaseRole(PS);
+		}
+	}
+
+	PS->SetCrewRole(ETSCrewRole::None);
+	PS->SetAssignedTank(nullptr);
+	PS->SetTeamId(ETSTeamId::None);
+}
+
+bool ATSGameMode::HostAssignTeam(APlayerController* HostPlayer, ATSTankPlayerState* TargetPlayer, ETSTeamId Team)
+{
+	if (!IsHostController(HostPlayer) || !TargetPlayer || TargetPlayer->IsHost())
+	{
+		return false;
+	}
+
+	return AssignTeamToPlayerState(TargetPlayer, Team);
+}
+
+bool ATSGameMode::HostAssignRole(APlayerController* HostPlayer, ATSTankPlayerState* TargetPlayer, ETSCrewRole RequestedRole)
+{
+	if (!IsHostController(HostPlayer) || !TargetPlayer || TargetPlayer->IsHost())
+	{
+		return false;
+	}
+
+	return AssignRoleToPlayerState(TargetPlayer, RequestedRole);
+}
+
+bool ATSGameMode::HostClearAssignment(APlayerController* HostPlayer, ATSTankPlayerState* TargetPlayer)
+{
+	if (!IsHostController(HostPlayer) || !TargetPlayer || TargetPlayer->IsHost())
+	{
+		return false;
+	}
+
+	ClearAssignmentForPlayerState(TargetPlayer);
+	return true;
+}
+
 ATSTank* ATSGameMode::GetTankForTeam(ETSTeamId Team) const
 {
 	const ATSGameState* GS = GetGameState<ATSGameState>();
@@ -183,7 +338,7 @@ bool ATSGameMode::AreAllActiveTeamsFullyCrewed() const
 	{
 		if (const ATSTankPlayerState* PS = It->Get() ? It->Get()->GetPlayerState<ATSTankPlayerState>() : nullptr)
 		{
-			if (PS->GetTeamId() != ETSTeamId::None)
+			if (!PS->IsHost() && PS->GetTeamId() != ETSTeamId::None)
 			{
 				ActiveTeams.Add(PS->GetTeamId());
 			}

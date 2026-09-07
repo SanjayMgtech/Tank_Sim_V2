@@ -30,6 +30,25 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerRequestRoleChange(ETSCrewRole NewRole);
 
+	// --- Host (match admin) requests (validated by ATSGameMode) ---------------------------------
+	// Reliable, like the players' own selection requests: a dropped assignment would leave the host's
+	// roster UI showing something the server never applied. ATSGameMode rejects every one of these
+	// unless this controller is the designated host, so a modified client gains nothing by calling
+	// them - the _Validate pass below is only a cheap first filter on obviously malformed payloads.
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Host")
+	bool IsHost() const;
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Host")
+	void ServerHostAssignTeam(ATSTankPlayerState* TargetPlayer, ETSTeamId NewTeam);
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Host")
+	void ServerHostAssignRole(ATSTankPlayerState* TargetPlayer, ETSCrewRole NewRole);
+
+	// Drops TargetPlayer out of its seat and off its team, back to the selection state.
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Host")
+	void ServerHostClearAssignment(ATSTankPlayerState* TargetPlayer);
+
 	// --- Tank gameplay requests (validated by the tank's components) ----------------------------
 	// Drive/aim are Unreliable: they are sent every frame of input and a dropped packet is
 	// immediately superseded by the next one. Fire/reload/intel/commands are discrete, meaningful

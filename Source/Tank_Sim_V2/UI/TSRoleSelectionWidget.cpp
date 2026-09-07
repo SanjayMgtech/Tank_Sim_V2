@@ -8,6 +8,10 @@ void UTSRoleSelectionWidget::NotifyRoleSelected(ETSCrewRole Role)
 
 	if (ATSTankPlayerController* PC = GetOwningPlayer<ATSTankPlayerController>())
 	{
-		PC->ServerRequestRoleChange(Role);
+		// See UTSTeamSelectionWidget::NotifyTeamSelected - the host never takes a crew seat.
+		if (!PC->IsHost())
+		{
+			PC->ServerRequestRoleChange(Role);
+		}
 	}
 }

@@ -8,6 +8,9 @@
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTSOnMatchStateChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTSOnTeamTanksChanged);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTSOnPlayerRosterChanged);
+
+class ATSTankPlayerState;
 
 UCLASS()
 class ATSGameState : public AGameStateBase
@@ -16,6 +19,8 @@ class ATSGameState : public AGameStateBase
 
 public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual void AddPlayerState(APlayerState* PlayerState) override;
+	virtual void RemovePlayerState(APlayerState* PlayerState) override;
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	ETSMatchState GetMatchState() const { return MatchState; }
@@ -26,6 +31,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	APawn* FindTankForTeam(ETSTeamId TeamId) const;
 
+	// Every connected player except the host, i.e. exactly the players the host can assign a team and
+	// role to. Drives the host's admin roster UI (Section 11).
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Host")
+	TArray<ATSTankPlayerState*> GetAssignablePlayers() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Host")
+	ATSTankPlayerState* GetHostPlayerState() const;
+
 	// Server only. ATSGameMode is the only caller.
 	void SetMatchState(ETSMatchState NewState);
 	void RegisterTeamTank(ETSTeamId TeamId, APawn* Tank);
@@ -35,6 +48,11 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation")
 	FTSOnTeamTanksChanged OnTeamTanksChanged;
+
+	// Fires whenever a player joins or leaves. PlayerArray is replicated but has no change
+	// notification of its own, so the host roster UI would otherwise have to poll.
+	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Host")
+	FTSOnPlayerRosterChanged OnPlayerRosterChanged;
 
 protected:
 	UPROPERTY(ReplicatedUsing = OnRep_MatchState, BlueprintReadOnly, Category = "Tank Simulation")

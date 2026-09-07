@@ -9,6 +9,7 @@ void ATSTankPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(ATSTankPlayerState, TeamId);
 	DOREPLIFETIME(ATSTankPlayerState, CrewRole);
 	DOREPLIFETIME(ATSTankPlayerState, AssignedTank);
+	DOREPLIFETIME(ATSTankPlayerState, bIsHost);
 }
 
 void ATSTankPlayerState::SetTeamId(ETSTeamId NewTeamId)
@@ -38,6 +39,16 @@ void ATSTankPlayerState::SetAssignedTank(APawn* NewTank)
 		return;
 	}
 	AssignedTank = NewTank;
+	OnRep_Assignment();
+}
+
+void ATSTankPlayerState::SetIsHost(bool bNewIsHost)
+{
+	if (!HasAuthority() || bIsHost == bNewIsHost)
+	{
+		return;
+	}
+	bIsHost = bNewIsHost;
 	OnRep_Assignment();
 }
 

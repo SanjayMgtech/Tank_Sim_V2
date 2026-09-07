@@ -9,6 +9,7 @@
 #include "TSGameMode.generated.h"
 
 class ATSTankPlayerController;
+class ATSTankPlayerState;
 class ATSTank;
 
 UCLASS()
@@ -34,6 +35,26 @@ public:
 	// a (deprecated) member called Role (legacy ENetRole), which C4458 correctly flags as shadowing.
 	bool TryAssignRole(APlayerController* Player, ETSCrewRole RequestedRole);
 
+	// --- Host (match admin) API -----------------------------------------------------------------
+	// The session host is not a participant: it holds no team, no crew role and no tank seat, and
+	// possesses HostCameraPawnClass (a free-roam camera) instead of the VR crew pawn. Its one power
+	// is assigning *other* players' teams and roles, using exactly the same validation the players'
+	// own self-service requests go through.
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Host")
+	bool IsHostController(const APlayerController* Player) const;
+
+	// Server only. Called from ATSTankPlayerController::ServerHostAssignTeam. HostPlayer must be the
+	// designated host and TargetPlayer must not be; otherwise the request is rejected outright.
+	bool HostAssignTeam(APlayerController* HostPlayer, ATSTankPlayerState* TargetPlayer, ETSTeamId Team);
+
+	// Server only. Called from ATSTankPlayerController::ServerHostAssignRole.
+	bool HostAssignRole(APlayerController* HostPlayer, ATSTankPlayerState* TargetPlayer, ETSCrewRole RequestedRole);
+
+	// Server only. Called from ATSTankPlayerController::ServerHostClearAssignment - drops TargetPlayer
+	// out of its crew seat and off its team, back to the selection state.
+	bool HostClearAssignment(APlayerController* HostPlayer, ATSTankPlayerState* TargetPlayer);
+
 	// Convenience typed accessor matching the Developer 1 "Suggested API" exactly. Returns null for a
 	// team whose tank was integrated via Path B (implements ITSTankInterface without deriving from
 	// ATSTank) - use ATSGameState::FindTankForTeam for the untyped, always-correct accessor instead
@@ -49,6 +70,30 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	int32 MaxTeams = 4;
+
+	// Free-roam camera possessed by the host. Defaults to ATSHostCameraPawn.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Host")
+	TSubclassOf<APawn> HostCameraPawnClass;
+
+	// On a listen server the host is unambiguous: it is the local player, i.e. whoever created the
+	// session. A dedicated server has no local player, so with this enabled the first client to
+	// connect is designated host instead. Disable to run a dedicated server with no host at all.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Host")
+	bool bFirstPlayerHostsOnDedicatedServer = true;
+
+	virtual UClass* GetDefaultPawnClassForController_Implementation(AController* InController) override;
+	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
+
+	// True if NewPlayer should be designated host. Called from PostLogin before the pawn is spawned.
+	bool ShouldDesignateAsHost(const APlayerController* NewPlayer) const;
+
+	bool HasDesignatedHost() const;
+
+	// Shared implementation behind both the players' self-service requests and the host's assignments
+	// - there is exactly one team/role validation path, whoever initiated it.
+	bool AssignTeamToPlayerState(ATSTankPlayerState* PS, ETSTeamId Team);
+	bool AssignRoleToPlayerState(ATSTankPlayerState* PS, ETSCrewRole RequestedRole);
+	void ClearAssignmentForPlayerState(ATSTankPlayerState* PS);
 
 	// Optional actor tags ("TSTeamSpawn_TeamA" etc.) to place in the level for deterministic tank
 	// spawn locations. Falls back to a deterministic offset from the world origin if absent.

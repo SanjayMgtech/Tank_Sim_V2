@@ -46,6 +46,53 @@ bool ATSTankPlayerController::ServerRequestRoleChange_Validate(ETSCrewRole NewRo
 	return NewRole != ETSCrewRole::None;
 }
 
+// --- Host (match admin) requests ---------------------------------------------------------------
+
+bool ATSTankPlayerController::IsHost() const
+{
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	return PS && PS->IsHost();
+}
+
+void ATSTankPlayerController::ServerHostAssignTeam_Implementation(ATSTankPlayerState* TargetPlayer, ETSTeamId NewTeam)
+{
+	if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
+	{
+		GM->HostAssignTeam(this, TargetPlayer, NewTeam);
+	}
+}
+
+bool ATSTankPlayerController::ServerHostAssignTeam_Validate(ATSTankPlayerState* TargetPlayer, ETSTeamId NewTeam)
+{
+	return TargetPlayer != nullptr && NewTeam != ETSTeamId::None;
+}
+
+void ATSTankPlayerController::ServerHostAssignRole_Implementation(ATSTankPlayerState* TargetPlayer, ETSCrewRole NewRole)
+{
+	if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
+	{
+		GM->HostAssignRole(this, TargetPlayer, NewRole);
+	}
+}
+
+bool ATSTankPlayerController::ServerHostAssignRole_Validate(ATSTankPlayerState* TargetPlayer, ETSCrewRole NewRole)
+{
+	return TargetPlayer != nullptr && NewRole != ETSCrewRole::None;
+}
+
+void ATSTankPlayerController::ServerHostClearAssignment_Implementation(ATSTankPlayerState* TargetPlayer)
+{
+	if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
+	{
+		GM->HostClearAssignment(this, TargetPlayer);
+	}
+}
+
+bool ATSTankPlayerController::ServerHostClearAssignment_Validate(ATSTankPlayerState* TargetPlayer)
+{
+	return TargetPlayer != nullptr;
+}
+
 // --- Tank gameplay requests ------------------------------------------------------------------
 
 void ATSTankPlayerController::ServerSetDriveInput_Implementation(float Throttle, float Steering)
