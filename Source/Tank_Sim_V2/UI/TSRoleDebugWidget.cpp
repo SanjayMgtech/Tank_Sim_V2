@@ -16,6 +16,30 @@
 #include "Player/TSTankPlayerState.h"
 #include "Tank/TSTankCrewComponent.h"
 #include "UI/TSRoleDebugRowWidget.h"
+#include "UObject/UnrealType.h"
+
+namespace
+{
+	// UButton::IsFocusable has a getter but no public setter in UE 5.7 (InitIsFocusable is protected,
+	// and direct field access is UE_DEPRECATED, which -WarningsAsErrors turns into a build failure).
+	// Set it through the reflection system instead - it must happen before the SWidget is built, i.e.
+	// right after ConstructWidget.
+	//
+	// Why bother: a focusable Slate button takes keyboard focus when clicked, and in
+	// FInputModeGameAndUI that swallows WASD until the player clicks back on the world. Clicking a
+	// lobby button would silently kill movement.
+	void MakeButtonNonFocusable(UButton* Button)
+	{
+		if (!Button)
+		{
+			return;
+		}
+		if (FBoolProperty* Prop = FindFProperty<FBoolProperty>(UButton::StaticClass(), TEXT("IsFocusable")))
+		{
+			Prop->SetPropertyValue_InContainer(Button, false);
+		}
+	}
+}
 
 namespace
 {
@@ -137,6 +161,7 @@ TSharedRef<SWidget> UTSRoleDebugWidget::RebuildWidget()
 		// no way to start at all.
 		StartMatchButton = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("TSDebugStartMatch"));
 		StartMatchButton->SetVisibility(ESlateVisibility::Collapsed);
+		MakeButtonNonFocusable(StartMatchButton);
 		{
 			FButtonStyle Style = StartMatchButton->GetStyle();
 			const FLinearColor Green(0.12f, 0.45f, 0.18f, 0.95f);

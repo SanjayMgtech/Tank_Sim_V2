@@ -34,25 +34,30 @@ ATSHostCameraPawn::ATSHostCameraPawn(const FObjectInitializer& ObjectInitializer
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(RootComponent);
-	// The pawn's own control rotation already drives the view; adding the HMD orientation on top of
-	// it is what a VR host expects (look with the head, steer with the stick).
-	Camera->bUsePawnControlRotation = false;
+
+	// MUST be true. ADefaultPawn::MoveForward/MoveRight move along the CONTROL rotation, so the view
+	// has to follow the control rotation too or the two disagree. APawn defaults
+	// bUseControllerRotationYaw/Pitch/Roll to false and neither ADefaultPawn nor ASpectatorPawn
+	// changes them, so the actor never rotates - a camera parented to the root with this off is
+	// frozen facing the spawn direction while WASD flies off along wherever the mouse has aimed the
+	// control rotation. That is the "WASD goes sideways" bug.
+	// This does not fight VR: bLockToHmd composes the head pose on top of this rotation, so the host
+	// still looks with their head and steers with the stick.
+	Camera->bUsePawnControlRotation = true;
 }
 
 void ATSHostCameraPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
-	// ADefaultPawn binds MoveForward/MoveRight/MoveUp/Turn/LookUp here.
+	// Binds DefaultPawn_MoveForward / _MoveRight / _MoveUp / _Turn / _TurnRate / _LookUp / _LookUpRate.
+	//
+	// Do NOT add project axis bindings on top of these. Those DefaultPawn_* axes are ENGINE-DEFINED
+	// (InitializeDefaultPawnInputBindings registers W/A/S/D, MouseX, MouseY, Q/E/Space/Ctrl and the
+	// gamepad sticks via UPlayerInput::AddEngineDefinedAxisMapping), so they exist whatever
+	// DefaultInput.ini says. An earlier version of this function bound "Turn Right / Left Mouse" and
+	// "Turn Right / Left Gamepad" here on the mistaken belief that ADefaultPawn's yaw binding was
+	// dead - both map to the same MouseX / Gamepad_RightX keys the engine already bound, so yaw was
+	// applied twice and the camera spun at double sensitivity.
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
-
-	// ...but only MoveForward, MoveRight and LookUp actually exist in this project's
-	// DefaultInput.ini. The yaw axis is named "Turn Right / Left Mouse" (the UE template default),
-	// not "Turn", so ADefaultPawn's yaw binding resolves to nothing and the host camera could look
-	// up and down but never turn. Bind the names that are really there.
-	if (PlayerInputComponent)
-	{
-		PlayerInputComponent->BindAxis(TEXT("Turn Right / Left Mouse"), this, &APawn::AddControllerYawInput);
-		PlayerInputComponent->BindAxis(TEXT("Turn Right / Left Gamepad"), this, &APawn::AddControllerYawInput);
-	}
 
 	if (!HostMappingContext)
 	{
