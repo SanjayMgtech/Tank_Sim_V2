@@ -442,9 +442,12 @@ In the Editor:
    whatever `DefaultEngine.ini`'s `GlobalDefaultGameMode` points at, `ATSGameMode` never runs, and
    nothing spawns.
 2. **GameMode → Class Defaults → Tank Simulation:**
-   - `Default Tank Class` — already set in C++ to `BP_T90_Controller_Chaos` via `ConstructorHelpers`,
-     so this only needs changing if you want a different tank. It must implement `ITSTankInterface`
-     and carry a `TSTankCrewComponent`.
+   - `Default Tank Class` — **must be set here; C++ no longer provides a default.** It used to be
+     filled by a `ConstructorHelpers::FClassFinder` on `BP_T90_Controller_Chaos`, which CLAUDE.md
+     RULE 2 forbids outright (boot deadlock, packaged-build crash) and which made a Blueprint that
+     had never set the field look configured. `BP_TeamMatchGameMode` ships set to
+     `BP_VK1602Leopard_Controller_Chaos`. Whatever you choose must implement `ITSTankInterface` and
+     carry a `TSTankCrewComponent` — every tank deriving from `BP_TankController_Chaos` does both.
    - `Team Tank Class Overrides` (base) / `Team Tank Classes` (`ATSTeamMatchGameMode`) — per-team
      tanks. `GetTankClassForTeam` is virtual: the team-match map wins where it has an entry, then the
      base map, then `Default Tank Class`.
@@ -460,6 +463,20 @@ In the Editor:
 
 Watch the Output Log filtered to `LogTankSim`: it reports the tank name, team and location per spawn,
 and says explicitly when no tank class is configured (also as a red on-screen message).
+
+### Crew stations and role inputs
+
+6. **Seats.** The crew do not possess the tank — each crew member possesses their own `ATSVRPawn`,
+   which attaches to a scene component on the tank named `DriverSeat`, `GunnerSeat` or
+   `CommanderSeat`. They are inherited from `BP_TankController_Chaos`, so every tank has them; drag
+   one in the child Blueprint's viewport to move that hull's crew, or parent it to a mesh socket to
+   make it ride a bone. A missing seat logs a loud warning and falls back to the tank's root.
+7. **Role key mappings** live in `Content/TankSimulation/Input/Contexts`. `ATSVRPawn` adds
+   `IMC_Shared` at priority 0 and exactly one of `IMC_Driver` / `IMC_Gunner` / `IMC_Commander` at
+   priority 1, swapped whenever the PlayerState's crew role changes — so the Driver's WSAD and the
+   Gunner's mouse are separated by which context is applied, on top of the server-side permission
+   matrix in `FTSPermissions`. Author keys in **`DefaultKeyMappings`**, never the deprecated
+   `Mappings` array: UE 5.7 reads only the former, and keys in the latter do nothing with no warning.
 
 ### 12.1a Picking a role after joining a team
 
