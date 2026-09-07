@@ -154,6 +154,13 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
 	FName GameplayMapName = TEXT("Controller_Demo_T90");
 
+	// Gate StartTankMatch on every active team having all three seats filled. Off by default: a solo
+	// or two-player session can never satisfy it, and the match state would stay stuck out of
+	// InProgress forever. The match also still starts on its own the moment AreAllActiveTeamsFullyCrewed
+	// becomes true (see TryAssignRole), so this only affects the host's explicit Start Match.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
+	bool bRequireFullCrewsToStart = false;
+
 	// Capacity of the whole lobby, not of one tank. Renamed from MaxCrewMembers, which defaulted to 3
 	// and so kicked the fourth player to connect - fatal for a two-team match, which needs six.
 	// Three seats per team times MaxTeams. Set to 0 to remove the cap.

@@ -67,9 +67,34 @@ auto-save recovery modal, which freezes the MCP server until a human dismisses i
 (`LogMonolith: Warning: MODAL_OPEN ... MCP will be unresponsive until dismissed`).
 That costs a human round-trip on every single rebuild.
 
+### 🔁 DO THE REBUILD YOURSELF - never ask the human to close the editor
+Standing instruction from the user (2026-09-07): when a rebuild is needed, close the editor and
+rebuild without asking. `CloseMainWindow()` posts WM_CLOSE, which is exactly the window-close
+button RULE 5 permits - it runs the editor's own shutdown path, not a kill.
+
+```bash
+powershell -NoProfile -Command "Get-Process UnrealEditor -EA SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }"
+# then poll until it is gone - do NOT escalate to Stop-Process if it lingers
+powershell -NoProfile -Command "(Get-Process UnrealEditor -EA SilentlyContinue) -ne $null"
+```
+If the process is still alive after ~60s it is sitting on a **save-content modal**, which only a
+human can dismiss (see the human-only table). Say so and wait; do not force-kill, and do not
+answer the modal by guessing. **Never** save `Controller_Demo_T90.umap` (170 MB) - Don't Save.
+
+Remember the editor is SHARED with other concurrent sessions - closing it interrupts them too.
+Relaunch it as soon as the build finishes.
+
 Full rebuild with the editor closed:
 ```bash
-"C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" Tank_Sim_V2Editor Win64 Development -Project="C:\Users\Admin\Documents\GitHub\Tank_Sim_V2\Tank_Sim_V2.uproject" -WaitMutex -FromMsBuild
+"C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" Tank_Sim_V2Editor Win64 Development -Project="C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" -WaitMutex -FromMsBuild
+```
+`Unable to build while Live Coding is active` in the output means the editor is still up - the
+close did not take. UHT still runs before that error, so a clean UHT pass there proves headers
+parse but proves **nothing** about the `.cpp` files.
+
+Relaunch afterwards:
+```bash
+"C:/Program Files/Epic Games/UE_5.7/Engine/Binaries/Win64/UnrealEditor.exe" "C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject"
 ```
 If Live Coding was used, delete stale patches before relaunching, or the editor may hang/crash:
 ```bash

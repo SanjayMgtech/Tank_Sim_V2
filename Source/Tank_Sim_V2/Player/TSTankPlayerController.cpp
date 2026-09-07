@@ -1,6 +1,7 @@
 #include "Player/TSTankPlayerController.h"
 
 #include "Blueprint/UserWidget.h"
+#include "Components/InputComponent.h"
 #include "Core/TSGameInstance.h"
 #include "Core/TSGameMode.h"
 #include "Core/TSTypes.h"
@@ -49,6 +50,88 @@ void ATSTankPlayerController::ApplyLocalUIForCurrentMap()
 	{
 		ShowRoleDebugWidget(true);
 	}
+
+	// The host arrives needing to assign crews; everyone else arrives needing to play.
+	SetLobbyConsoleFocused(bFocusLobbyConsoleOnArrivalForHost && IsMatchHost());
+}
+
+void ATSTankPlayerController::SetupInputComponent()
+{
+	Super::SetupInputComponent();
+
+	if (InputComponent && LobbyConsoleFocusKey.IsValid())
+	{
+		// bConsumeInput false: the key is a UI toggle, not a gameplay action, and must not shadow
+		// anything a pawn binds to the same key.
+		FInputKeyBinding& Binding = InputComponent->BindKey(LobbyConsoleFocusKey, IE_Pressed, this, &ATSTankPlayerController::ToggleLobbyConsoleFocus);
+		Binding.bConsumeInput = false;
+	}
+}
+
+bool ATSTankPlayerController::IsOnMenuMap() const
+{
+	if (const UTSUISubsystem* UI = GetUISubsystem())
+	{
+		return UI->IsCurrentMapMenuMap();
+	}
+	const FString MapName = GetWorld() ? GetWorld()->GetMapName() : TEXT("");
+	return MapName.Contains(TEXT("MainMenu"));
+}
+
+void ATSTankPlayerController::ApplyInputModeForLocalState()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	const bool bWantCursor = IsOnMenuMap()
+		|| bLobbyConsoleFocused
+		|| ActiveTeamSelectionWidget != nullptr
+		|| ActiveRoleSelectionWidget != nullptr;
+
+	bShowMouseCursor = bWantCursor;
+
+	if (bWantCursor)
+	{
+		// The defaults hide the cursor while a click is held and can lock it to the viewport, which
+		// makes buttons awkward to hit.
+		FInputModeGameAndUI InputMode;
+		InputMode.SetHideCursorDuringCapture(false);
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		SetInputMode(InputMode);
+	}
+	else
+	{
+		SetInputMode(FInputModeGameOnly());
+	}
+}
+
+void ATSTankPlayerController::SetLobbyConsoleFocused(bool bFocused)
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	bLobbyConsoleFocused = bFocused;
+	ApplyInputModeForLocalState();
+}
+
+void ATSTankPlayerController::ToggleLobbyConsoleFocus()
+{
+	// On the menu map the cursor belongs to the menu; toggling it away would strand the player.
+	if (IsOnMenuMap())
+	{
+		return;
+	}
+
+	SetLobbyConsoleFocused(!bLobbyConsoleFocused);
+}
+
+void ATSTankPlayerController::TSLobbyFocus()
+{
+	ToggleLobbyConsoleFocus();
 }
 
 UTSUISubsystem* ATSTankPlayerController::GetUISubsystem() const
@@ -180,17 +263,13 @@ void ATSTankPlayerController::RefreshSelectionUI()
 		return;
 	}
 
-	const FString MapName = GetWorld() ? GetWorld()->GetMapName() : TEXT("");
-	if (MapName.Contains(TEXT("MainMenu")))
+	if (IsOnMenuMap())
 	{
-		HideSelectionUI();
-
 		// The menu is entirely mouse-driven, and nothing else turns the cursor on: bShowMouseCursor
 		// was only ever set inside ShowTeam/RoleSelectionUI, which do not run on the menu map (and
 		// do not run at all while bAutoShowSelectionUI is false, the host-driven default). Without
 		// this the session browser is on screen with no pointer to click it.
-		bShowMouseCursor = true;
-		SetInputMode(FInputModeGameAndUI());
+		HideSelectionUI();
 		return;
 	}
 
@@ -256,8 +335,7 @@ void ATSTankPlayerController::ShowTeamSelectionUI()
 		}
 	}
 
-	bShowMouseCursor = true;
-	SetInputMode(FInputModeGameAndUI());
+	ApplyInputModeForLocalState();
 }
 
 void ATSTankPlayerController::ShowRoleSelectionUI()
@@ -291,8 +369,7 @@ void ATSTankPlayerController::ShowRoleSelectionUI()
 		}
 	}
 
-	bShowMouseCursor = true;
-	SetInputMode(FInputModeGameAndUI());
+	ApplyInputModeForLocalState();
 }
 
 void ATSTankPlayerController::HideSelectionUI()
@@ -314,8 +391,9 @@ void ATSTankPlayerController::HideSelectionUI()
 		ActiveRoleSelectionWidget = nullptr;
 	}
 
-	bShowMouseCursor = false;
-	SetInputMode(FInputModeGameOnly());
+	// NOT an unconditional GameOnly: the menu map and a focused lobby console both still need the
+	// cursor, and this runs on every assignment change.
+	ApplyInputModeForLocalState();
 }
 
 // --- Team / role selection ------------------------------------------------------------------
@@ -448,6 +526,26 @@ void ATSTankPlayerController::ServerHostClearPlayerAssignment_Implementation(APl
 }
 
 bool ATSTankPlayerController::ServerHostClearPlayerAssignment_Validate(APlayerState* TargetPlayerState)
+{
+	return true;
+}
+
+void ATSTankPlayerController::ServerRequestStartMatch_Implementation()
+{
+	// Re-checked here, not just on the button: a Server RPC's HasAuthority() is trivially true, so a
+	// modified client could otherwise start the match for everyone.
+	if (!IsMatchHost())
+	{
+		return;
+	}
+
+	if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
+	{
+		GM->StartTankMatch();
+	}
+}
+
+bool ATSTankPlayerController::ServerRequestStartMatch_Validate()
 {
 	return true;
 }

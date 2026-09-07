@@ -5,6 +5,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "InputCoreTypes.h"
 #include "Core/TSTypes.h"
 #include "Engine/NetSerialization.h"
 #include "TSTankPlayerController.generated.h"
@@ -28,6 +29,7 @@ public:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void OnRep_PlayerState() override;
+	virtual void SetupInputComponent() override;
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	APawn* GetAssignedTank() const;
@@ -103,6 +105,31 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
 	void ServerHostClearPlayerAssignment(APlayerState* TargetPlayerState);
 
+	// Host only, re-checked server-side. Ends the assignment phase and starts the match. Deliberately
+	// does NOT require every seat filled: ATSGameMode::bRequireFullCrewsToStart decides that, and it
+	// is off by default so a two-player or solo test can actually get out of the lobby.
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ServerRequestStartMatch();
+
+	// --- Lobby console focus ---------------------------------------------------------------------
+	// Whether this local player's cursor is being lent to the lobby console. This is deliberately NOT
+	// derived from the match state: doing so meant the host held FInputModeGameAndUI (no camera look,
+	// no reliable WASD) for as long as the match had not started - which, before ServerRequestStartMatch
+	// existed, was forever. Focus is now an explicit toggle the player owns.
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void SetLobbyConsoleFocused(bool bFocused);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ToggleLobbyConsoleFocus();
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Lobby")
+	bool IsLobbyConsoleFocused() const { return bLobbyConsoleFocused; }
+
+	// Console command: type "TSLobbyFocus" in the ~ console if the bound key is unavailable.
+	UFUNCTION(Exec)
+	void TSLobbyFocus();
+
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerRequestRoleChange(ETSCrewRole NewRole);
 
@@ -164,6 +191,16 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
 	int32 RoleDebugWidgetZOrder = 1000;
 
+	// Toggles the lobby console cursor on/off. A raw FKey binding rather than an input action: this
+	// must work on the host camera pawn and on a crew pawn alike, neither of which owns a lobby IMC.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Lobby")
+	FKey LobbyConsoleFocusKey = EKeys::F1;
+
+	// Give the host the cursor as soon as it reaches a gameplay map, so crews can be assigned without
+	// hunting for the key first. Clients start unfocused - their console rows are read-only.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Lobby")
+	bool bFocusLobbyConsoleOnArrivalForHost = true;
+
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Debug")
 	TObjectPtr<UTSRoleDebugWidget> RoleDebugWidget;
 
@@ -179,8 +216,17 @@ private:
 	// then, so a widget it created in the same frame is caught by the sweep rather than surviving it.
 	void ApplyLocalUIForCurrentMap();
 
+	// Single owner of this client's cursor/input mode. Re-derives it from what is actually on screen
+	// (menu map, a selection panel, or a focused lobby console) instead of letting each caller set a
+	// mode of its own and stomp the others.
+	void ApplyInputModeForLocalState();
+
+	bool IsOnMenuMap() const;
+
 	UFUNCTION()
 	void HandleAssignmentChanged();
+
+	bool bLobbyConsoleFocused = false;
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> ActiveTeamSelectionWidget = nullptr;

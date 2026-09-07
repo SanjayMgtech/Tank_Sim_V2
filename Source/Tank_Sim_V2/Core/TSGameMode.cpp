@@ -326,14 +326,32 @@ AActor* ATSGameMode::ChoosePlayerStart_Implementation(AController* Player)
 
 void ATSGameMode::StartTankMatch()
 {
-	if (!AreAllRolesFilled())
+	// Off by default. Requiring every seat means a solo or two-player session can NEVER leave the
+	// assignment phase - which is exactly the state that used to strand the host in cursor mode with
+	// no way out. Turn it on for a production lobby that really does need full crews.
+	if (bRequireFullCrewsToStart && !AreAllRolesFilled())
 	{
+		UE_LOG(LogTankSim, Warning, TEXT("StartTankMatch refused: bRequireFullCrewsToStart is set and not every active team is fully crewed."));
 		return;
 	}
 
-	if (GameplayMapName != NAME_None)
+	// On a menu map there is nothing to start yet - travel to the gameplay map, where this runs again.
+	if (!CanSpawnTeamTanks())
 	{
-		GetWorld()->ServerTravel(GameplayMapName.ToString(), true);
+		if (GameplayMapName != NAME_None)
+		{
+			GetWorld()->ServerTravel(GameplayMapName.ToString(), true);
+		}
+		return;
+	}
+
+	if (ATSGameState* GS = GetGameState<ATSGameState>())
+	{
+		if (GS->GetMatchState() != ETSMatchState::InProgress)
+		{
+			GS->SetMatchState(ETSMatchState::InProgress);
+			UE_LOG(LogTankSim, Log, TEXT("StartTankMatch: match state -> InProgress."));
+		}
 	}
 }
 

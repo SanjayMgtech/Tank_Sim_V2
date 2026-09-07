@@ -14,6 +14,7 @@
 #include "TSRoleDebugWidget.generated.h"
 
 class UBorder;
+class UButton;
 class UTextBlock;
 class UTSRoleDebugRowWidget;
 class UVerticalBox;
@@ -27,7 +28,6 @@ public:
 	UTSRoleDebugWidget(const FObjectInitializer& ObjectInitializer);
 
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
-	virtual void NativeDestruct() override;
 
 	// Rebuilds the panel immediately instead of waiting for the next refresh interval.
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Debug")
@@ -49,11 +49,12 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Debug")
 	bool bShowTeamTanks = true;
 
-	// While the host is assigning crews, they need a cursor to click the buttons with. The panel takes
-	// one for the host only, and only until the match reaches InProgress - it hands input back the
-	// moment the match starts, so it never eats gameplay input.
+	// Show the host's "START MATCH" button. The cursor this panel is clicked with is NOT owned here -
+	// ATSTankPlayerController::SetLobbyConsoleFocused owns it, toggled by the player (F1 by default).
+	// This widget used to take the cursor itself for as long as the match was not InProgress, which
+	// meant the host had no camera look or reliable WASD for the whole lobby.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Debug")
-	bool bTakeMouseCursorForAssignment = true;
+	bool bShowStartMatchButton = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Debug", meta = (ClampMin = "6", ClampMax = "48"))
 	int32 FontSize = 13;
@@ -81,6 +82,9 @@ protected:
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Debug")
 	TObjectPtr<UTextBlock> TankText;
 
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Debug")
+	TObjectPtr<UButton> StartMatchButton;
+
 private:
 	FString DescribeNetContext() const;
 	FString DescribeLocalPlayer() const;
@@ -89,11 +93,13 @@ private:
 	// Rows are pooled and re-pointed rather than rebuilt, so buttons keep their identity and do not
 	// flicker out from under the cursor on every refresh.
 	void RefreshPlayerRows();
-	void UpdateInputModeForAssignment();
+	void RefreshStartMatchButton();
+
+	UFUNCTION()
+	void OnStartMatchClicked();
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UTSRoleDebugRowWidget>> PlayerRows;
 
 	float TimeSinceRefresh = 0.f;
-	bool bCursorTakenForAssignment = false;
 };
