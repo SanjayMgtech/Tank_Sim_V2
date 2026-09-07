@@ -69,7 +69,7 @@ That costs a human round-trip on every single rebuild.
 
 Full rebuild with the editor closed:
 ```bash
-"C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" Tank_Sim_V2Editor Win64 Development -Project="C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" -WaitMutex -FromMsBuild
+"C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" Tank_Sim_V2Editor Win64 Development -Project="C:\Users\Admin\Documents\GitHub\Tank_Sim_V2\Tank_Sim_V2.uproject" -WaitMutex -FromMsBuild
 ```
 If Live Coding was used, delete stale patches before relaunching, or the editor may hang/crash:
 ```bash
