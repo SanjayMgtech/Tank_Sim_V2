@@ -164,8 +164,16 @@ stage commits with an explicit pathspec, never `git add -A`.
 | Drive real gameplay events | e.g. `DamageCausedUI` is only written by a macro reached through an actual damage-caused event; macros are inlined and cannot be invoked directly. |
 | Anything that is a Blueprint **editor-UI** operation with no MCP action | Reordering pins, graph-level refactors. NOTE: editing a macro's internals was previously listed here and is WRONG - `add_node`/`connect_pins` work on a macro graph (proven on `UpdateDamageCausedUI`). Test before declaring something human-only. |
 | Override an **inherited** component's property on a CHILD Blueprint | `set_component_property` only sees a Blueprint's own SCS ("Component not found: DriverSeat" on the child). The override lives in the Inheritable Component Handler, which neither the MCP surface nor Python can create. `SubobjectDataSubsystem` can *read* it (`k2_gather_subobject_data_for_blueprint`). Select the component in the child's Components panel and type the value; verify with `get_inherited_component_override`. |
+| Test anything in **VR** | No headset is reachable from script. `run_pie_smoke` renders flat, and `UTSVRModeLibrary::IsHMDAvailable()` is false in the editor, so the VR branch is never taken. Stereo, head-driven aim and motion-controller keys can only be confirmed by a human wearing the headset. |
 
 ### Open hand-offs (keep current)
+- 🔻 **REVERT `bVRTestAutoAssign`** on `ATSTeamMatchGameMode` once VR is verified (added
+  2026-09-07). It suppresses host designation and force-assigns a seat so one PIE run puts you
+  in a headset; shipping it would let any joining player bypass the host-admin rule. See the VR
+  section.
+- **VR has never run in an actual headset.** Everything in the VR section is compile-verified
+  and reload-verified only. Needs a rebuild of the EDITOR target (new UPROPERTYs) and a human
+  wearing the thing.
 - ~~Replication test~~ **DONE 2026-09-04.** A/B listen-server test showed identical behaviour  before and after the port. Phase 9 verified; the remaining turret faults are pre-existing  feature gaps, documented separately.
 - **Parameter renames** are only needed if a port hits shadowing. `WheelRotationDefinition`
   turned out NOT to need one (Phase 17) - its tuning arrives as parameters. Ask only when a
@@ -1345,6 +1353,116 @@ PIE clean: 0 Accessed None, 0 index warnings, 0 "has no scene component named"
 **Still owed a human test** (see the human-only table): two-window listen server on `WarZone` with
 one Driver and one Gunner, after closing the editor and rebuilding the **editor** target — the pawn
 changes add `UPROPERTY`s, so Live Coding cannot carry them.
+
+
+---
+
+## ✅ VR mode — headset when present, flat when not (2026-09-07)
+
+Feature work, like the multiplayer fixes: own commits, own manual test. One build runs both ways;
+there is no VR build, no VR map and no VR toggle. `ATSVRPawn::ApplyVRMode` decides on possession,
+per client, from "is a headset connected" and "is this player allowed one".
+
+C++: `Source/Tank_Sim_V2/Player/TSVRModeLibrary.{h,cpp}` (the one place that answers both
+questions), plus VR handling on `ATSVRPawn`, host exclusion on `ATSHostCameraPawn`.
+
+### ⚠ UE 5.7 has NO generic `MotionController_*` keys
+This is the VR analogue of the `DefaultKeyMappings` trap, and it fails exactly as silently.
+
+XR keys are **per controller profile**, declared in
+`Engine/Source/Runtime/InputCore/Classes/InputCoreTypes.h`:
+```
+OculusTouch_Left_Trigger_Click   ValveIndex_Right_Thumbstick_2D   Vive_Left_Trackpad_2D  ...
+```
+`grep MotionController InputCoreTypes.cpp` returns **0 hits**. Binding `MotionController_Left_*`
+compiles, saves, exports and does nothing at all.
+
+**`FKey` import does not validate.** Proven: `Key.import_text("TotallyFakeKey123")` round-trips
+verbatim. There is no Python-side validity check either — `KismetInputLibrary` is not exposed and
+`get_all_keys` does not exist. So a key name cannot be verified after the fact from script.
+**Read the name out of `InputCoreTypes.h` before authoring it**, or pick it in the editor's key
+picker, which only offers real keys.
+
+Real asymmetries in that header — these look like typos and are not:
+- only `OculusTouch_LEFT_Menu_Click` exists; there is no Right equivalent
+- Index has `Grip_Axis` / `Grip_Force`, **no** `Grip_Click`
+- Vive has a **trackpad**, no thumbstick
+- Touch left is X/Y, right is A/B
+
+**A thumbstick needs no swizzle.** `IA_Drive` is Axis2D; WSAD needed Swizzle/Negate because a 1D
+key only writes X, but `*_Thumbstick_2D` is already Axis2D and maps straight through.
+
+### ⚠ In VR the Gunner's aim fires NO input action
+The aim trace hung off `IA_AimTurret`. In a headset the player aims by turning their head, which
+triggers no action, so the trace would never have run — the turret would have sat frozen for the
+whole session with nothing in the log, on a code path that works perfectly on a desktop.
+
+The trace now lives in `UpdateGunnerAim()`, called from the input action on a desktop **and from
+`Tick` in VR**. Tick is enabled only for a local VR Gunner (`UpdateAimTickEnabled`), so no other
+crew pawn pays for it. `IMC_Gunner` deliberately has **no** motion-controller binding for
+`IA_AimTurret` — head aim is the mechanism.
+
+Generalise: **any input-driven feature has to be re-checked for VR, because the HMD generates pose,
+not events.** Anything that only runs on an action callback is dead in a headset.
+
+### The host is never VR, and stereo alone is not enough to make that true
+Two separate things keep the host flat, and killing only one leaves a broken half-state:
+1. stereo rendering off (`UTSVRModeLibrary::SetVRModeEnabled(false)`), and
+2. `Camera->bLockToHmd = false`.
+
+Head tracking can be live while stereo is off, so a host with (2) still set gets a flat screen that
+swings around with a headset sitting on the desk. `ATSHostCameraPawn::NotifyControllerChanged`
+does both, guarded on `IsLocalController` — doing it for a remote copy would switch VR off on
+somebody else's machine.
+
+`ApplyVRMode` also re-checks `PS->IsHost()` rather than relying on pawn choice alone, so the rule
+survives a future spectate mode that hands a host a crew pawn.
+
+### Tracking origin: `Local`, not floor or stage
+A crew member is strapped into a chair, and the seat scene component already marks where their head
+goes. `EHMDTrackingOrigin::Local` centres tracking on the headset's start pose, so the head lands at
+the seat. `LocalFloor`/`Stage` would put the player's head on the tank's floor.
+
+### Build wiring
+`UHeadMountedDisplayFunctionLibrary` lives in the **XRBase plugin** in UE5; the types
+(`EHMDTrackingOrigin`) stayed in the **HeadMountedDisplay module**. Both are needed. XRBase also has
+to be listed in `Tank_Sim_V2.uproject` — UBT warns
+`does not list plugin 'XRBase' as a dependency` and that would bite at packaging time, not here.
+
+### Widget interaction is scaffolding, not a feature
+No crew widgets exist yet. What is in place: a **deactivated** `UWidgetInteractionComponent` on the
+right hand, `IMC_VR_Widget` (IA_Primary on the right trigger), and
+`ATSVRPawn::SetVRWidgetInteractionEnabled(bool)`, which points the laser and adds that context at
+**priority 3** — above the role context — so the trigger clicks the widget instead of firing the
+gun. Call it when a widget is shown/hidden; nothing guesses.
+
+### 🔻 TEMPORARY — `bVRTestAutoAssign` must be reverted
+`ATSTeamMatchGameMode` has a VR bring-up shortcut, off by default:
+```
+bVRTestAutoAssign   bool         suppresses host designation, force-assigns the joining player
+VRTestTeam          ETSTeamId    default TeamA
+VRTestRole          ETSCrewRole  change between runs to test each seat
+```
+Normal flow needs a host plus crew, which makes "put the headset on and check the Driver's stick" a
+two-person job. With this on, one Play-In-Editor run drops you straight into a seat.
+
+It **bypasses the host-admin rule on purpose**, which is exactly why it must not ship.
+`ShouldDesignateAsHost` was made `virtual` so the flag can suppress host designation *before*
+`GetDefaultPawnClassForController` reads `bIsHost` — designating afterwards would spawn the wrong
+pawn. Every assignment logs a `Warning` naming the flag.
+
+**Revert `bVRTestAutoAssign` (and the override that supports it) once VR is verified.**
+
+### WarZone team spawn points
+`TSTeamSpawn_TeamA..D` are now four `TargetPoint`s in `WarZone`, ground-traced and placed as two
+opposing lines (A/C face +X at -2600, B/D face back at +1400). Without them
+`GetSpawnTransformForTeam` falls back to a world-origin offset and logs a warning.
+**`Content/TankSimulation/Maps` is git-ignored, so WarZone.umap is local-only** — these actors are
+not in the repo and will not reach another clone.
+
+### Still owed a human test
+Nothing here has run in an actual headset. The pawn changes add `UPROPERTY`s, so Live Coding cannot
+carry them: close the editor and rebuild the **editor** target first.
 
 
 ---
