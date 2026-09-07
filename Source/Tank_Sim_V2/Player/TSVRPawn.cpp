@@ -247,6 +247,20 @@ void ATSVRPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 		return;
 	}
 
+	// Every mapping context and Input Action on this pawn is Blueprint DATA, set on BP_TSVRPawn. A
+	// GameMode whose DefaultPawnClass points at the raw native ATSVRPawn therefore spawns a pawn with
+	// all of them null: nothing below binds, ApplyRoleMappingContext adds no context, and the crew
+	// simply has no input - with not one warning anywhere. That is exactly what
+	// BP_TeamMatchGameMode did, and it read as "tank movement is broken" rather than "wrong pawn class".
+	if (!SharedMappingContext && !DriverMappingContext && !GunnerMappingContext && !CommanderMappingContext)
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("[TSVRPawn] %s (class %s) has NO input mapping contexts and will receive no input. ")
+			TEXT("The GameMode's DefaultPawnClass is almost certainly the native ATSVRPawn instead of ")
+			TEXT("BP_TSVRPawn, which is where these assets are set."),
+			*GetName(), *GetClass()->GetName());
+	}
+
 	if (IA_Recenter) EIC->BindAction(IA_Recenter, ETriggerEvent::Started, this, &ATSVRPawn::Input_Recenter);
 	if (IA_Interact) EIC->BindAction(IA_Interact, ETriggerEvent::Started, this, &ATSVRPawn::Input_Interact);
 	if (IA_Grab) EIC->BindAction(IA_Grab, ETriggerEvent::Started, this, &ATSVRPawn::Input_Grab);

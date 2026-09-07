@@ -22,6 +22,14 @@ class UTSRoleDebugRowWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
+	// Shared by both lobby widgets. A focusable Slate button takes keyboard focus when clicked, and
+	// in FInputModeGameAndUI that swallows WASD until the player clicks back on the world - so every
+	// button in the lobby console is made non-focusable right after ConstructWidget, before its
+	// SWidget is built. UButton has no public setter in UE 5.7 (InitIsFocusable is protected and
+	// direct field access is UE_DEPRECATED, fatal under -WarningsAsErrors), so this goes through the
+	// reflection system.
+	static void MakeButtonNonFocusable(UButton* Button);
+
 	UTSRoleDebugRowWidget(const FObjectInitializer& ObjectInitializer);
 
 	// Points this row at a player. Rows are reused across refreshes so the buttons keep their

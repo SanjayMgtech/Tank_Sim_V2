@@ -14,29 +14,6 @@
 
 namespace
 {
-	// UButton::IsFocusable has a getter but no public setter in UE 5.7 (InitIsFocusable is protected,
-	// and direct field access is UE_DEPRECATED, which -WarningsAsErrors turns into a build failure).
-	// Set it through the reflection system instead - it must happen before the SWidget is built, i.e.
-	// right after ConstructWidget.
-	//
-	// Why bother: a focusable Slate button takes keyboard focus when clicked, and in
-	// FInputModeGameAndUI that swallows WASD until the player clicks back on the world. Clicking a
-	// lobby button would silently kill movement.
-	void MakeButtonNonFocusable(UButton* Button)
-	{
-		if (!Button)
-		{
-			return;
-		}
-		if (FBoolProperty* Prop = FindFProperty<FBoolProperty>(UButton::StaticClass(), TEXT("IsFocusable")))
-		{
-			Prop->SetPropertyValue_InContainer(Button, false);
-		}
-	}
-}
-
-namespace
-{
 	const TArray<ETSTeamId> RowTeams = { ETSTeamId::TeamA, ETSTeamId::TeamB, ETSTeamId::TeamC, ETSTeamId::TeamD };
 	const TArray<ETSCrewRole> RowRoles = { ETSCrewRole::Driver, ETSCrewRole::Gunner, ETSCrewRole::Commander };
 
@@ -51,6 +28,18 @@ UTSRoleDebugRowWidget::UTSRoleDebugRowWidget(const FObjectInitializer& ObjectIni
 	// SelfHitTestInvisible, not HitTestInvisible: the row itself must not eat clicks, but its buttons
 	// have to stay clickable.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+}
+
+void UTSRoleDebugRowWidget::MakeButtonNonFocusable(UButton* Button)
+{
+	if (!Button)
+	{
+		return;
+	}
+	if (FBoolProperty* Prop = FindFProperty<FBoolProperty>(UButton::StaticClass(), TEXT("IsFocusable")))
+	{
+		Prop->SetPropertyValue_InContainer(Button, false);
+	}
 }
 
 UButton* UTSRoleDebugRowWidget::MakeButton(const FString& Label, float MinWidth)
