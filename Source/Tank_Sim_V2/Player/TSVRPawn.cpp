@@ -14,6 +14,7 @@
 #include "MotionControllerComponent.h"
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
+#include "Tank_Sim_V2.h"
 
 ATSVRPawn::ATSVRPawn()
 {
@@ -221,6 +222,17 @@ void ATSVRPawn::ApplyRoleMappingContext(ETSCrewRole NewRole)
 	{
 		Subsystem->AddMappingContext(ContextToAdd, 1);
 	}
+
+	// Diagnostic for the "role assigned but the keys do nothing" case. The interesting part is
+	// whether the context is present on THIS machine: the server's copy of a remote player's pawn
+	// has no LocalPlayer and returns above, so a line here only ever describes a local player.
+	UE_LOG(LogTankSim, Log,
+		TEXT("[TSVRPawn] ApplyRoleMappingContext role=%d context=%s applied=%s shared=%s (%s)"),
+		static_cast<int32>(NewRole),
+		ContextToAdd ? *ContextToAdd->GetName() : TEXT("<none>"),
+		ContextToAdd ? (Subsystem->HasMappingContext(ContextToAdd) ? TEXT("YES") : TEXT("NO")) : TEXT("-"),
+		SharedMappingContext ? (Subsystem->HasMappingContext(SharedMappingContext) ? TEXT("YES") : TEXT("NO")) : TEXT("<unset>"),
+		HasAuthority() ? TEXT("authority") : TEXT("client"));
 }
 
 void ATSVRPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -312,7 +324,20 @@ void ATSVRPawn::Input_Menu(const FInputActionValue& Value)
 void ATSVRPawn::Input_Drive(const FInputActionValue& Value)
 {
 	const FVector2D Axis = Value.Get<FVector2D>();
-	if (ATSTankPlayerController* PC = GetTankController())
+	ATSTankPlayerController* PC = GetTankController();
+
+	// Rate-limited: this fires every frame a key is held, and an unthrottled log would drown the
+	// very output we are reading. One line per second is enough to answer "does the key arrive".
+	static double LastLogTime = 0.0;
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	if (Now - LastLogTime > 1.0)
+	{
+		LastLogTime = Now;
+		UE_LOG(LogTankSim, Log, TEXT("[TSVRPawn] Input_Drive throttle=%.2f steer=%.2f pc=%s"),
+			Axis.Y, Axis.X, PC ? *PC->GetName() : TEXT("NULL"));
+	}
+
+	if (PC)
 	{
 		PC->ServerSetDriveInput(Axis.Y, Axis.X);
 	}
