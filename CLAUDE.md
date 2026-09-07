@@ -868,6 +868,148 @@ Native property count: **65 → 60**. The `DOREPLIFETIME` for `Rep_ControlRotati
 Verified after: BP `UpToDate`, 0 errored BPs, PIE clean (0 `Accessed None`, 0 index warnings),
 tank drove 379 units, turret/wheels/sagging all still working.
 
+## 🗺 END-TO-END LOGIC FLOW (traced from code 2026-09-07 — read this before touching the framework)
+
+Menu → session → travel → lobby → assignment → spawn → gameplay request. Traced from the source,
+not inferred. **Section 8 below records a genuine contradiction between two parallel workstreams —
+read it before building on either side.**
+
+### 1. Boot and the menu map
+```
+GameDefaultMap / EditorStartupMap = /Game/TankSimulation/Maps/MainMenu
+MainMenu World Settings GameMode  = /Game/TankSimulation/Blueprints/BP_TSGameMode
+```
+`UTSUISubsystem` hardcodes `MenuMapNames = { "MainMenu" }` and treats widgets whose class name
+contains Login / SessionBrowser / SessionList / MainMenu / HostMenu as menu widgets. On every
+**non-menu** map load it sweeps them from the viewport, because a widget owned by the
+GameInstance survives `ServerTravel` and would otherwise sit on top of the game.
+
+**Nothing in C++ creates the menu widgets.** The only `CreateWidget` calls are the role-debug and
+team/role-selection panels. `BP_TSGameMode` creates none. So `WBP_Login` / `WBP_SessionBrowser`
+must be spawned by the MainMenu **level Blueprint** (or a menu GameMode). That is the Blueprint
+side of the boundary, and it is where to look when "the menu shows nothing".
+
+### 2. Hosting
+```
+WBP_SessionBrowser
+  → UTSGameInstance::CreateSession(MaxPlayers, bIsLAN, bIsPresence, MapPath)   [BlueprintCallable]
+  → UTSSessionSubsystem::CreateSession
+       destroys a stale NAME_GameSession first and re-enters from the destroy callback
+       generates a lobby code, broadcasts OnLobbyCodeGenerated
+  → HandleCreateSessionComplete(success)
+  → World->ServerTravel("<MapPath>?listen?LobbyCode=<code>")
+```
+`MapPath` empty falls back to **`/Game/TankSimulation/Maps/WarZone`**. `bUseLobbiesIfAvailable` is
+deliberately false — `OnlineSubsystemNull` has no lobby backend.
+
+### 3. Joining
+```
+FindSessions → HandleFindSessionsComplete → results list
+JoinSession(index) → HandleJoinSessionComplete
+  → GetResolvedConnectString → PC->ClientTravel(ConnectString, TRAVEL_Absolute)
+```
+
+### 4. Arrival: who becomes host
+`ATSGameMode::PostLogin` designates the host **before** `Super::PostLogin`, because the parent
+restarts the player and `GetDefaultPawnClassForController` reads `bIsHost` to choose the pawn.
+Designating afterwards spawns the host into the wrong pawn.
+
+| NetMode | Host designation |
+|---|---|
+| Listen server | the local controller (whoever created the session) |
+| Dedicated server | first to connect, unless `bFirstPlayerHostsOnDedicatedServer` is off |
+| **Standalone** | **nobody** — by design, or the lone player would spawn into the free camera with no way to play |
+
+That last row explains a confusing observation: in PIE the play mode has been left on **listen
+server**, so player 0 comes up as host with `TSHostCameraPawn`. A true standalone run has no host
+at all and the player is an ordinary crew candidate. **Check the net mode before drawing any
+conclusion about host behaviour.**
+
+The host holds **no team, no crew role and no seat** — `TryAssignTeam` and `TryAssignRole` both
+refuse `PS->IsHost()` outright — and possesses `HostCameraPawnClass` (`ATSHostCameraPawn`).
+
+### 5. Team and role assignment — TWO paths
+```
+self-serve : ServerRequestTeamChange / ServerRequestRoleChange        (a player picks their own)
+host-driven: ServerHostAssignPlayerToTeam / ...ToRole / ...ClearPlayerAssignment
+```
+Both land on `ATSGameMode::TryAssignTeam` / `TryAssignRole`. The host RPCs **re-check
+`IsMatchHost()` server-side** — a Server RPC's `HasAuthority()` is trivially true, so without that
+any client could assign anyone.
+
+`bAutoShowSelectionUI` defaults to **false**: the intended lobby is host-driven, so no selection
+panel pops up on its own. Set it true for a free-for-all lobby.
+
+### 6. Tank spawn
+One tank per team, created lazily by `GetOrSpawnTankForTeam` on first team/role assignment.
+`bPreSpawnTeamTanks` (default off) instead spawns `NumTeamsToPreSpawn` tanks at BeginPlay.
+
+Spawn transform comes from an actor **tagged** `TSTeamSpawn_TeamA`..`TeamD`, or a `PlayerStart`
+with that `PlayerStartTag`. With neither it logs a warning and falls back to a world-origin offset
+at **z=200** — which is a long drop and will leave the tank bouncing on a low floor.
+
+### 7. A gameplay request, end to end
+```
+VR pawn input → ATSTankPlayerController::Server<Action>          (the PC owns a NetConnection)
+              → PS->GetAssignedTank() → FindComponentByClass<U...Component>
+              → Try<Action>(Requester, ...)
+                   factor 1: FTSPermissions::HasFullAccess(role, capability)
+                   factor 2: Crew->HasAccess(Requester, RequiredRole)   ← seat ON THIS TANK
+              → writes replicated state → OnRep_ → ITSTankInterface::Execute_BP_<Action>
+              → Blueprint does the tank-specific work
+```
+**Every Server RPC lives on the PlayerController**, never on the tank, because a Server RPC is
+silently dropped unless the calling client owns the actor.
+
+### 8. ⚠ UNRESOLVED CONTRADICTION — does a crew member POSSESS the tank?
+
+Two parallel workstreams disagree, and the code currently contains both answers.
+
+**`ATSGameMode::HandlePlayerReadyToSpawn` possesses the tank:**
+```cpp
+APawn* Tank = GetOrSpawnTankForTeam(TeamId);
+if (Tank) { PlayerController->Possess(Tank); }
+```
+
+**The three-crew design says nobody possesses it.** A Pawn has exactly one Controller, so
+possession cannot give three crew members a tank each; they possess their own `ATSVRPawn` and
+reach the tank through validated RPCs. Built on that assumption:
+- `IsLocalGunnerOfThisTank()`, added precisely because `IsLocallyControlled()` is false on an
+  unpossessed tank
+- `bRequiresControllerForInputs=False` on all six tanks, because Chaos discards input when there
+  is no controller
+- crew seat attachment in `ATSVRPawn::UpdateCrewStationAttachment`
+
+Both cannot be right. Under the possession path only one crew member gets the tank and the other
+two have no pawn relationship to it; under the three-crew path `HandlePlayerReadyToSpawn` should
+seat the player rather than possess.
+
+**Do not "fix" either side without deciding which model the project is following.** Note the
+predicates were written additively (`HasAuthority() || IsLocallyControlled() || IsLocalGunnerOfThisTank()`),
+so the turret works under either model today — which is why this has not surfaced as a visible bug.
+
+### 9. Known holes at the time of tracing
+- `MainMenu.umap` and `WarZone.umap` are **untracked** — `.gitignore` line 86 excludes
+  `/Content/TankSimulation/Maps`. Only `M_FrameworkTest` is tracked. A fresh clone gets no menu
+  map and cannot launch.
+- `BP_TeamMatchGameMode` is referenced by nothing.
+- `UTSRoleDefinition` (`DA_Role_Driver/Gunner/Commander`) is referenced by no C++ at all.
+- `UTSVoiceSubsystem` logs `no IVoiceChat implementation is loaded - voice will be a no-op`.
+- Standalone logs `Using CommonUI without a CommonGameViewportClient derived game viewport client`
+  — CommonUI input routing will misbehave until the viewport client class is set.
+
+### 10. Running the game standalone from Git Bash
+A `/Game/...` argument gets rewritten by MSYS path translation into
+`C:/Program Files/Git/Game/...` and the map load fails. Prefix the command with
+`MSYS_NO_PATHCONV=1`:
+```bash
+MSYS_NO_PATHCONV=1 "C:/Program Files/Epic Games/UE_5.7/Engine/Binaries/Win64/UnrealEditor.exe" \
+  "C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" "/Game/TankSimulation/Maps/MainMenu" \
+  -game -windowed -resx=1280 -resy=720 -log -abslog="...\Saved\Logs\Standalone.log"
+```
+
+---
+
 ## Unreal multiplayer — the model, and why this tank's turret does not replicate
 Researched from Epic's docs (links at the end of this section). Read this before touching
 anything networked in this project.
