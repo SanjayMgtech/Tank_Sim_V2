@@ -148,10 +148,22 @@ Step 2 is the one that cannot be faked in single-process PIE.
 
 ### Gaps, ranked by risk
 
-**1. Cross-tank access is untested.** Every permission test so far used one tank. The second
-factor — "does this player occupy that seat *on this tank*" — is exactly what stops a Team B
-Gunner operating Team A's tank, and nothing has ever exercised it. Highest risk because the code
-looks correct and has never been challenged.
+**1. Cross-tank access** — ✅ **CLOSED.** `TankSim.Permissions.CrossTankDenial`
+(`Tests/TSCrossTankAccessTests.cpp`) now covers it. It turned out NOT to need a map, a GameMode
+or two teams as originally scheduled: the rule lives in the components, so two tank stand-ins
+with their own crew components in a transient world reproduce it exactly. It is a Tier 1 test,
+not Tier 2.
+
+The test asserts a *legitimate* Gunner is denied aim/cannon/machine-gun/reload on the wrong
+tank, the same in reverse so it is not an artefact of build order, a Driver denied on the wrong
+tank, that a rejected request does not corrupt the victim tank's aim point, that an unseated
+player claiming a role is denied, and that releasing a seat revokes access immediately. It also
+asserts each crew member CAN act on their own tank, so a blanket "everything denied" bug cannot
+make it pass.
+
+Verified against a real break by deleting the `Crew->HasAccess` factor: seven assertions failed,
+including `tank A's aim point ... expected 100.0, but it was 999.0` — Team B's Gunner steering
+Team A's turret, which is the attack this factor exists to stop.
 
 **2. Commander has no verified action.** `TryIssueCommand` and the intel refresh have never run.
 Commander is the only role with zero proven capability.
