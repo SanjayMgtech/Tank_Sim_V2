@@ -184,6 +184,13 @@ void ATSTankPlayerController::RefreshSelectionUI()
 	if (MapName.Contains(TEXT("MainMenu")))
 	{
 		HideSelectionUI();
+
+		// The menu is entirely mouse-driven, and nothing else turns the cursor on: bShowMouseCursor
+		// was only ever set inside ShowTeam/RoleSelectionUI, which do not run on the menu map (and
+		// do not run at all while bAutoShowSelectionUI is false, the host-driven default). Without
+		// this the session browser is on screen with no pointer to click it.
+		bShowMouseCursor = true;
+		SetInputMode(FInputModeGameAndUI());
 		return;
 	}
 

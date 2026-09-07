@@ -283,8 +283,29 @@ void ATSTankControllerBase::BP_SetDriveInput_Implementation(float Throttle, floa
 	WarnNotOverridden(this, TEXT("BP_SetDriveInput"));
 }
 
+void ATSTankControllerBase::BeginPlay()
+{
+	Super::BeginPlay();
+
+	// Aim straight ahead until a Gunner actually aims.
+	//
+	// TurretsAndGunsRotCalculation selects ReceivedAimPoint whenever the tank is not locally
+	// controlled - which, under the crew model, is ALWAYS, because nobody possesses the tank. A
+	// zero default is not "unset" to that maths, it is the world origin, so a tank spawned away
+	// from the origin swung its turret round to point back at it the moment it appeared.
+	ReceivedAimPoint = GetActorLocation() + GetActorForwardVector() * DefaultAimDistance;
+}
+
 void ATSTankControllerBase::BP_AimTurret_Implementation(FVector_NetQuantize AimPoint)
 {
+	// Ignore the zero default. UTSTankWeaponComponent::CurrentAimPoint starts at zero and its
+	// OnRep fires on first replication, which would otherwise hand the turret the world origin as
+	// a target before any Gunner has aimed.
+	if (FVector(AimPoint).IsNearlyZero())
+	{
+		return;
+	}
+
 	// Now that the contract carries a world-space POINT, this is implementable in C++ and needs
 	// no Blueprint override: ReceivedAimPoint is exactly what TurretsAndGunsRotCalculation already
 	// consumes (it selects between its own camera trace and this value, then writes TargetPoint).

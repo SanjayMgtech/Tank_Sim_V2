@@ -583,6 +583,13 @@ public:
 	UPROPERTY(BlueprintReadWrite, Category = "Networking")
 	FVector ReceivedAimPoint = FVector::ZeroVector;
 
+	// How far ahead the turret aims before any Gunner has aimed. Only a placeholder target - the
+	// first real aim point replaces it.
+	UPROPERTY(EditDefaultsOnly, Category = "Networking")
+	float DefaultAimDistance = 100000.f;
+
+	virtual void BeginPlay() override;
+
 	UFUNCTION(Server, Unreliable, BlueprintCallable, Category = "Networking")
 	void ServerSetAimPoint(FVector NewAimPoint);
 

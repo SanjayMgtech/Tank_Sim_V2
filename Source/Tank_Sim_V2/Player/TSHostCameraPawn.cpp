@@ -41,9 +41,18 @@ ATSHostCameraPawn::ATSHostCameraPawn(const FObjectInitializer& ObjectInitializer
 
 void ATSHostCameraPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
-	// ADefaultPawn registers and binds MoveForward/MoveRight/MoveUp/Turn/LookUp here, so free flight
-	// works with no authored input assets.
+	// ADefaultPawn binds MoveForward/MoveRight/MoveUp/Turn/LookUp here.
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+	// ...but only MoveForward, MoveRight and LookUp actually exist in this project's
+	// DefaultInput.ini. The yaw axis is named "Turn Right / Left Mouse" (the UE template default),
+	// not "Turn", so ADefaultPawn's yaw binding resolves to nothing and the host camera could look
+	// up and down but never turn. Bind the names that are really there.
+	if (PlayerInputComponent)
+	{
+		PlayerInputComponent->BindAxis(TEXT("Turn Right / Left Mouse"), this, &APawn::AddControllerYawInput);
+		PlayerInputComponent->BindAxis(TEXT("Turn Right / Left Gamepad"), this, &APawn::AddControllerYawInput);
+	}
 
 	if (!HostMappingContext)
 	{
