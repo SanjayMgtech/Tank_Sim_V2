@@ -11,6 +11,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTSOnTeamTanksChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTSOnPlayerRosterChanged);
 
 class ATSTankPlayerState;
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FTSOnLobbyCodeChanged, const FString&, LobbyCode);
 
 UCLASS()
 class ATSGameState : public AGameStateBase
@@ -38,10 +39,14 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Host")
 	ATSTankPlayerState* GetHostPlayerState() const;
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Lobby")
+	FString GetLobbyCode() const { return LobbyCode; }
 
 	// Server only. ATSGameMode is the only caller.
 	void SetMatchState(ETSMatchState NewState);
 	void RegisterTeamTank(ETSTeamId TeamId, APawn* Tank);
+	void SetLobbyCode(const FString& NewCode);
+	void ClearPlayerRole(APlayerState* ExitingPlayer);
 
 	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation")
 	FTSOnMatchStateChanged OnMatchStateChanged;
@@ -53,6 +58,8 @@ public:
 	// notification of its own, so the host roster UI would otherwise have to poll.
 	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Host")
 	FTSOnPlayerRosterChanged OnPlayerRosterChanged;
+	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Lobby")
+	FTSOnLobbyCodeChanged OnLobbyCodeChanged;
 
 protected:
 	UPROPERTY(ReplicatedUsing = OnRep_MatchState, BlueprintReadOnly, Category = "Tank Simulation")
@@ -61,9 +68,15 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_TeamTankEntries, BlueprintReadOnly, Category = "Tank Simulation")
 	TArray<FTSTeamTankEntry> TeamTankEntries;
 
+	UPROPERTY(ReplicatedUsing = OnRep_LobbyCode, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
+	FString LobbyCode;
+
 	UFUNCTION()
 	void OnRep_MatchState();
 
 	UFUNCTION()
 	void OnRep_TeamTankEntries();
+
+	UFUNCTION()
+	void OnRep_LobbyCode();
 };

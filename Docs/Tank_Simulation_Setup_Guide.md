@@ -29,7 +29,7 @@ framework was added to it directly rather than as a separate `TankSimulation` mo
 | `UTSSessionSubsystem` | [TSSessionSubsystem.h](../Source/Tank_Sim_V2/Networking/TSSessionSubsystem.h) | create/find/join/destroy session |
 | `UTSVoiceSubsystem` | [TSVoiceSubsystem.h](../Source/Tank_Sim_V2/Voice/TSVoiceSubsystem.h) | `IVoiceChat` wrapper |
 | `UTSRoleDefinition` / `UTSTankDefinition` | [TSRoleDefinition.h](../Source/Tank_Sim_V2/Data/TSRoleDefinition.h) / [TSTankDefinition.h](../Source/Tank_Sim_V2/Data/TSTankDefinition.h) | Data Asset classes |
-| 9 UMG widget base classes | `Source/Tank_Sim_V2/UI/` | see §5 |
+| UMG widget base classes | `Source/Tank_Sim_V2/UI/` | see §5 |
 
 Plus a small internal helper not in the doc's class table: `UTSHUDWidgetBase`
 ([TSHUDWidgetBase.h](../Source/Tank_Sim_V2/UI/TSHUDWidgetBase.h)), which the four HUD widgets share to
@@ -179,7 +179,6 @@ visible until they do.
    | `WBP_SessionBrowser` | `UTSSessionBrowserWidget` | buttons calling `CreateSession` / `RefreshSessions` / `JoinSession`; implement `OnSessionListUpdated` to populate a list |
    | `WBP_TeamSelection` | `UTSTeamSelectionWidget` | 4 buttons calling `NotifyTeamSelected` |
    | `WBP_RoleSelection` | `UTSRoleSelectionWidget` | 3 buttons calling `NotifyRoleSelected` |
-   | `WBP_HostAdmin` | `UTSHostAdminWidget` | gate `Visibility` on `IsLocalPlayerHost`; implement `OnRosterUpdated` to list `GetAssignablePlayers`, with per-row buttons calling `AssignTeamAndRole` / `ClearAssignment` |
    | `WBP_CrewHUD` | `UTSCrewHUDWidget` | implement `OnAssignmentRefreshed` / `OnCommandReceived` |
    | `WBP_DriverHUD` | `UTSDriverHUDWidget` | implement `OnSpeedUpdated` |
    | `WBP_GunnerHUD` | `UTSGunnerHUDWidget` | implement `OnWeaponStateChanged`, read the `Get*Ammo`/`GetAimDirection`/`IsReloading` getters |
@@ -204,9 +203,9 @@ each player's own controller, which always has one.
 |---|---|---|---|
 | `ServerRequestTeamChange` | Reliable | Team is a real team, not already full | `ATSGameMode::TryAssignTeam` |
 | `ServerRequestRoleChange` | Reliable | Player has a team; seat free | `ATSGameMode::TryAssignRole`, spawns the team's tank on first request |
-| `ServerHostAssignTeam` | Reliable | Sender is the host; target is not | `ATSGameMode::HostAssignTeam` → same checks as `TryAssignTeam` |
-| `ServerHostAssignRole` | Reliable | Sender is the host; target is not | `ATSGameMode::HostAssignRole` → same checks as `TryAssignRole` |
-| `ServerHostClearAssignment` | Reliable | Sender is the host; target is not | `ATSGameMode::HostClearAssignment` — frees the seat, clears team |
+| `ServerHostAssignPlayerToTeam` | Reliable | `IsMatchHost()`; team != None | `ATSGameMode::TryAssignTeam` on the *target's* controller — the host is rejected as a target because `TryAssignTeam` refuses a host |
+| `ServerHostAssignPlayerToRole` | Reliable | `IsMatchHost()`; role != None | `ATSGameMode::TryAssignRole`, then `ClientRoleRequestResult` back to the assigned player |
+| `ServerHostClearPlayerAssignment` | Reliable | `IsMatchHost()` | `ATSGameMode::ClearAssignment` — frees the seat, clears the team |
 | `ServerSetDriveInput` | Unreliable | Finite floats in range; sender is the tank's Driver | `UTSTankControlComponent::TryApplyDriveInput` |
 | `ServerAimTurret` | Unreliable | Non-NaN vector; sender is the Gunner | `UTSTankWeaponComponent::TryAimTurret` |
 | `ServerFireMainCannon` | Reliable | Sender is the Gunner; ammo > 0; fire-rate cooldown | `UTSTankWeaponComponent::TryFireMainCannon` |
@@ -300,7 +299,7 @@ no code changes on the framework side.
 | 7 | Crew voice works | `IsVoiceChatAvailable()` true after enabling a voice backend (§8); 3 crew hear each other |
 | 8 | VR input reaches the correct command path | VR controller trigger → `ATSVRPawn::Input_FireMainCannon` → `ServerFireMainCannon` |
 | 9 | C++ widgets expose bindable events without owning gameplay authority | Every widget's server-affecting action goes through `ATSTankPlayerController`, never mutates state directly |
-| 10 | The host can assign every other player's team and role | From `WBP_HostAdmin`, seat 3 clients as Driver/Gunner/Commander; a non-host calling `ServerHostAssignTeam` is rejected by `ATSGameMode::HostAssignTeam` |
+| 10 | The host can assign every other player's team and role | From the host console (§13), seat 3 clients as Driver/Gunner/Commander; a non-host calling `ServerHostAssignPlayerToTeam` is rejected by `IsMatchHost()` |
 
 ## 11. The session host (match admin)
 
@@ -341,22 +340,20 @@ across.
 
 ### Assigning teams and roles
 
-The host's three Server RPCs (§6) route into `ATSGameMode::HostAssignTeam` / `HostAssignRole` /
-`HostClearAssignment`, which check the caller is the designated host and the target is not, then hand
-off to `AssignTeamToPlayerState` / `AssignRoleToPlayerState` — **the same functions the players' own
-self-service requests use**. There is exactly one team/role validation path in the framework regardless
-of who initiated the request, so the team-capacity and seat-occupancy rules cannot drift apart between
-the two flows.
+The host's three Server RPCs (§6) each re-check `ATSTankPlayerController::IsMatchHost()` server-side —
+a Server RPC's `HasAuthority()` is trivially true, so without that check any client could call them —
+then forward to `ATSGameMode::TryAssignTeam` / `TryAssignRole` / `ClearAssignment` on the *target*
+player's controller. Those are **the same entry points the players' own self-service requests use**, so
+there is exactly one team/role validation path regardless of who initiated the request, and the
+team-capacity and seat-occupancy rules cannot drift apart between the two flows.
 
-Build the panel as a `WBP_HostAdmin` deriving from `UTSHostAdminWidget` (§5):
+`IsMatchHost()` reads the replicated `ATSTankPlayerState::bIsHost`, so it answers correctly on every
+machine — a client needs it to hide the console, the server needs it to tell its many controller
+proxies apart.
 
-- `IsLocalPlayerHost()` — gate the whole panel's visibility on this.
-- `GetAssignablePlayers()` — the roster, i.e. every connected player except the host.
-- `GetOccupantForTeamRole(Team, Role)` — who already holds a seat, so taken seats can be greyed out.
-- `AssignTeamAndRole(Player, Team, Role)` / `ClearAssignment(Player)` — the actions.
-- `OnRosterUpdated` — implement to rebuild the list; it fires on construct, on join/leave
-  (`ATSGameState::OnPlayerRosterChanged`) and on any assignment change
-  (`ATSTankPlayerState::OnAssignmentChanged`), so the panel never has to poll.
+The console itself is `UTSRoleDebugWidget` (§13), which builds its whole widget tree in C++ — there is
+no WBP asset to author. It lists every player *except* the host, since the host is not one of the
+players it assigns.
 
 `WBP_TeamSelection` and `WBP_RoleSelection` stay as they are — a host clicking them is a no-op on both
 ends (the widgets skip the RPC, and the GameMode would reject it anyway), so hiding them for the host
@@ -408,3 +405,112 @@ the caller's own `PlayerState` server-side; `AssignedTank` replicates; disconnec
 late joiners receive current state via ordinary Unreal actor-relevancy replication) trace directly onto
 the RPC reference in §6 and the `ATSGameMode`/`ATSGameState` implementations in
 [TSGameMode.cpp](../Source/Tank_Sim_V2/Core/TSGameMode.cpp).
+
+---
+
+## 13. MainMenu → WarZone bring-up checklist
+
+Three behaviours that the C++ now handles on its own, and the Editor-side wiring each one still
+needs. Everything below is a Details/World Settings change — no Blueprint graph work.
+
+### 12.1 One tank per team, spawned when the team is created
+
+A team's tank is spawned by `ATSGameMode::TryAssignTeam` — the moment that team is first created by a
+player joining it. Nothing spawns before that, and nothing spawns on the menu map at all.
+
+Two guards enforce it:
+
+- `CanSpawnTeamTanks()` returns false on any map listed in `UTSUISubsystem::MenuMapNames` (`MainMenu`
+  by default — the same list the menu-widget sweep in §12.2 uses). Every spawn path checks it,
+  including `ATSTeamMatchGameMode`'s own `GetOrSpawnTankForTeam` override, which does not call `Super`.
+- `bPreSpawnTeamTanks` is **off** by default. Turn it on only for a map that should have every team's
+  tank standing there from the start; it then spawns TeamA…TeamN (`NumTeamsToPreSpawn`) in `BeginPlay`,
+  still subject to the menu-map guard. `SpawnTeamTanks()` stays callable from Blueprint either way.
+
+In the Editor:
+
+1. **`WarZone` → World Settings → GameMode Override = `BP_TSGameMode`** (or `BP_TeamMatchGameMode`,
+   which derives from it and adds auto team/role assignment). Without the override the map runs
+   whatever `DefaultEngine.ini`'s `GlobalDefaultGameMode` points at, `ATSGameMode` never runs, and
+   nothing spawns.
+2. **GameMode → Class Defaults → Tank Simulation:**
+   - `Default Tank Class` — already set in C++ to `BP_T90_Controller_Chaos` via `ConstructorHelpers`,
+     so this only needs changing if you want a different tank. It must implement `ITSTankInterface`
+     and carry a `TSTankCrewComponent`.
+   - `Team Tank Class Overrides` (base) / `Team Tank Classes` (`ATSTeamMatchGameMode`) — per-team
+     tanks. `GetTankClassForTeam` is virtual: the team-match map wins where it has an entry, then the
+     base map, then `Default Tank Class`.
+3. **The tank Blueprint → Class Defaults → `Replicates` = true**, otherwise it exists on the host only.
+4. **Place spawn points in `WarZone`.** Any actor tagged `TSTeamSpawn_TeamA` / `_TeamB` / `_TeamC` /
+   `_TeamD` works (an empty Actor or a TargetPoint is fine), as does a `PlayerStart` whose *Player
+   Start Tag* is that name. With no tagged actor the tanks fall back to a world-origin offset and log
+   a warning.
+5. **Host with `?listen`** — `ServerTravel` to `/Game/TankSimulation/Maps/WarZone?listen`. Without it
+   the map runs standalone and clients cannot connect. Note `ATSGameMode::GameplayMapName` still
+   defaults to `Controller_Demo_T90`, which is where `StartTankMatch()` travels — set it to `WarZone`
+   in the GameMode's Class Defaults if you use that path rather than travelling from the menu.
+
+Watch the Output Log filtered to `LogTankSim`: it reports the tank name, team and location per spawn,
+and says explicitly when no tank class is configured (also as a red on-screen message).
+
+### 12.1a Picking a role after joining a team
+
+`TryAssignTeam` sets the player's team, clears their role, and spawns the team's tank. The cleared
+role replicates back, `ATSTankPlayerController::RefreshSelectionUI` sees *team set, role none*, and
+swaps the team panel for `WBP_RoleSelection`. Picking a seat calls `NotifyRoleSelected`, which sends
+`ServerRequestRoleChange`; the server answers on `ClientRoleRequestResult` / `OnRoleRequestResult`.
+
+`UTSRoleSelectionWidget` keeps the panel honest while that happens:
+
+- It binds to `ATSGameState::OnTeamTanksChanged` and to the team tank's
+  `UTSTankCrewComponent::OnCrewChanged`, re-binding when the tank replicates in, and fires
+  **`On Role Availability Changed`** whenever the free seats might have changed.
+- `IsWaitingForTeamTank()` is true in the window between joining a team and that team's tank arriving
+  on this client. `IsRoleOccupied` reports every seat free in that window, so gate the buttons on this
+  rather than showing three clickable seats that may already be taken.
+- `GetAvailableRoles()` returns the free seats (empty while waiting); `IsRoleOccupied(Role)` answers
+  per seat; `AutoSelectRole()` takes the first free one.
+
+In the WBP: implement **On Role Availability Changed** and, from it, enable each role button on
+`not IsRoleOccupied(Role) and not IsWaitingForTeamTank()`. Without that event the panel shows whatever
+occupancy existed when it opened, and two players can race for the same seat — the server still
+rejects the loser, but they get no warning until it does.
+
+### 12.2 Menu widgets are removed on gameplay maps
+
+`UTSUISubsystem` hooks `PostLoadMapWithWorld` and removes every menu widget whenever a non-menu map
+loads; `ATSTankPlayerController::BeginPlay` repeats the sweep one tick later, after the level
+Blueprint's own `BeginPlay`. A widget is "menu" if it derives from `UTSLoginWidget` or
+`UTSSessionBrowserWidget` (so `WBP_Login` and `WBP_SessionBrowser` are covered automatically), or if
+its class name contains `Login`, `SessionBrowser`, `SessionList`, `MainMenu` or `HostMenu`.
+
+`WBP_RoleSelection` and `WBP_TeamSelection` are deliberately *not* matched — they belong on the
+gameplay map.
+
+No Editor work is required. To extend it:
+
+- Menu map names and name fragments are `Config` properties — override in `DefaultGame.ini`:
+  ```ini
+  [/Script/Tank_Sim_V2.TSUISubsystem]
+  +MenuMapNames=Lobby
+  +MenuWidgetNameFragments=Credits
+  ```
+- Or call `Register Menu Widget Class` on the subsystem, or `Remove Menu Widgets` on the
+  PlayerController, from Blueprint.
+
+### 12.3 Role debug panel on every client
+
+`UTSRoleDebugWidget` builds its entire widget tree in C++, so there is **no WBP asset to create**.
+`ATSTankPlayerController` instantiates it for each local player on gameplay maps
+(`bShowRoleDebugWidgetOnGameplayMaps`, default on) and it refreshes 4× a second.
+
+It shows net mode, map and match state; this player's name/team/role/tank; every player in
+`PlayerArray` with their assignment (`>` marks the local one); and each team's tank with its
+Driver/Gunner/Commander occupants.
+
+- Toggle at runtime: `TSRoleDebug` in the `~` console, or `Show Role Debug Widget` from Blueprint.
+- Turn it off for shipping: `BP_TSGameMode`'s PlayerController Blueprint → Class Defaults →
+  Tank Simulation|Debug → uncheck *Show Role Debug Widget On Gameplay Maps*.
+- To restyle it, create a Blueprint child of `TSRoleDebugWidget` and set it as *Role Debug Widget Class*.
+- It is a screen-space widget, so it will not appear inside an HMD — read it on the mirror window, or
+  put a Widget Component in the cockpit pointing at the same class if you need it in VR.

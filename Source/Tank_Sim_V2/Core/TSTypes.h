@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/NetSerialization.h"
+#include "Kismet/BlueprintFunctionLibrary.h"
 #include "TSTypes.generated.h"
 
 class APawn;
@@ -33,6 +34,17 @@ enum class ETSMatchState : uint8
 	TeamAndRoleSelection	UMETA(DisplayName = "Team And Role Selection"),
 	InProgress				UMETA(DisplayName = "In Progress"),
 	Ended					UMETA(DisplayName = "Ended")
+};
+
+UENUM(BlueprintType)
+enum class ETSSessionStatus : uint8
+{
+	Idle		UMETA(DisplayName = "Idle"),
+	Creating	UMETA(DisplayName = "Creating"),
+	InLobby		UMETA(DisplayName = "In Lobby"),
+	Searching	UMETA(DisplayName = "Searching"),
+	Joining		UMETA(DisplayName = "Joining"),
+	Failed		UMETA(DisplayName = "Failed")
 };
 
 // Capabilities gated by the Section 8 permission matrix.
@@ -105,4 +117,22 @@ struct FTSPermissions
 {
 	static ETSAccessLevel GetAccessLevel(ETSCrewRole Role, ETSCapability Capability);
 	static bool HasFullAccess(ETSCrewRole Role, ETSCapability Capability);
+};
+
+// Display-name helpers for the framework enums. Used by the role debug HUD (UTSRoleDebugWidget) and
+// exposed to Blueprint so WBP HUDs can label a role/team without a hand-maintained Select node.
+UCLASS()
+class UTSTypeUtils : public UBlueprintFunctionLibrary
+{
+	GENERATED_BODY()
+
+public:
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
+	static FString CrewRoleToString(ETSCrewRole Role);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
+	static FString TeamIdToString(ETSTeamId TeamId);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
+	static FString MatchStateToString(ETSMatchState State);
 };

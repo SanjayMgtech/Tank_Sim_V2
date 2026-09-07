@@ -20,4 +20,25 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
 	void NotifyTeamSelected(ETSTeamId TeamId);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void HostAssignPlayerToTeam(APlayerState* TargetPlayerState, ETSTeamId TeamId);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	TArray<APlayerState*> GetConnectedPlayers() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	bool IsHost() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	APawn* GetTankForTeam(ETSTeamId TeamId) const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	int32 GetPlayerCountOnTeam(ETSTeamId TeamId) const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	bool IsTeamFull(ETSTeamId TeamId) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	void AutoSelectTeam();
 };

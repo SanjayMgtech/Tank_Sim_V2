@@ -12,6 +12,40 @@ void ATSTankPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(ATSTankPlayerState, bIsHost);
 }
 
+void ATSTankPlayerState::CopyProperties(APlayerState* PlayerState)
+{
+	Super::CopyProperties(PlayerState);
+
+	if (ATSTankPlayerState* NewPlayerState = Cast<ATSTankPlayerState>(PlayerState))
+	{
+		NewPlayerState->TeamId = TeamId;
+		NewPlayerState->CrewRole = CrewRole;
+
+		// Seamless travel calls HandleSeamlessTravelPlayer, not PostLogin, so the GameMode never
+		// re-designates the host on the new map. Without carrying this the host would arrive as an
+		// ordinary player: no assignment console, and RestartPlayer would hand it a crew pawn
+		// instead of the free-roam camera (CopyProperties runs before HandleStartingNewPlayer).
+		NewPlayerState->bIsHost = bIsHost;
+
+		// Deliberately not AssignedTank: that actor belongs to the world being left behind. The
+		// GameMode spawns the team's tank again on the new map and re-seats the crew there.
+		NewPlayerState->AssignedTank = nullptr;
+	}
+}
+
+void ATSTankPlayerState::OverrideWith(APlayerState* PlayerState)
+{
+	Super::OverrideWith(PlayerState);
+
+	if (const ATSTankPlayerState* OldPlayerState = Cast<ATSTankPlayerState>(PlayerState))
+	{
+		TeamId = OldPlayerState->TeamId;
+		CrewRole = OldPlayerState->CrewRole;
+		AssignedTank = OldPlayerState->AssignedTank;
+		bIsHost = OldPlayerState->bIsHost;
+	}
+}
+
 void ATSTankPlayerState::SetTeamId(ETSTeamId NewTeamId)
 {
 	if (!HasAuthority() || TeamId == NewTeamId)

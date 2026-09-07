@@ -4,6 +4,8 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Core/TSGameInstance.h"
+#include "Networking/TSSessionSubsystem.h"
 #include "TSLoginWidget.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTSOnLoginEvent);
@@ -26,4 +28,14 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
 	void NotifyContinue() { OnContinue.Broadcast(); }
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	UTSSessionSubsystem* GetSessionSubsystem() const
+	{
+		if (UTSGameInstance* TSGI = Cast<UTSGameInstance>(GetGameInstance()))
+		{
+			return TSGI->GetSessionSubsystem();
+		}
+		return GetGameInstance() ? GetGameInstance()->GetSubsystem<UTSSessionSubsystem>() : nullptr;
+	}
 };

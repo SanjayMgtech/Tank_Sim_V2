@@ -139,7 +139,6 @@ parent unless you change it there first).
 | `WBP_SessionBrowser` | `TSSessionBrowserWidget` | Create/Refresh buttons calling `Create Session` / `Refresh Sessions`; a list (ScrollBox or ListView) populated in the **On Session List Updated** event (override it — it hands you the `TArray<FTSSessionSearchResult>`); each row's Join button calls `Join Session` with that row's index. |
 | `WBP_TeamSelection` | `TSTeamSelectionWidget` | 4 buttons (Team A–D), each calling `Notify Team Selected` with the matching `ETSTeamId`. |
 | `WBP_RoleSelection` | `TSRoleSelectionWidget` | 3 buttons (Driver/Gunner/Commander), each calling `Notify Role Selected` with the matching `ETSCrewRole`. |
-| `WBP_HostAdmin` | `TSHostAdminWidget` | The host's assignment panel. Bind the root's **Visibility** to `Is Local Player Host`. Override **On Roster Updated** to rebuild a list from `Get Assignable Players`; give each row the player's `Get Player Name`, their current `Get Team Id`/`Get Crew Role`, a team+role picker calling `Assign Team And Role`, and a Clear button calling `Clear Assignment`. Use `Get Occupant For Team Role` to grey out seats that are already taken. |
 | `WBP_CrewHUD` | `TSCrewHUDWidget` | Text blocks bound to `Get Team Id` and `Get Occupant Name` (call with Driver/Gunner/Commander) for a crew roster; override **On Command Received** to flash a "Commander says: X" banner. |
 | `WBP_DriverHUD` | `TSDriverHUDWidget` | A speedometer; override **On Speed Updated** to set its value from the `SpeedCentimetersPerSecond` parameter (divide by ~44.7 for a rough mph display, or ~36 for km/h). |
 | `WBP_GunnerHUD` | `TSGunnerHUDWidget` | Ammo counters bound to `Get Main Cannon Ammo` / `Get Machine Gun Ammo`, a reload indicator bound to `Is Reloading`; override **On Weapon State Changed** to refresh them each tick. |
@@ -150,8 +149,9 @@ Add these widgets to the viewport from wherever makes sense in your flow (e.g. `
 `ATSTankPlayerState::OnAssignmentChanged` fires with a non-`None` role — bind to that delegate from
 whichever Blueprint owns your HUD-swap logic).
 
-The host sees a different set of these: `WBP_HostAdmin` instead of `WBP_TeamSelection`/`WBP_RoleSelection`
-and no crew HUD at all, since it has no tank. Branch on `Is Host` (on `TSTankPlayerController`) or
+The host sees a different set of these: the `UTSRoleDebugWidget` assignment console (built in C++, no
+WBP to author — it appears by itself on gameplay maps) instead of `WBP_TeamSelection`/`WBP_RoleSelection`,
+and no crew HUD at all, since it has no tank. Branch on `Is Match Host` (on `TSTankPlayerController`) or
 `Is Host` (on `TSTankPlayerState`) wherever you add the selection/HUD widgets to the viewport. Clicking
 team/role selection as the host is already a harmless no-op on both ends, so this is presentation only.
 
@@ -188,10 +188,10 @@ Walk through the [Definition of Done checklist](Tank_Simulation_Setup_Guide.md#1
 in the setup guide in order:
 
 1. Client 1 creates a session (`WBP_SessionBrowser`); Clients 2 and 3 find and join it. Client 1 is
-   the **host**: it spawns into the free-roam camera (WASD + mouse) instead of a tank, and gets
-   `WBP_HostAdmin` rather than the team/role pickers. Note this means a 3-crew test needs
+   the **host**: it spawns into the free-roam camera (WASD + mouse) instead of a tank, and gets the
+   role/assignment console rather than the team/role pickers. Note this means a 3-crew test needs
    **4 players** in the PIE dropdown, not 3 — the host isn't one of the crew.
-2. From the host's `WBP_HostAdmin`, put Clients 2, 3 and 4 on the same team as Driver/Gunner/Commander
+2. From the host's assignment console, put Clients 2, 3 and 4 on the same team as Driver/Gunner/Commander
    — or let them pick for themselves with `WBP_TeamSelection`/`WBP_RoleSelection`. Both paths go
    through the same server-side validation, so they're interchangeable and can be mixed.
 3. Driver input moves the tank; Gunner input aims/fires; Commander's Refresh Intel populates their HUD.
@@ -233,7 +233,7 @@ DefaultPlatformService=Steam
 | Server authority, validation, replication | ✅ Everything | — |
 | Session create/find/join/destroy logic | ✅ | Backend config only (Step 12) |
 | Team/role assignment, permission matrix | ✅ | — |
-| Host designation, host-side assignment, free camera | ✅ | The `WBP_HostAdmin` layout (Step 7); optional `TSHostSpawn` tag (Step 9) |
+| Host designation, host-side assignment, free camera | ✅ | Nothing — the console is built in C++; optionally a `TSHostSpawn` tag (Step 9) |
 | Tank drive/aim/fire contract + components | ✅ | The 5 `BP_*` bodies (Step 1) |
 | VR input routing | ✅ | The actual Input Action assets + bindings (Step 4-5) |
 | UMG delegate/event contracts | ✅ | The actual widget layouts (Step 7) |
