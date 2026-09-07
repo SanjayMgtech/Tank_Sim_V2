@@ -1,6 +1,7 @@
 #include "Player/TSTankPlayerController.h"
 
 #include "Blueprint/UserWidget.h"
+#include "ChaosWheeledVehicleMovementComponent.h"
 #include "Components/InputComponent.h"
 #include "Core/TSGameInstance.h"
 #include "Core/TSGameMode.h"
@@ -134,6 +135,158 @@ void ATSTankPlayerController::TSLobbyFocus()
 	ToggleLobbyConsoleFocus();
 }
 
+// --- Test console commands ----------------------------------------------------------------------
+// Bodies compile out of Shipping. Everything here goes through the same Server RPCs the lobby UI
+// uses, so the server's validation is unchanged and no new authority is granted.
+
+#if !UE_BUILD_SHIPPING
+namespace
+{
+	// Accepts "A".."D", "TeamA".."TeamD" or "0".."3".
+	bool ParseTeam(const FString& In, ETSTeamId& Out)
+	{
+		const FString S = In.TrimStartAndEnd().ToUpper().Replace(TEXT("TEAM"), TEXT(""));
+		if (S == TEXT("A") || S == TEXT("0")) { Out = ETSTeamId::TeamA; return true; }
+		if (S == TEXT("B") || S == TEXT("1")) { Out = ETSTeamId::TeamB; return true; }
+		if (S == TEXT("C") || S == TEXT("2")) { Out = ETSTeamId::TeamC; return true; }
+		if (S == TEXT("D") || S == TEXT("3")) { Out = ETSTeamId::TeamD; return true; }
+		return false;
+	}
+
+	// Accepts a name (any unambiguous prefix) or "0".."2".
+	bool ParseCrewRole(const FString& In, ETSCrewRole& Out)
+	{
+		const FString S = In.TrimStartAndEnd().ToUpper();
+		if (S.StartsWith(TEXT("D")) || S == TEXT("0")) { Out = ETSCrewRole::Driver; return true; }
+		if (S.StartsWith(TEXT("G")) || S == TEXT("1")) { Out = ETSCrewRole::Gunner; return true; }
+		if (S.StartsWith(TEXT("C")) || S == TEXT("2")) { Out = ETSCrewRole::Commander; return true; }
+		return false;
+	}
+}
+#endif
+
+void ATSTankPlayerController::TSTeam(const FString& Team)
+{
+#if !UE_BUILD_SHIPPING
+	ETSTeamId Parsed = ETSTeamId::None;
+	if (!ParseTeam(Team, Parsed))
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSTeam: could not parse '%s'. Use A|B|C|D or 0-3."), *Team);
+		return;
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("TSTeam: requesting %s"), *UTSTypeUtils::TeamIdToString(Parsed));
+	ServerRequestTeamChange(Parsed);
+#endif
+}
+
+void ATSTankPlayerController::TSRole(const FString& InRole)
+{
+#if !UE_BUILD_SHIPPING
+	ETSCrewRole Parsed = ETSCrewRole::None;
+	if (!ParseCrewRole(InRole, Parsed))
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSRole: could not parse '%s'. Use Driver|Gunner|Commander or 0-2."), *InRole);
+		return;
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("TSRole: requesting %d"), static_cast<int32>(Parsed));
+	ServerRequestRoleChange(Parsed);
+#endif
+}
+
+void ATSTankPlayerController::TSClear()
+{
+#if !UE_BUILD_SHIPPING
+	// The host-clear RPC is the only clear path, and it targets a PlayerState. Passing our own is
+	// still host-gated server-side, so on a client this is a no-op rather than a privilege hole.
+	UE_LOG(LogTankSim, Log, TEXT("TSClear: requesting clear"));
+	ServerHostClearPlayerAssignment(GetPlayerState<APlayerState>());
+#endif
+}
+
+void ATSTankPlayerController::TSStartMatch()
+{
+#if !UE_BUILD_SHIPPING
+	UE_LOG(LogTankSim, Log, TEXT("TSStartMatch: requesting (IsMatchHost=%s locally)"),
+		IsMatchHost() ? TEXT("true") : TEXT("false"));
+	ServerRequestStartMatch();
+#endif
+}
+
+void ATSTankPlayerController::TSDrive(float Throttle, float Steering, float Seconds)
+{
+#if !UE_BUILD_SHIPPING
+	// A single ServerSetDriveInput is cleared by Chaos on the very next tick, so a one-shot proves
+	// nothing. Re-send every frame for the requested duration, the way a held key would.
+	StopTestDrive();
+
+	TestDriveInput = FVector2D(Throttle, Steering);
+	const float Duration = Seconds > 0.f ? Seconds : 3.f;
+
+	UE_LOG(LogTankSim, Log, TEXT("TSDrive: throttle=%.2f steering=%.2f for %.1fs"), Throttle, Steering, Duration);
+
+	GetWorldTimerManager().SetTimer(TestDriveTimerHandle, this, &ATSTankPlayerController::TickTestDrive, 0.016f, true);
+	GetWorldTimerManager().SetTimer(TestDriveStopTimerHandle, this, &ATSTankPlayerController::StopTestDrive, Duration, false);
+#endif
+}
+
+void ATSTankPlayerController::TickTestDrive()
+{
+#if !UE_BUILD_SHIPPING
+	ServerSetDriveInput(TestDriveInput.X, TestDriveInput.Y);
+#endif
+}
+
+void ATSTankPlayerController::StopTestDrive()
+{
+#if !UE_BUILD_SHIPPING
+	GetWorldTimerManager().ClearTimer(TestDriveTimerHandle);
+	GetWorldTimerManager().ClearTimer(TestDriveStopTimerHandle);
+
+	if (!TestDriveInput.IsZero())
+	{
+		TestDriveInput = FVector2D::ZeroVector;
+		ServerSetDriveInput(0.f, 0.f);
+		UE_LOG(LogTankSim, Log, TEXT("TSDrive: released"));
+	}
+#endif
+}
+
+void ATSTankPlayerController::TSTankStatus()
+{
+#if !UE_BUILD_SHIPPING
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	APawn* Tank = PS ? PS->GetAssignedTank() : nullptr;
+	if (!Tank)
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSTankStatus: no assigned tank (team=%s role=%d)"),
+			PS ? *UTSTypeUtils::TeamIdToString(PS->GetTeamId()) : TEXT("<no PlayerState>"),
+			static_cast<int32>(PS ? PS->GetCrewRole() : ETSCrewRole::None));
+		return;
+	}
+
+	// The WHEELED subclass, not the base: GetEngineRotationSpeed is declared there.
+	UChaosWheeledVehicleMovementComponent* Move = Tank->FindComponentByClass<UChaosWheeledVehicleMovementComponent>();
+	if (!Move)
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSTankStatus: %s has no vehicle movement component."), *Tank->GetName());
+		return;
+	}
+
+	// Gear and RPM are the trustworthy signals. Speed is reported too, but on a sloped map an
+	// unpowered tank rolls at ~100 cm/s, so speed alone cannot prove the tank is under power.
+	UE_LOG(LogTankSim, Log,
+		TEXT("TSTankStatus: %s role=%d | gear=%d target=%d rpm=%.0f throttle=%.2f brake=%.2f speed=%.1f loc=%s | %s"),
+		*Tank->GetName(),
+		static_cast<int32>(PS->GetCrewRole()),
+		Move->GetCurrentGear(), Move->GetTargetGear(),
+		Move->GetEngineRotationSpeed(), Move->GetThrottleInput(), Move->GetBrakeInput(),
+		Move->GetForwardSpeed(), *Tank->GetActorLocation().ToCompactString(),
+		Tank->HasAuthority() ? TEXT("authority") : TEXT("client copy"));
+#endif
+}
+
 UTSUISubsystem* ATSTankPlayerController::GetUISubsystem() const
 {
 	const UGameInstance* GameInstance = GetGameInstance();
@@ -237,7 +390,72 @@ void ATSTankPlayerController::BeginPlay()
 	if (IsLocalController())
 	{
 		GetWorldTimerManager().SetTimerForNextTick(this, &ATSTankPlayerController::ApplyLocalUIForCurrentMap);
+
+#if !UE_BUILD_SHIPPING
+		// TSAuto* URL options, for unattended listen-server testing. 1.5s, repeating: on a client the
+		// PlayerState and the team's tank each have to replicate in before the next step can succeed.
+		if (GetWorld() && !FString(GetWorld()->URL.GetOption(TEXT("TSAutoTeam="), TEXT(""))).IsEmpty())
+		{
+			GetWorldTimerManager().SetTimer(AutoAssignTimerHandle, this, &ATSTankPlayerController::TickAutoAssign, 1.5f, true, 1.5f);
+		}
+#endif
 	}
+}
+
+void ATSTankPlayerController::TickAutoAssign()
+{
+#if !UE_BUILD_SHIPPING
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	const FString AutoTeam = FString(World->URL.GetOption(TEXT("TSAutoTeam="), TEXT("")));
+	const FString AutoRole = FString(World->URL.GetOption(TEXT("TSAutoRole="), TEXT("")));
+	const FString AutoStart = FString(World->URL.GetOption(TEXT("TSAutoStart="), TEXT("")));
+
+	// TSAutoDrive=<throttle>,<steering>,<seconds>
+	const FString AutoDrive = FString(World->URL.GetOption(TEXT("TSAutoDrive="), TEXT("")));
+
+	switch (AutoAssignStage++)
+	{
+	case 0:
+		if (!AutoTeam.IsEmpty()) { TSTeam(AutoTeam); }
+		break;
+	case 1:
+		if (!AutoRole.IsEmpty()) { TSRole(AutoRole); }
+		break;
+	case 2:
+		if (!AutoStart.IsEmpty() && AutoStart != TEXT("0")) { TSStartMatch(); }
+		break;
+	case 3:
+		// Baseline BEFORE any input: on a sloped map the tank is already rolling, so the after
+		// reading only means something next to this one.
+		UE_LOG(LogTankSim, Log, TEXT("TSAuto: --- before drive ---"));
+		TSTankStatus();
+		if (!AutoDrive.IsEmpty())
+		{
+			TArray<FString> Parts;
+			AutoDrive.ParseIntoArray(Parts, TEXT(","));
+			const float Throttle = Parts.IsValidIndex(0) ? FCString::Atof(*Parts[0]) : 1.f;
+			const float Steering = Parts.IsValidIndex(1) ? FCString::Atof(*Parts[1]) : 0.f;
+			const float Seconds = Parts.IsValidIndex(2) ? FCString::Atof(*Parts[2]) : 5.f;
+			TSDrive(Throttle, Steering, Seconds);
+		}
+		break;
+	case 4:
+	case 5:
+	case 6:
+		UE_LOG(LogTankSim, Log, TEXT("TSAuto: --- during drive ---"));
+		TSTankStatus();
+		break;
+	default:
+		GetWorldTimerManager().ClearTimer(AutoAssignTimerHandle);
+		UE_LOG(LogTankSim, Log, TEXT("TSAuto: sequence complete."));
+		break;
+	}
+#endif
 }
 
 void ATSTankPlayerController::OnRep_PlayerState()

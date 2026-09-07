@@ -130,6 +130,49 @@ public:
 	UFUNCTION(Exec)
 	void TSLobbyFocus();
 
+	// --- Test console commands -------------------------------------------------------------------
+	// Drive the whole lobby+gameplay flow from the ~ console, so a listen-server test can be run
+	// headlessly (two -game processes) instead of needing someone to click the lobby UI. Without
+	// these, the tank only ever spawns on a host's mouse click and nothing about the networked crew
+	// path can be automated.
+	//
+	// These grant NO new authority: each one routes through the same Server RPC the UI uses, and the
+	// server re-validates exactly as before - a player can still only assign themselves, and
+	// TSStartMatch is still refused for anyone who is not the host. Bodies compile out of Shipping.
+
+	// TSTeam <A|B|C|D> (or 0-3). Requests a team for THIS player.
+	UFUNCTION(Exec)
+	void TSTeam(const FString& Team);
+
+	// TSRole <Driver|Gunner|Commander> (or 0-2). Requests a crew seat for THIS player.
+	UFUNCTION(Exec)
+	void TSRole(const FString& InRole);
+
+	// Returns this player to unassigned.
+	UFUNCTION(Exec)
+	void TSClear();
+
+	// Host only (re-checked server-side). Ends the assignment phase.
+	UFUNCTION(Exec)
+	void TSStartMatch();
+
+	// TSDrive <throttle> <steering> <seconds>. Holds the drive input for a duration, because a single
+	// call is cleared by Chaos on the next tick and proves nothing.
+	UFUNCTION(Exec)
+	void TSDrive(float Throttle, float Steering, float Seconds);
+
+	// Logs the assigned tank's gear / RPM / throttle / speed / location. Assert on GEAR and RPM, not
+	// speed: on a sloped map an unpowered tank rolls at ~100 cm/s (see CLAUDE.md).
+	UFUNCTION(Exec)
+	void TSTankStatus();
+
+	// URL options that apply the commands above once this controller is actually ready:
+	//   ...WarZone?listen?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1
+	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoDrive=1,0,8
+	// -ExecCmds cannot do this - it runs during engine init, long before a PlayerController or a
+	// PlayerState exists, so the exec silently routes nowhere. These fire on a short delay after
+	// BeginPlay instead, which is what makes an unattended listen-server test possible at all.
+
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerRequestRoleChange(ETSCrewRole NewRole);
 
@@ -227,6 +270,19 @@ private:
 	void HandleAssignmentChanged();
 
 	bool bLobbyConsoleFocused = false;
+
+	// TSDrive: repeating timer that re-sends the drive input every tick for the requested duration.
+	FTimerHandle TestDriveTimerHandle;
+	FTimerHandle TestDriveStopTimerHandle;
+	FVector2D TestDriveInput = FVector2D::ZeroVector;
+	void TickTestDrive();
+	void StopTestDrive();
+
+	// Applies the TSAuto* URL options. Staged, because each step depends on the previous one having
+	// round-tripped to the server and replicated back.
+	FTimerHandle AutoAssignTimerHandle;
+	int32 AutoAssignStage = 0;
+	void TickAutoAssign();
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> ActiveTeamSelectionWidget = nullptr;
