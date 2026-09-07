@@ -161,6 +161,10 @@ public:
 	UFUNCTION(Exec)
 	void TSDrive(float Throttle, float Steering, float Seconds);
 
+	// TSFire <cannon|mg> [count]. Gunner only - the server enforces the capability.
+	UFUNCTION(Exec)
+	void TSFire(const FString& Weapon);
+
 	// Logs the assigned tank's gear / RPM / throttle / speed / location. Assert on GEAR and RPM, not
 	// speed: on a sloped map an unpowered tank rolls at ~100 cm/s (see CLAUDE.md).
 	UFUNCTION(Exec)
@@ -169,6 +173,7 @@ public:
 	// URL options that apply the commands above once this controller is actually ready:
 	//   ...WarZone?listen?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1
 	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoDrive=1,0,8
+	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Gunner?TSAutoFire=cannon
 	// -ExecCmds cannot do this - it runs during engine init, long before a PlayerController or a
 	// PlayerState exists, so the exec silently routes nowhere. These fire on a short delay after
 	// BeginPlay instead, which is what makes an unattended listen-server test possible at all.

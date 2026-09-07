@@ -644,5 +644,93 @@ public:
 	virtual void BP_AimTurret_Implementation(FVector_NetQuantize AimPoint) override;
 	virtual void BP_FireMainCannon_Implementation() override;
 	virtual void BP_FireMachineGun_Implementation() override;
+
+	// --- Weapon hooks -----------------------------------------------------------------------------
+	// The tank's actual firing lives on BP_TankWeapon (StartShooting / StopShooting), and
+	// BP_TankWeapon_C is a Blueprint-generated type C++ cannot name (see CLAUDE.md, NOT PORTABLE).
+	// So the Blueprint implements these two as one node each, and C++ keeps the TIMING - which is
+	// the part that actually needs logic, because the framework's fire events are single shots while
+	// the weapon is a hold-to-fire pair.
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|Blueprint Integration")
+	void BP_WeaponStartShooting();
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|Blueprint Integration")
+	void BP_WeaponStopShooting();
+
+	// --- Crew seats that ride the turret ----------------------------------------------------------
+	// DriverSeat/GunnerSeat/CommanderSeat are authored as plain scene components on the tank, which
+	// puts them all on the HULL. That is right for the Driver and wrong for the other two: a Gunner
+	// and Commander sit in the turret basket and must traverse with the gun, or the turret swings
+	// around them while they stay facing the hull's forward.
+	//
+	// It cannot be fixed by parenting in the Blueprint through this project's tooling: the seats are
+	// SCS components and the turret bone lives on VehicleMesh, an inherited NATIVE component, which
+	// the reparent action cannot target. So the attach happens here instead, once, at BeginPlay.
+	//
+	// KeepWorldTransform is deliberate: designers keep placing seats in the viewport in hull space
+	// exactly as before, and this only changes what they RIDE, never where they start. That keeps
+	// RULE 8 intact - placement stays Blueprint data, C++ only does the plumbing.
+	void AttachTurretCrewSeats();
+
+	// Bone/socket on VehicleMesh that the turret crew ride. Per-tank because the vendor meshes do not
+	// have to agree on a bone name (VK1602 uses "turret").
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
+	FName TurretSocketName = TEXT("turret");
+
+	// Which seat components ride the turret. The Driver is deliberately absent - the driver's station
+	// is in the hull and must NOT rotate with the gun.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
+	TArray<FName> TurretMountedSeatComponents = { TEXT("GunnerSeat"), TEXT("CommanderSeat") };
+
+	// Make every non-root skeletal mesh (the crew interior) tick AFTER this pawn.
+	//
+	// TurretsAndGunsRotCalculation writes TurretsRot in the pawn's Event Tick. Without an explicit
+	// prerequisite the interior mesh can evaluate its AnimBP BEFORE that runs, so it draws last
+	// frame's turret angle while the exterior gun draws this frame's - which reads as the interior
+	// lagging behind the gun, and only the interior, because VehicleMesh is the root and does not
+	// have the problem.
+	//
+	// Deliberately skips the root VehicleMesh: that one carries the vehicle physics, and reordering
+	// its tick against the pawn is not worth the risk to fix a problem it does not have.
+	void SyncInteriorMeshTickToPawn();
+
+	// --- Interior turret bone ---------------------------------------------------------------------
+	// The crew compartment is a SEPARATE skeletal mesh from the hull, with its own skeleton, so the
+	// exterior ABP does not touch it. Its turret basket bone (b_Upper on the VK1602) has to be driven
+	// from the same turret rotation the outside uses, or a Gunner traverses the gun and the interior
+	// the crew are sitting in stays put.
+	//
+	// Read by ABP_<Tank>_Interior's Transform (Modify) Bone node. Yaw only: the basket spins, it does
+	// not elevate - gun elevation is a different bone on the exterior mesh.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Turret")
+	FRotator GetInteriorTurretRotation() const;
+
+	// Which component of TurretsRot[0] feeds the interior bone, and how it maps onto that bone's local
+	// axes. EditDefaultsOnly because the answer is per-mesh: whoever rigged the interior chose the
+	// bone orientation, and it will not always match the hull's.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Turret")
+	bool bInvertInteriorTurretYaw = false;
+
+	// Extra yaw applied after the invert, for a basket whose bind pose is not facing forward.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Turret")
+	float InteriorTurretYawOffset = 0.f;
+
+	// One trigger pull: how long StartShooting stays held for a main-cannon shot.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Weapons", meta = (ClampMin = "0.01"))
+	float MainCannonTriggerHoldSeconds = 0.15f;
+
+	// Hold-to-fire release delay for the machine gun. ServerFireMachineGun arrives once per frame
+	// while the key is held, so the gun keeps firing until requests stop arriving for this long.
+	// Must comfortably exceed one frame, or the gun stutters on a hitch or a dropped packet
+	// (ServerFireMachineGun is Unreliable).
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Weapons", meta = (ClampMin = "0.05"))
+	float MachineGunReleaseDelaySeconds = 0.25f;
+
+private:
+	FTimerHandle WeaponStopTimerHandle;
+	bool bWeaponFiring = false;
+	void ReleaseWeaponTrigger();
+
+public:
 	virtual void BP_UpdateCommanderIntel_Implementation(const FTSCommanderIntel& Intel) override;
 };

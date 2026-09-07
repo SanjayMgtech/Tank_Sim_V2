@@ -253,6 +253,23 @@ void ATSTankPlayerController::StopTestDrive()
 #endif
 }
 
+void ATSTankPlayerController::TSFire(const FString& Weapon)
+{
+#if !UE_BUILD_SHIPPING
+	const FString W = Weapon.TrimStartAndEnd().ToUpper();
+	if (W.StartsWith(TEXT("M")))
+	{
+		UE_LOG(LogTankSim, Log, TEXT("TSFire: machine gun"));
+		ServerFireMachineGun();
+	}
+	else
+	{
+		UE_LOG(LogTankSim, Log, TEXT("TSFire: main cannon"));
+		ServerFireMainCannon();
+	}
+#endif
+}
+
 void ATSTankPlayerController::TSTankStatus()
 {
 #if !UE_BUILD_SHIPPING
@@ -447,9 +464,16 @@ void ATSTankPlayerController::TickAutoAssign()
 	case 4:
 	case 5:
 	case 6:
-		UE_LOG(LogTankSim, Log, TEXT("TSAuto: --- during drive ---"));
+	{
+		const FString AutoFire = FString(World->URL.GetOption(TEXT("TSAutoFire="), TEXT("")));
+		if (!AutoFire.IsEmpty())
+		{
+			TSFire(AutoFire);
+		}
+		UE_LOG(LogTankSim, Log, TEXT("TSAuto: --- during drive/fire ---"));
 		TSTankStatus();
 		break;
+	}
 	default:
 		GetWorldTimerManager().ClearTimer(AutoAssignTimerHandle);
 		UE_LOG(LogTankSim, Log, TEXT("TSAuto: sequence complete."));
