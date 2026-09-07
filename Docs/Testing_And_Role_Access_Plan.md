@@ -72,7 +72,33 @@ the whole matrix is a table-driven test with zero setup:
 3. **Host gating** — a PlayerState with `bIsHost` is refused a team and a seat.
 4. **Privilege escalation** — a non-host `ServerHostAssignPlayerToRole` changes nothing.
 
-These four cover the logic that today has no protection at all.
+**Status: 1 and 2 are written and green** (`Source/Tank_Sim_V2/Tests/TSPermissionTests.cpp`).
+3 and 4 moved to Tier 2: both go through `ATSGameMode`, which wants a GameState and a
+PlayerController, and standing that up in a bare transient world is more scaffolding than the
+test is worth. They are better as functional tests in a map.
+
+### Running them
+
+```bash
+UnrealEditor-Cmd.exe <project> -ExecCmds="Automation RunTests TankSim" -unattended -nop4 -nosplash -NullRHI -testexit="Automation Test Queue Empty"
+```
+
+No editor, no PIE, no probe scripts. Both tests complete in ~50 ms.
+
+### ⚠ The command's exit code is 0 even when a test FAILS
+
+Verified by deliberately breaking a matrix cell: the run reported
+`Result={Fail} ... Expected 'Gunner / Drive' to be 0, but it was 2` and still exited 0. **CI must
+parse the log for `Result={Fail}`, not trust the return code**, or a red build will look green.
+
+### These tests were checked against a real break, not just observed to pass
+
+A test that has never failed proves nothing about whether it can. One matrix cell was
+deliberately changed to let the Gunner drive; the Matrix test failed and named the exact cell
+and source line, while CrewOccupancy correctly still passed. The sabotage was then reverted and
+both went green again. Do this for any test whose failure mode matters - this session already
+produced one check that passed for the wrong reason (the struct-aliasing false failure).
+
 
 ---
 
