@@ -961,7 +961,7 @@ VR pawn input → ATSTankPlayerController::Server<Action>          (the PC owns 
 **Every Server RPC lives on the PlayerController**, never on the tank, because a Server RPC is
 silently dropped unless the calling client owns the actor.
 
-### 8. ⚠ UNRESOLVED CONTRADICTION — does a crew member POSSESS the tank?
+### 8. ⚠ A DORMANT possession path (originally mis-recorded here as a live contradiction)
 
 Two parallel workstreams disagree, and the code currently contains both answers.
 
@@ -984,9 +984,24 @@ Both cannot be right. Under the possession path only one crew member gets the ta
 two have no pawn relationship to it; under the three-crew path `HandlePlayerReadyToSpawn` should
 seat the player rather than possess.
 
-**Do not "fix" either side without deciding which model the project is following.** Note the
-predicates were written additively (`HasAuthority() || IsLocallyControlled() || IsLocalGunnerOfThisTank()`),
-so the turret works under either model today — which is why this has not surfaced as a visible bug.
+**CORRECTION after tracing further: the possession path is currently UNREACHABLE, so the two
+models are not actually fighting.** `HandlePlayerReadyToSpawn` returns immediately when the
+controller already has a pawn:
+```cpp
+if (!PlayerController || PlayerController->GetPawn()) { return; }
+```
+`AGameModeBase::PostLogin` has already restarted the player into `DefaultPawnClass`
+(`BP_TSVRPawn`), so a PlayerController always has a pawn by then and the `Possess(Tank)` line
+never runs. `ReadyToSpawn` is BlueprintCallable and nothing calls it yet either.
+
+Measured confirmation: the tank reports `controller=None, locallyControlled=False` at runtime,
+host players get `TSHostCameraPawn` and everyone else `BP_TSVRPawn`.
+
+So **the VR-pawn model is the one executing**, and the three-crew work built on it is consistent
+with reality. The possession code is a leftover that would only fire for a pawnless controller.
+Decide deliberately whether to delete it or wire `ReadyToSpawn` into the lobby flow — but it is
+dormant, not a live conflict. The turret predicates are additive
+(`HasAuthority() || IsLocallyControlled() || IsLocalGunnerOfThisTank()`) and hold either way.
 
 ### 9. Known holes at the time of tracing
 - `MainMenu.umap` and `WarZone.umap` are **untracked** — `.gitignore` line 86 excludes
