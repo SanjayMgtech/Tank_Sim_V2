@@ -1460,6 +1460,60 @@ opposing lines (A/C face +X at -2600, B/D face back at +1400). Without them
 **`Content/TankSimulation/Maps` is git-ignored, so WarZone.umap is local-only** — these actors are
 not in the repo and will not reach another clone.
 
+### ⚠ Never toggle stereo during possession — it crashes in SetupPlayerInputComponent
+First run in a real headset crashed with this stack and nothing in the log:
+```
+ATSVRPawn::SetupPlayerInputComponent   TSVRPawn.cpp:360
+ATSGameMode::PostLogin                 TSGameMode.cpp:207   <- Super::PostLogin
+ATSTeamMatchGameMode::PostLogin        TSTeamMatchGameMode.cpp:28
+```
+The reported line is a red herring — it is a null-guarded `BindAction`. The real cause is the
+frame below it. `ApplyVRMode` ran from `PossessedBy`, which is inside
+`AGameModeBase::RestartPlayer` inside `PostLogin`: **possession is still in progress and
+`SetupPlayerInputComponent` has not run yet.** `EnableHMD(true)` rebuilds the viewport and its
+render target, so flipping stereo there pulls the ground out from under the input setup that runs
+immediately afterwards.
+
+**Anything that rebuilds the viewport must be deferred out of the possession/restart call stack.**
+`ApplyVRMode` now does `SetTimerForNextTick(... ApplyVRModeDeferred)`. The role mapping context is
+still applied synchronously — that is plain Enhanced Input bookkeeping and is safe there.
+
+Make the toggle idempotent too. Under **Play > VR Preview stereo is ALREADY on**, so an
+unconditional `EnableHMD(true)` re-initialised the stereo device on every possession for no reason.
+`SetVRModeEnabled` now early-outs when `IsVRModeActive() == bEnable`, which removes the churn
+entirely in the normal case.
+
+### ⚠ OpenXR never sees your Enhanced Input bindings unless they are in the PROJECT settings
+The log said it outright, and it is easy to scroll past:
+```
+LogHMD: Warning: No mapping context provided in the OpenXR Input project settings, action
+bindings will not be visible to the OpenXR runtime.
+```
+`OpenXRInput.cpp` builds its action set **at session start** from
+`UEnhancedInputDeveloperSettings::DefaultMappingContexts` (Project Settings > Engine > Enhanced
+Input). Empty list means it calls `BuildLegacyActions` instead and **no motion-controller binding
+reaches the runtime, however correct the IMC assets are.** Adding a context at runtime from the
+pawn is too late and does not count.
+
+Registered in `Config/DefaultInput.ini`:
+```ini
+[/Script/EnhancedInput.EnhancedInputDeveloperSettings]
+bEnableDefaultMappingContexts=True
++DefaultMappingContexts=(InputMappingContext="/Game/.../IMC_Driver.IMC_Driver",Priority=0,bAddImmediately=False,...)
+```
+**`bAddImmediately=False` is load-bearing.** It exposes the context to OpenXR without Enhanced Input
+auto-applying it to every local player — applying them all would hand the Driver the Gunner's
+bindings and destroy the role gating. `ATSVRPawn` still decides who gets which context.
+
+(Also note the header's own caveat: these contexts must live in the game's root Content directory,
+not a plugin.)
+
+### Recentre needs a live head pose
+`Could not retrieve a valid head pose for recentering` on every run: the auto-recentre fired before
+the XR session produced a pose, so it silently did nothing. Guarded on
+`UTSVRModeLibrary::IsHeadTrackingActive()` now; if tracking is not up yet the player still has the
+Recenter button.
+
 ### Still owed a human test
 Nothing here has run in an actual headset. The pawn changes add `UPROPERTY`s, so Live Coding cannot
 carry them: close the editor and rebuild the **editor** target first.
