@@ -14,7 +14,6 @@
 #include "Player/TSVRPawn.h"
 #include "Tank/TSTankCrewComponent.h"
 #include "UI/TSUISubsystem.h"
-#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -51,11 +50,16 @@ ATSGameMode::ATSGameMode()
 	// blank one; set Project Settings > Maps & Modes > Transition Map if you want a loading screen.
 	bUseSeamlessTravel = true;
 
-	static ConstructorHelpers::FClassFinder<APawn> T90ChaosBP(TEXT("/Game/YI_TankCollection/Blueprint/Tank_T90/Controller/BP_T90_Controller_Chaos"));
-	if (T90ChaosBP.Succeeded())
-	{
-		DefaultTankClass = T90ChaosBP.Class;
-	}
+	// DefaultTankClass is deliberately left null here. It used to be filled by
+	// ConstructorHelpers::FClassFinder on BP_T90_Controller_Chaos, which is the exact construct
+	// CLAUDE.md RULE 2 forbids: an FClassFinder on a BLUEPRINT class in a constructor is a known boot
+	// deadlock ("Compiling Blueprints" hang) and crashes packaged builds. It also hard-wired one tank
+	// into C++, so a GameMode Blueprint that had never set the field looked configured when it was
+	// not - and silently spawned a T90 for a match meant to use something else.
+	//
+	// Which tank a team drives is data. It belongs on the GameMode Blueprint's Class Defaults
+	// (Default Tank Class, or Team Tank Classes for a per-team override), where a designer can change
+	// it without a rebuild. GetTankClassForTeam logs an error if nothing is set.
 }
 
 void ATSGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
@@ -436,7 +440,7 @@ bool ATSGameMode::TryAssignTeam(APlayerController* Player, ETSTeamId Team)
 	PS->SetCrewRole(ETSCrewRole::None);
 	PS->SetAssignedTank(nullptr);
 
-	// Immediately spawn/assign the BP_T90_Controller_Chaos tank for this team
+	// Immediately spawn/assign this team's tank (GetTankClassForTeam picks the class)
 	GetOrSpawnTankForTeam(Team);
 
 	return true;

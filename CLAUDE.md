@@ -69,7 +69,7 @@ That costs a human round-trip on every single rebuild.
 
 Full rebuild with the editor closed:
 ```bash
-"C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" Tank_Sim_V2Editor Win64 Development -Project="C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" -WaitMutex -FromMsBuild
+"C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" Tank_Sim_V2Editor Win64 Development -Project="C:\Users\Admin\Documents\GitHub\Tank_Sim_V2\Tank_Sim_V2.uproject" -WaitMutex -FromMsBuild
 ```
 If Live Coding was used, delete stale patches before relaunching, or the editor may hang/crash:
 ```bash
@@ -163,6 +163,7 @@ stage commits with an explicit pathspec, never `git add -A`.
 | Run PIE as **Listen Server with 2 players** | `run_pie_smoke` / `get_game_world` reach only one PIE world, so server-vs-client values cannot be compared. This is the only way to test replication (the open Phase 9 gap). |
 | Drive real gameplay events | e.g. `DamageCausedUI` is only written by a macro reached through an actual damage-caused event; macros are inlined and cannot be invoked directly. |
 | Anything that is a Blueprint **editor-UI** operation with no MCP action | Reordering pins, graph-level refactors. NOTE: editing a macro's internals was previously listed here and is WRONG - `add_node`/`connect_pins` work on a macro graph (proven on `UpdateDamageCausedUI`). Test before declaring something human-only. |
+| Override an **inherited** component's property on a CHILD Blueprint | `set_component_property` only sees a Blueprint's own SCS ("Component not found: DriverSeat" on the child). The override lives in the Inheritable Component Handler, which neither the MCP surface nor Python can create. `SubobjectDataSubsystem` can *read* it (`k2_gather_subobject_data_for_blueprint`). Select the component in the child's Components panel and type the value; verify with `get_inherited_component_override`. |
 
 ### Open hand-offs (keep current)
 - ~~Replication test~~ **DONE 2026-09-04.** A/B listen-server test showed identical behaviour  before and after the port. Phase 9 verified; the remaining turret faults are pre-existing  feature gaps, documented separately.
@@ -1241,6 +1242,110 @@ Blueprint in the first place.
 
 Current C++ surface: `Source/Tank_Sim_V2/Tank/TSTankControllerBase.{h,cpp}` — empty constructor
 by design, plus the 4 Phase 4 chassis distance properties.
+
+---
+
+## ✅ VR crew wiring — team tank, role inputs, crew seats (2026-09-07)
+
+Feature work, not port repair: it changes gameplay behaviour and needs a two-window listen-server
+test, so it gets its own commits and its own test, exactly like the multiplayer turret fixes above.
+
+The ask was "spawn the VK1602 per team, driver drives with WSAD, gunner aims with the mouse, each
+role sits in its own seat". Almost all of the machinery already existed. Three things were broken,
+and all three were invisible.
+
+### ⚠ UE 5.7 moved Input Mapping Context keys — `Mappings` is DEAD
+This is the big one, and it silently voids every IMC authored by a script written before 5.7.
+
+```cpp
+UE_DEPRECATED(5.7, "Use the DefaultKeyMappings struct instead.")
+TArray<FEnhancedActionKeyMapping> Mappings;              // ignored at runtime
+FInputMappingContextMappingData   DefaultKeyMappings;    // the ONLY one read
+```
+`UInputMappingContext::ForEachKeyMapping` iterates `DefaultKeyMappings.Mappings` and
+`MappingProfileOverrides` — never `Mappings`. `PostLoad` migrates the old array **once**, guarded on
+`GetLinkerCustomVersion(...) < EnhancedInputMappingContextProfileMappingsUpdate`, so an asset that
+has already been re-saved under 5.7 keeps a fully populated `Mappings` array that does nothing at
+all.
+
+Found state: `IMC_Shared` had six mappings in the dead array and an EMPTY `DefaultKeyMappings`;
+`IMC_Gunner` had lost fire/MG/reload the same way; `IMC_Driver`'s WSAD had survived into the live
+array but with **no modifiers**, so all four keys wrote +X and forward/back/left/right were one
+input. Nothing logs a warning for any of this — the keys simply do nothing.
+
+**Reading an IMC through `get_editor_property('mappings')` tells you nothing.** Use
+`project_query export_asset_text` and read which array the keys are actually in.
+
+**Axis modifiers are mandatory for WSAD on an Axis2D action.** `IA_Drive` is Axis2D and
+`Input_Drive` reads Throttle from `Y`, Steering from `X`, but a 1D key only ever writes X:
+```
+W  Swizzle YXZ            S  Negate + Swizzle YXZ            A  Negate            D  (none)
+```
+
+**A modifier must be outered to the IMC asset.** `unreal.InputModifierNegate()` from Python lands in
+`/Engine/Transient`; the reference saves, but the instanced subobject does not, and the modifier
+comes back **null** on the next load — the axis remap is silently lost. Build them with
+`unreal.new_object(cls, outer=imc, name=...)` and prove it by reloading the package
+(`EditorLoadingAndSavingUtils.reload_packages`) and re-reading.
+
+### The role mapping context never reached a client
+`ATSVRPawn` applied the role IMC and subscribed to `OnAssignmentChanged` from `PossessedBy`, which
+runs on the **server only**. Every remote crew member therefore had no input context and no seat,
+and it looked fine in standalone PIE because there the server is the only machine.
+
+`APawn::NotifyControllerChanged()` is the correct hook — `Pawn.cpp` calls it from `PossessedBy`,
+`OnRep_Controller` **and** `UnPossessed`. `OnRep_PlayerState` has to lead there too: on a client the
+controller and the PlayerState arrive in either order and the role is only readable once both are
+in. Unbind the previous PlayerState first, or a possession change leaves a stale subscription
+driving this pawn's seat for a player it no longer represents.
+
+### The gunner's mouse moved nothing
+`Input_AimTurret` traced along the camera's forward vector, but on a desktop nothing ever rotated
+that camera, so the ray fired straight out of the hull for ever. The action value is a look delta,
+not an aim point; it now turns a seat-relative view rotation that the same trace reads. **Relative,
+not world, and not the controller's rotation** — the seat rides the hull, so the view must turn with
+the tank. Skipped while `GEngine->XRSystem->IsHeadTrackingAllowed()`, where the head is already the
+aim and a written relative rotation would fight the tracked pose.
+
+### RULE 2 was being violated in shipped code
+`ATSGameMode`'s constructor filled `DefaultTankClass` with `ConstructorHelpers::FClassFinder` on
+`BP_T90_Controller_Chaos` — the exact construct RULE 2 forbids (boot deadlock, packaged-build
+crash). It also meant a GameMode Blueprint that had never set the field *looked* configured and
+quietly spawned a T90. Removed; the class is Blueprint data now, and `GetTankClassForTeam` logs an
+error when nothing is set. **Consequence:** a GameMode Blueprint relying on that inherited default
+now has none. `/Game/TankSimulation/Core/BP_TSGameMode` is such an asset (a stale duplicate,
+referenced by no map) — it will log the error if anything ever uses it.
+
+### Seat placement — take the values a human already authored
+`DriverSeat`/`GunnerSeat`/`CommanderSeat` on the master BP were untuned placeholders. The demo level
+`Controller_Demo_VK1602Leopard` already held better ones as **per-instance overrides** on its placed
+tank, measured against the Leopard interior; those are now the Blueprint defaults, so a
+runtime-spawned tank seats its crew where someone had already decided they belong:
+```
+DriverSeat (88,-41,106)   GunnerSeat (20,29,147)   CommanderSeat (-30,23,144)
+interior mesh bounds  X[-81..182]  Y[-93..93]  Z[50..216]   (all three inside)
+```
+Two traps worth keeping:
+- **Measure the interior, not the hull.** `SK_VK1602Leopard` is 571x303x325; the crew compartment is
+  the separate `Tank_SkeletalMesh` component (`WW2_VK1602Leopard_Interior`), 264x187x166. Seats
+  placed against the hull bounds land inside armour.
+- **The demo level's tank is named `BP_PZV_Controller_Chaos_C_2` but its class is
+  `BP_VK1602Leopard_Controller_Chaos_C`.** The Blueprint was made from a Panther and the placed
+  actor kept the old object name. Do not read an actor's name as its class.
+
+### Runtime proof
+```
+BP_SetDriveInput(1.0, 0.0) on the spawned VK1602 -> speed 500.6 and 407.5 cm/s   (throttle path)
+DefaultTankClass = BP_VK1602Leopard_Controller_Chaos_C   after a package RELOAD, not just in-session
+seats resolve on the VK child: Driver (88,-41,106)  Gunner (20,29,147)  Commander (-30,23,144)
+spawned tank carries TankCrew, TankControl, TankWeaponSystem, TankCommander
+PIE clean: 0 Accessed None, 0 index warnings, 0 "has no scene component named"
+```
+
+**Still owed a human test** (see the human-only table): two-window listen server on `WarZone` with
+one Driver and one Gunner, after closing the editor and rebuilding the **editor** target — the pawn
+changes add `UPROPERTY`s, so Live Coding cannot carry them.
+
 
 ---
 

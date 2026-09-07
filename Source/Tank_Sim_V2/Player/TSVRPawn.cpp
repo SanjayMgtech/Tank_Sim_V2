@@ -40,20 +40,54 @@ ATSTankPlayerController* ATSVRPawn::GetTankController() const
 	return Cast<ATSTankPlayerController>(GetController());
 }
 
-void ATSVRPawn::PossessedBy(AController* NewController)
+void ATSVRPawn::NotifyControllerChanged()
 {
-	Super::PossessedBy(NewController);
+	Super::NotifyControllerChanged();
+	RefreshCrewBinding();
+}
 
-	if (ATSTankPlayerState* PS = NewController ? NewController->GetPlayerState<ATSTankPlayerState>() : nullptr)
+void ATSVRPawn::OnRep_PlayerState()
+{
+	Super::OnRep_PlayerState();
+
+	// On a client the controller and the PlayerState arrive in either order. Whichever lands second
+	// is the one that makes the role readable, so both have to lead here.
+	RefreshCrewBinding();
+}
+
+void ATSVRPawn::RefreshCrewBinding()
+{
+	ATSTankPlayerState* PS = GetController() ? GetController()->GetPlayerState<ATSTankPlayerState>() : nullptr;
+
+	// Drop a stale subscription first - on possession changes and seamless travel the pawn can be
+	// handed a different PlayerState, and leaving the old binding in place would keep firing this
+	// pawn's seat/context update for a player it no longer represents.
+	if (ATSTankPlayerState* Previous = BoundPlayerState.Get())
 	{
-		ApplyRoleMappingContext(PS->GetCrewRole());
-		PS->OnAssignmentChanged.AddDynamic(this, &ATSVRPawn::ApplyRoleMappingContext_FromPlayerState);
-
-		// Cover the case where the crew assignment already existed before we were possessed
-		// (late join, or a respawn into an in-progress match) - the delegate only fires on
-		// CHANGES, so without this the player would be seated nowhere.
-		UpdateCrewStationAttachment();
+		if (Previous != PS)
+		{
+			Previous->OnAssignmentChanged.RemoveDynamic(this, &ATSVRPawn::ApplyRoleMappingContext_FromPlayerState);
+			BoundPlayerState = nullptr;
+		}
 	}
+
+	if (!PS)
+	{
+		// Unpossessed: leave the seat rather than continue riding a tank we no longer crew.
+		UpdateCrewStationAttachment();
+		return;
+	}
+
+	// AddDynamic is AddUnique for dynamic delegates, so re-entry here cannot double-subscribe.
+	PS->OnAssignmentChanged.AddDynamic(this, &ATSVRPawn::ApplyRoleMappingContext_FromPlayerState);
+	BoundPlayerState = PS;
+
+	ApplyRoleMappingContext(PS->GetCrewRole());
+
+	// Cover the case where the crew assignment already existed before we got here (late join, or a
+	// respawn into an in-progress match) - the delegate only fires on CHANGES, so without this the
+	// player would be seated nowhere.
+	UpdateCrewStationAttachment();
 }
 
 void ATSVRPawn::ApplyRoleMappingContext_FromPlayerState()
@@ -275,16 +309,29 @@ void ATSVRPawn::Input_AimTurret(const FInputActionValue& Value)
 	// The Gunner aims by looking: trace along the HMD/camera forward vector and send the world
 	// POINT that ray lands on.
 	//
-	// This deliberately ignores the FInputActionValue. It used to send FVector(Axis.X, Axis.Y, 0) -
-	// a 2D stick axis packed into a vector - which could never work: the tank's turret consumes a
-	// world-space point, so a stick reading of (0.4, 0.1) asked the gun to aim at a spot half a
-	// centimetre from the world origin. The action is still bound so the aim updates while the
-	// Gunner holds it, but the value itself carries no aim information in VR.
+	// The action value is a LOOK DELTA, never an aim point. It used to be sent as
+	// FVector(Axis.X, Axis.Y, 0) - a 2D stick axis packed into a vector - which could never work:
+	// the tank's turret consumes a world-space point, so a stick reading of (0.4, 0.1) asked the gun
+	// to aim at a spot half a centimetre from the world origin.
 	ATSTankPlayerController* PC = GetTankController();
 	const UWorld* World = GetWorld();
 	if (!PC || !World || !Camera)
 	{
 		return;
+	}
+
+	// Desktop: turn the seated view by the mouse delta, then trace down the new forward vector.
+	// Skipped when an HMD is driving the camera - there the head IS the aim, and writing a relative
+	// rotation would fight the tracked pose.
+	const bool bHeadTracked = GEngine && GEngine->XRSystem.IsValid() && GEngine->XRSystem->IsHeadTrackingAllowed();
+	const FVector2D LookDelta = Value.Get<FVector2D>();
+	if (!bHeadTracked && !LookDelta.IsNearlyZero())
+	{
+		SeatViewYaw = FRotator::NormalizeAxis(SeatViewYaw + LookDelta.X * MouseAimSensitivity);
+		SeatViewPitch = FMath::Clamp(SeatViewPitch + LookDelta.Y * MouseAimSensitivity, MinAimPitch, MaxAimPitch);
+
+		// Relative, not world: the seat rides the hull, so the view has to turn with the tank.
+		Camera->SetRelativeRotation(FRotator(SeatViewPitch, SeatViewYaw, 0.f));
 	}
 
 	const FVector Start = Camera->GetComponentLocation();

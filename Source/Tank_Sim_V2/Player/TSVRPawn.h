@@ -23,7 +23,13 @@ class ATSVRPawn : public APawn
 public:
 	ATSVRPawn();
 
-	virtual void PossessedBy(AController* NewController) override;
+	// Both of these end up in RefreshCrewBinding. PossessedBy is deliberately NOT used: it runs on
+	// the server only, so binding there left every CLIENT with no role mapping context and no seat.
+	// NotifyControllerChanged fires from PossessedBy, OnRep_Controller and UnPossessed, i.e. on both
+	// sides; OnRep_PlayerState covers the client ordering where the controller arrives first and the
+	// PlayerState (which carries the role) replicates a moment later.
+	virtual void NotifyControllerChanged() override;
+	virtual void OnRep_PlayerState() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
 	// Called by ATSTankPlayerController (directly, or via PlayerState's OnAssignmentChanged) whenever
@@ -36,6 +42,23 @@ public:
 	// direction is what matters and the gun elevation difference is negligible.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR")
 	float AimTraceDistance = 100000.f;
+
+	// --- Gunner mouse aim (desktop) -------------------------------------------------------------
+	// In VR the Gunner aims by looking and the HMD drives the camera. On a desktop nothing moves the
+	// camera at all, so the aim trace fired straight out of the hull for ever and the mouse appeared
+	// to do nothing. These turn IA_AimTurret's 2D value into a seat-relative view rotation, which the
+	// same trace then reads - one action, one code path, both devices.
+	//
+	// Degrees of view rotation per unit of mouse delta.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.01"))
+	float MouseAimSensitivity = 1.f;
+
+	// Pitch clamp for the seated view, in degrees. Negative looks down.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "-89.0", ClampMax = "0.0"))
+	float MinAimPitch = -35.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0", ClampMax = "89.0"))
+	float MaxAimPitch = 25.f;
 
 	UFUNCTION()
 	void ApplyRoleMappingContext_FromPlayerState();
@@ -171,4 +194,18 @@ private:
 	void Input_RequestIntel(const FInputActionValue& Value);
 
 	class ATSTankPlayerController* GetTankController() const;
+
+	// Re-applies the role mapping context, re-subscribes to the PlayerState's assignment delegate and
+	// re-seats this pawn. Safe to call repeatedly - it unbinds the previous PlayerState first.
+	void RefreshCrewBinding();
+
+	// The PlayerState we currently hold an OnAssignmentChanged binding on. Weak so a PlayerState
+	// destroyed on travel or disconnect cannot be dereferenced while unbinding.
+	TWeakObjectPtr<class ATSTankPlayerState> BoundPlayerState;
+
+	// Accumulated seat-relative view rotation driven by the mouse. Not the pawn's rotation: the pawn
+	// is attached to a seat component on a moving hull, so the view has to turn WITH the tank, which
+	// a controller/actor rotation would not.
+	float SeatViewYaw = 0.f;
+	float SeatViewPitch = 0.f;
 };
