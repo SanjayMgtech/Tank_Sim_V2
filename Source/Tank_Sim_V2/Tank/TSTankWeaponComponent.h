@@ -20,13 +20,13 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	// Server only. All four Try* functions re-validate Gunner occupancy and return false if denied.
-	bool TryAimTurret(ATSTankPlayerState* Requester, FVector_NetQuantize AimDirection);
+	bool TryAimTurret(ATSTankPlayerState* Requester, FVector_NetQuantize AimPoint);
 	bool TryFireMainCannon(ATSTankPlayerState* Requester);
 	bool TryFireMachineGun(ATSTankPlayerState* Requester);
 	bool TryReload(ATSTankPlayerState* Requester);
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Weapon")
-	FVector_NetQuantize GetCurrentAimDirection() const { return CurrentAimDirection; }
+	FVector_NetQuantize GetCurrentAimPoint() const { return CurrentAimPoint; }
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Weapon")
 	int32 GetMainCannonAmmo() const { return AmmoMainCannon; }
@@ -38,8 +38,11 @@ public:
 	bool IsReloading() const { return bReloading; }
 
 protected:
-	UPROPERTY(ReplicatedUsing = OnRep_AimDirection, BlueprintReadOnly, Category = "Tank Simulation|Weapon")
-	FVector_NetQuantize CurrentAimDirection = FVector_NetQuantize(1.f, 0.f, 0.f);
+	// World-space aim point. Defaults to zero rather than the old (1,0,0): as a POINT that former
+	// default meant "aim one centimetre from the world origin", which is not a meaningful default
+	// either way, but zero at least reads as "unset" instead of looking like a deliberate heading.
+	UPROPERTY(ReplicatedUsing = OnRep_AimPoint, BlueprintReadOnly, Category = "Tank Simulation|Weapon")
+	FVector_NetQuantize CurrentAimPoint = FVector_NetQuantize(0.f, 0.f, 0.f);
 
 	UPROPERTY(EditDefaultsOnly, Replicated, BlueprintReadOnly, Category = "Tank Simulation|Weapon")
 	int32 AmmoMainCannon = 20;
@@ -69,7 +72,7 @@ protected:
 	// Pushes BP_AimTurret from replicated state - fires automatically on remote clients via OnRep;
 	// called directly by TryAimTurret too, since OnRep never runs on the authoritative server itself.
 	UFUNCTION()
-	void OnRep_AimDirection();
+	void OnRep_AimPoint();
 
 	// NetMulticast: fire is a discrete one-shot cosmetic event (muzzle flash/sound), not continuous
 	// state, so it needs an explicit broadcast rather than an OnRep - matches the doc's Section 10

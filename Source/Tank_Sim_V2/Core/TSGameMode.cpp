@@ -12,7 +12,6 @@
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Player/TSVRPawn.h"
-#include "Tank/TSTank.h"
 #include "Tank/TSTankCrewComponent.h"
 #include "UI/TSUISubsystem.h"
 #include "UObject/ConstructorHelpers.h"
@@ -504,10 +503,10 @@ void ATSGameMode::ClearAssignment(APlayerController* Player)
 	PS->SetTeamId(ETSTeamId::None);
 }
 
-ATSTank* ATSGameMode::GetTankForTeam(ETSTeamId Team) const
+APawn* ATSGameMode::GetTankForTeam(ETSTeamId Team) const
 {
 	const ATSGameState* GS = GetGameState<ATSGameState>();
-	return GS ? Cast<ATSTank>(GS->FindTankForTeam(Team)) : nullptr;
+	return GS ? GS->FindTankForTeam(Team) : nullptr;
 }
 
 bool ATSGameMode::AreAllActiveTeamsFullyCrewed() const

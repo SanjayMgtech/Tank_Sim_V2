@@ -12,7 +12,7 @@ public class Tank_Sim_V2 : ModuleRules
 		// relative to the module root, matching the Section 14 folder layout.
 		PublicIncludePaths.Add(ModuleDirectory);
 
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput" });
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "ChaosVehicles", "PhysicsCore" });
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{

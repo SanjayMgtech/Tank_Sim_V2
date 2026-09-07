@@ -1,6 +1,6 @@
 // Driver/Gunner/Commander occupancy and access checks (Section 4). Also owns the tank's TeamId
 // (Section 5), since this is the one component guaranteed present on every tank regardless of
-// whether it integrates via ATSTank (Path A) or the interface alone (Path B).
+// which is the one component guaranteed present on every tank.
 #pragma once
 
 #include "CoreMinimal.h"

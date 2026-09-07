@@ -1,5 +1,13 @@
 # Tank Simulation Framework — Setup Guide
 
+> **⚠ OUTDATED IN ONE RESPECT — `ATSTank` and "Path A" no longer exist.**
+> `ATSTank` was deleted as dead code. Our tank must keep `AWheeledVehiclePawn` as its native
+> parent for Chaos vehicle movement, so it can never derive from a common tank base — Path A was
+> unusable on this project and no Content asset ever referenced it. **Path B (implement
+> `ITSTankInterface` directly) is now the only integration path**, and everything this document
+> says about Path B is still correct. `ATSGameMode::GetTankForTeam` now returns `APawn*`.
+> See [VR_Crew_Delivery_Plan.md](VR_Crew_Delivery_Plan.md).
+
 This document covers the C++ framework implemented under `Source/Tank_Sim_V2/` from
 [Tank_Simulation_Framework_Documentation.md](Tank_Simulation_Framework_Documentation.md). It explains
 what was built, what still needs doing in the Editor (Blueprints, input assets, data assets — things

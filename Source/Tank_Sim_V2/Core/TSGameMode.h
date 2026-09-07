@@ -10,7 +10,6 @@
 
 class ATSTankPlayerController;
 class ATSTankPlayerState;
-class ATSTank;
 
 UCLASS()
 class ATSGameMode : public AGameModeBase
@@ -90,16 +89,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation")
 	void ClearAssignment(APlayerController* Player);
 
-	// Convenience typed accessor matching the Developer 1 "Suggested API" exactly. Returns null for a
-	// team whose tank was integrated via Path B (implements ITSTankInterface without deriving from
-	// ATSTank) - use ATSGameState::FindTankForTeam for the untyped, always-correct accessor instead
-	// (it's also the one that's actually reachable from clients, since this GameMode instance is not).
+	// Accessor matching the Developer 1 "Suggested API" name. Returns APawn*, not the ATSTank* the
+	// DevDoc suggests: ATSTank has been deleted. Our tank must derive from AWheeledVehiclePawn for
+	// Chaos vehicle movement, so it integrates by implementing ITSTankInterface directly (Path B).
+	// A typed ATSTank* accessor would have returned null on EVERY team in this project.
+	//
+	// Prefer ATSGameState::FindTankForTeam on the client: this GameMode instance is server-only.
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
-	ATSTank* GetTankForTeam(ETSTeamId Team) const;
+	APawn* GetTankForTeam(ETSTeamId Team) const;
 
 protected:
-	// Tank Blueprint to spawn per team. Must implement ITSTankInterface - either by deriving from
-	// ATSTank (Path A) or implementing the interface directly (Path B). See the setup guide.
+	// Tank Blueprint to spawn per team. Must implement ITSTankInterface directly - the MustImplement
+	// metadata below enforces it in the class picker.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation", meta = (MustImplement = "/Script/Tank_Sim_V2.TSTankInterface"))
 	TSubclassOf<APawn> DefaultTankClass;
 

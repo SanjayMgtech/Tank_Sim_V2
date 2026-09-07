@@ -26,7 +26,7 @@ public:
 
 protected:
 	// X = Throttle, Y = Steering. Replicated (rather than pushed via a per-call multicast) since this
-	// changes at VR-input rate; ATSTank's NetUpdateFrequency already throttles how often it actually
+	// changes at VR-input rate; the tank's NetUpdateFrequency already throttles how often it actually
 	// goes out, matching the doc's Section 10 guidance to reserve multicast for one-shot transients.
 	UPROPERTY(ReplicatedUsing = OnRep_DriveInput, BlueprintReadOnly, Category = "Tank Simulation|Control")
 	FVector2D CurrentDriveInput = FVector2D::ZeroVector;
