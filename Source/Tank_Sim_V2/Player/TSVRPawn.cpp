@@ -202,11 +202,6 @@ void ATSVRPawn::ApplyVRModeDeferred()
 		// zero just written above to order the turret back to hull forward.
 		bGunnerAimSynced = false;
 
-		// Release the sight lock before touching the camera: while it is held the camera's rotation is
-		// absolute, so a relative write would be read as a WORLD rotation and point the view at the
-		// map's north rather than at the seat's forward.
-		SetGunnerSightLockActive(false);
-
 		if (Camera)
 		{
 			Camera->SetRelativeRotation(FRotator::ZeroRotator);
@@ -246,20 +241,37 @@ void ATSVRPawn::UpdateCrewStationAttachment()
 
 	// The seat is a scene component on the tank Blueprint. C++ only finds it by name - where it
 	// sits is Blueprint data, positioned in the viewport, and each tank can place its own.
+	//
+	// The Gunner has a second name to fall back on. Its station is GunnerScene, authored on the
+	// interior mesh's turret basket bone, but the master Blueprint still ships the older hull-mounted
+	// GunnerSeat and the other tanks have not been given a station yet. Trying both keeps them seated
+	// somewhere sensible instead of dumping them on the tank's origin.
 	const FName SeatName = GetSeatComponentNameForRole(CrewRole);
-	USceneComponent* Seat = nullptr;
+	const FName FallbackSeatName = (CrewRole == ETSCrewRole::Gunner) ? GunnerSeatFallbackComponent : NAME_None;
 
-	if (SeatName != NAME_None)
+	TArray<USceneComponent*> SceneComponents;
+	Tank->GetComponents<USceneComponent>(SceneComponents);
+
+	USceneComponent* Seat = nullptr;
+	for (const FName& Candidate : { SeatName, FallbackSeatName })
 	{
-		TArray<USceneComponent*> SceneComponents;
-		Tank->GetComponents<USceneComponent>(SceneComponents);
+		if (Candidate == NAME_None)
+		{
+			continue;
+		}
+
 		for (USceneComponent* Component : SceneComponents)
 		{
-			if (Component && Component->GetFName() == SeatName)
+			if (Component && Component->GetFName() == Candidate)
 			{
 				Seat = Component;
 				break;
 			}
+		}
+
+		if (Seat)
+		{
+			break;
 		}
 	}
 
@@ -524,12 +536,11 @@ void ATSVRPawn::ApplySeatViewDelta(const FVector2D& LookDelta)
 	SeatViewYaw = FRotator::NormalizeAxis(SeatViewYaw + LookDelta.X * MouseAimSensitivity);
 	SeatViewPitch = FMath::Clamp(SeatViewPitch + LookDelta.Y * MouseAimSensitivity, MinAimPitch, MaxAimPitch);
 
-	if (IsGunnerViewLockedToGun())
+	if (IsGunnerMouseDrivingGun())
 	{
-		// For a Gunner this delta is an aim COMMAND, not a view. Writing it onto the camera here as
-		// well is precisely the bug: the seat is attached to the turret socket, so the camera would
-		// carry the traverse twice and swing round at about double the barrel's rate. Tick puts the
-		// camera on the gun instead.
+		// For a Gunner this delta is an aim COMMAND, not a view, and the return is the whole point:
+		// the player is never rotated from here. Their station rides the turret basket, so the mouse
+		// turns the launcher and the basket carries them round with it.
 		ClampGunnerAimLead();
 		return;
 	}
@@ -544,12 +555,11 @@ ATSTankControllerBase* ATSVRPawn::GetAssignedTankController() const
 	return Cast<ATSTankControllerBase>(PS ? PS->GetAssignedTank() : nullptr);
 }
 
-bool ATSVRPawn::IsGunnerViewLockedToGun() const
+bool ATSVRPawn::IsGunnerMouseDrivingGun() const
 {
-	// Head tracking excluded on purpose: in a headset the camera IS the player's head. Pinning it to
-	// the gun would move the world under a stationary head, which is the textbook way to make someone
-	// ill, and it is not implementable anyway - nothing can stop the player turning their neck.
-	return bLockGunnerViewToGun && IsLocalGunner() && !UTSVRModeLibrary::IsHeadTrackingActive();
+	// Head tracking excluded on purpose: in a headset the Gunner aims by looking, so the head has to
+	// keep turning the view and the aim ray has to follow it.
+	return bGunnerMouseDrivesGun && IsLocalGunner() && !UTSVRModeLibrary::IsHeadTrackingActive();
 }
 
 FRotator ATSVRPawn::GetGunnerAimWorldRotation() const
@@ -577,60 +587,12 @@ void ATSVRPawn::ClampGunnerAimLead()
 	SeatViewYaw = FRotator::NormalizeAxis(GunYaw + Lead);
 }
 
-void ATSVRPawn::SetGunnerSightLockActive(bool bActive)
-{
-	if (!Camera || bGunnerSightLockActive == bActive)
-	{
-		return;
-	}
-
-	bGunnerSightLockActive = bActive;
-
-	// ABSOLUTE ROTATION IS THE PART THAT ACTUALLY STOPS THE DOUBLING.
-	//
-	// The Gunner's seat is attached to the turret socket, so the pawn - and with it this camera's
-	// PARENT - is turned by the skeletal mesh every time it evaluates its pose. A component whose
-	// rotation is relative has that parent rotation composed onto it afterwards, so the world
-	// rotation written below gets the turret's traverse applied to it a SECOND time and the view
-	// comes round further than the barrel. Writing a world rotation does not help: SetWorldRotation
-	// only back-solves a relative rotation against the parent as it stands at that instant, and the
-	// mesh then poses and re-composes it. Tick order decides how much doubling there is, not whether
-	// there is any.
-	//
-	// Absolute rotation takes the camera's orientation out of the attachment chain completely - its
-	// world rotation is exactly what is written here, whenever the mesh happens to pose. Location
-	// stays relative, so the eye still rides the turret basket as before.
-	Camera->SetUsingAbsoluteRotation(bActive);
-
-	if (!bActive)
-	{
-		// Handed back to the seat. In VR the tracked head pose is applied relative to it, so it must
-		// not be left carrying a stale world rotation from a previous stint as Gunner.
-		Camera->SetRelativeRotation(FRotator::ZeroRotator);
-	}
-}
-
-void ATSVRPawn::UpdateGunnerSightCamera()
+void ATSVRPawn::UpdateGunnerAimCommand()
 {
 	ATSTankControllerBase* Tank = GetAssignedTankController();
-	if (!Camera || !Tank)
+	if (!Tank)
 	{
 		return;
-	}
-
-	SetGunnerSightLockActive(true);
-
-	// The tank writes TurretsRot/GunsRot in its own tick. Without this prerequisite we could read
-	// them before they are written and the sight would trail the barrel by a frame - the same class
-	// of fault SyncInteriorMeshTickToPawn fixes for the interior mesh.
-	if (TickPrerequisiteTank.Get() != Tank)
-	{
-		if (AActor* Previous = TickPrerequisiteTank.Get())
-		{
-			RemoveTickPrerequisiteActor(Previous);
-		}
-		AddTickPrerequisiteActor(Tank);
-		TickPrerequisiteTank = Tank;
 	}
 
 	if (!bGunnerAimSynced)
@@ -647,10 +609,17 @@ void ATSVRPawn::UpdateGunnerSightCamera()
 	// lead that is only ever checked on input would sit stale until they moved again.
 	ClampGunnerAimLead();
 
-	// World, not relative. The seat is attached to the turret socket, so a relative rotation would be
-	// added ON TOP of the traverse the seat already carries. Stating the world rotation says where the
-	// sight points once and stays correct whatever the seat happens to be parented to.
-	Camera->SetWorldRotation(Tank->GetActorQuat() * FQuat(Tank->GetMainGunAimRotation()));
+	// AND THAT IS ALL. The camera is deliberately NOT touched.
+	//
+	// The Gunner sits at GunnerScene, parented to the interior mesh's turret basket bone, so the
+	// attachment already turns the player with the traverse - once, from the same TurretsRot the
+	// AnimBP draws the barrel from. Every attempt to also point the camera at the gun from here
+	// added a SECOND traverse on top of that and the view outran the launcher. Writing a world
+	// rotation did not help either: a relative component has its parent's rotation composed back on
+	// after the mesh poses, so the write was undone and re-doubled every frame.
+	//
+	// The player is a passenger of the basket. The mouse moves the launcher, and the basket - and
+	// with it the player - follows because it is bolted to the turret.
 }
 
 bool ATSVRPawn::IsLocalGunner() const
@@ -667,35 +636,20 @@ bool ATSVRPawn::IsLocalGunner() const
 
 void ATSVRPawn::UpdateAimTickEnabled()
 {
-	// Only the Gunner needs a tick - nobody else aims. In VR it is for the head aim; on a desktop it
-	// is for the sight lock, which has to re-point the camera every frame as the gun traverses and
-	// so can no longer ride IA_AimTurret's own events alone.
-	const bool bIsGunner = IsLocalGunner();
-	SetActorTickEnabled(bIsGunner);
-
-	// Leaving the Gunner seat stops the tick, so the release has to happen here - Tick's own else
-	// branch would never run again and the camera would stay frozen facing the old gun direction.
-	if (!bIsGunner)
-	{
-		SetGunnerSightLockActive(false);
-	}
+	// Only the Gunner needs a tick - nobody else aims. In VR it carries the head aim; on a desktop it
+	// keeps the aim command's lead over the gun bounded and keeps feeding the tank an aim point while
+	// the hull moves under it, neither of which can ride IA_AimTurret's own events alone.
+	SetActorTickEnabled(IsLocalGunner());
 }
 
 void ATSVRPawn::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	// Flat screen: the sight is the gun, so put the camera on whatever the gun has actually managed
-	// to traverse to this frame. Runs before the aim trace, which reads the camera's location.
-	if (IsGunnerViewLockedToGun())
+	// Flat screen: keep the aim command honest. Nothing here moves the player - the basket does that.
+	if (IsGunnerMouseDrivingGun())
 	{
-		UpdateGunnerSightCamera();
-	}
-	else
-	{
-		// Stopped being the locked sight without the tick being switched off - putting on a headset,
-		// or the lock being turned off in defaults. Give the camera back to the seat.
-		SetGunnerSightLockActive(false);
+		UpdateGunnerAimCommand();
 	}
 
 	// In a headset the Gunner aims by turning their head, which fires no input action whatsoever.
@@ -725,7 +679,7 @@ void ATSVRPawn::UpdateGunnerAim()
 	}
 
 	const ATSTankControllerBase* Tank = GetAssignedTankController();
-	const bool bLocked = IsGunnerViewLockedToGun() && Tank != nullptr;
+	const bool bLocked = IsGunnerMouseDrivingGun() && Tank != nullptr;
 
 	// With the sight locked, the camera points down the gun, so tracing along it would only ever ask
 	// the gun to stay where it is and the turret would never move. The ray follows the mouse COMMAND

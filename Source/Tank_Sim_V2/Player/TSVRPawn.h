@@ -92,22 +92,21 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0", ClampMax = "89.0"))
 	float MaxAimPitch = 25.f;
 
-	// --- Gunner sight lock (desktop) ------------------------------------------------------------
-	// The Gunner's seat is bolted to the turret socket by ATSTankControllerBase::AttachTurretCrewSeats,
-	// so the seat ALREADY carries the traverse. Writing the mouse's view rotation onto the camera as
-	// well stacked a second rotation on top of it, and the view came round roughly twice as fast as
-	// the barrel it was supposed to be looking down.
+	// --- Gunner: the mouse drives the GUN, never the view ---------------------------------------
+	// The Gunner's station rides the turret basket (GunnerScene on b_Upper), so the ATTACHMENT
+	// already carries the traverse, exactly once. Nothing here may rotate the player on top of that:
+	// a free-look rotation stacked a second traverse onto the camera and the view came round faster
+	// than the barrel, and re-pointing the camera at the gun every frame only replaced one double
+	// write with another.
 	//
-	// With this on, the mouse stops turning the camera and instead commands where the gun should go;
-	// the camera is put on the gun's ACHIEVED rotation every frame. The sight can then never outrun
-	// the gun, because it is the gun. Aiming still works exactly as before - the aim ray follows the
-	// mouse command, the gun chases it at its own traverse rate, and the view arrives when the gun
-	// does.
+	// So with this on, the Gunner's pawn and camera are never rotated by this class at all. The mouse
+	// accumulates an aim COMMAND and the launcher turns to meet it; the player turns only insofar as
+	// the basket they are sitting in turns, which is the traverse itself.
 	//
-	// Gunner only, and flat screen only: the Driver and Commander have no gun to be locked to, and in
-	// a headset the camera is the player's head - nothing may take that away from them.
+	// Gunner only, and flat screen only: the Driver and Commander do not aim, and in a headset the
+	// camera is the player's head - nothing may take that away from them.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
-	bool bLockGunnerViewToGun = true;
+	bool bGunnerMouseDrivesGun = true;
 
 	// How far the mouse command may run ahead of where the gun has actually got to, in degrees.
 	//
@@ -139,8 +138,18 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
 	FName DriverSeatComponent = TEXT("DriverSeat");
 
+	// GunnerScene on the VK1602 - a scene component parented to the interior mesh's turret basket
+	// bone (b_Upper), beside GunnerScreen and the scene capture that feeds it. Sitting there puts the
+	// player at the real gunner's station AND makes them traverse with the basket through the
+	// attachment alone, which is why nothing in this class rotates them.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
-	FName GunnerSeatComponent = TEXT("GunnerSeat");
+	FName GunnerSeatComponent = TEXT("GunnerScene");
+
+	// Tried if GunnerSeatComponent is not on the tank. The master Blueprint still ships the older
+	// hull-mounted GunnerSeat, so tanks that have not had a gunner station authored yet keep working
+	// instead of dumping the player on the tank's origin.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
+	FName GunnerSeatFallbackComponent = TEXT("GunnerSeat");
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
 	FName CommanderSeatComponent = TEXT("CommanderSeat");
@@ -320,19 +329,13 @@ private:
 	// True only for the local player who currently holds the Gunner seat.
 	bool IsLocalGunner() const;
 
-	// --- Gunner sight lock ------------------------------------------------------------------------
-	// True when this pawn's camera should be pinned to the gun rather than turned by the mouse.
-	bool IsGunnerViewLockedToGun() const;
+	// --- Gunner aim command -----------------------------------------------------------------------
+	// True when this pawn's mouse should be steering the launcher instead of turning the view.
+	bool IsGunnerMouseDrivingGun() const;
 
-	// Puts the camera on the gun's achieved rotation, and keeps the tank ticking before us so we read
-	// this frame's turret angle rather than last frame's.
-	void UpdateGunnerSightCamera();
-
-	// Takes the camera's ROTATION out of the attachment chain while the sight is locked, and puts it
-	// back when it is not. See the .cpp - this is what actually stops the view doubling the traverse.
-	void SetGunnerSightLockActive(bool bActive);
-
-	bool bGunnerSightLockActive = false;
+	// Per-frame upkeep of the aim command: seed it from the gun the first time, then keep its lead
+	// over the gun bounded. Deliberately does NOT touch the camera - see bGunnerMouseDrivesGun.
+	void UpdateGunnerAimCommand();
 
 	// The direction the Gunner is ASKING for, in world space: the mouse command applied in tank space.
 	FRotator GetGunnerAimWorldRotation() const;
