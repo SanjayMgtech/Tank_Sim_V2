@@ -1741,6 +1741,47 @@ never completed and span every tick on every server tank after the first shot. N
 `ReloadWeaponUI` must not be guarded — that warning was about the *function's* two exec outputs;
 this event's only consumer is its own retry loop.
 
+## 🥽 VR phase — BP_XRPawn is the crew pawn (2026-09-08)
+
+### Crew behaviour is a COMPONENT, not a pawn class
+`UTSCrewStationComponent` carries the role Input Mapping Contexts, the seat names, and the routing
+of local input into `ATSTankPlayerController`'s Server RPCs. Add it to a pawn and that pawn can
+crew a tank.
+
+**Do NOT reparent `BP_XRPawn` onto `ATSVRPawn`.** Both declare `VROrigin` and `Camera`, so
+reparenting collides name-for-name and leaves a dead native camera plus duplicate motion
+controllers — RULE 1's exact failure mode. The component exists precisely so the template pawn can
+stay untouched.
+
+Two things make it host-agnostic:
+- it finds the viewpoint **by name** (`ViewCameraComponent`, default `Camera`), and both
+  `ATSVRPawn` and `BP_XRPawn` call theirs `Camera`;
+- it self-wires from `APawn::ReceiveRestartedDelegate` / `ReceiveControllerChangedDelegate`, so a
+  Blueprint host needs **no graph nodes** — just the component and its data. Input binds on pawn
+  restart, because the InputComponent does not exist before possession.
+
+Both GameModes spawn `BP_XRPawn`. `ATSVRPawn` still compiles but is no longer used; it is the
+non-VR fallback until someone deletes it.
+
+### ⚠ IMC_Default bundles locomotion WITH grab and the menu
+The template's `IMC_Default` holds `IA_Move` and `IA_Turn` **and** `IA_Grab_*` **and**
+`IA_Menu_Toggle_*`. Removing the context to stop a seated crew member teleporting would also kill
+grabbing and the menu in the cockpit. So the four locomotion exec paths are gated instead —
+`IA_Move` Triggered/Started/Completed and `IA_Turn` Triggered, each through
+`Branch(CrewStation->IsSeatedInTank())` with the ORIGINAL chain on the **False** pin.
+
+Verified both directions, which matters — a gate that always blocks looks identical to a working
+one until someone leaves the tank:
+```
+seated   + IA_Move/IA_Turn injected 200 frames -> moved 0.2uu (tank settling only)
+unseated + IA_Turn                             -> yaw 0 -> 45, snap turn still works
+```
+
+### The VR template content is ~57MB and was untracked
+`Content/VRTemplate`, `XRFramework`, `XRMannequins`, `VRSpectator`, `Weapons`,
+`LevelPrototyping` — 187 files. Committed because both GameModes now reference `BP_XRPawn_C`, so
+without it a fresh clone has a broken DefaultPawnClass.
+
 ## 6. Test Procedure (run after every phase)
 
 1. Close editor fully. Rebuild C++ (Rule 5). Relaunch.
