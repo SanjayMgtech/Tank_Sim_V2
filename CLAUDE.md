@@ -2305,3 +2305,36 @@ In PIE this bites immediately: only one instance can own the headset, and UE alw
 the natural one to host from — so by default the headset lands on the one machine structurally
 barred from playing. **Host from instance 1 and join with instance 0**, or run two `-game` processes
 and pass `-nohmd` to the server and `-vr` to the client.
+
+### ✅ VR movement — everything downstream of the thumbstick is PROVEN (2026-09-08)
+Unattended two-process listen-server run (`-nohmd` both sides, so this tests the game path, not XR):
+```
+before   gear=0 target=0 rpm=600  throttle=0.00 speed=0.0   Y=-999
+during   gear=1 target=1 rpm=1451 throttle=1.00 speed=354.8 Y=-754
+during   gear=2 target=2 rpm=963  throttle=1.00 speed=489.6 Y=-98
+during   gear=2 target=2 rpm=1038 throttle=1.00 speed=681.6 Y=+728
+```
+Gear leaves neutral and RPM rises off its 600 idle - the assertions that actually mean "driving",
+per the sloped-spawn warning. ~1,700 units travelled.
+
+Also confirmed in the same run: `ApplyRoleMappingContext role=1 context=IMC_Driver applied=YES
+shared=YES (client)`, and all 12 `IA_*` properties are set on `BP_TSVRPawn` (each `BindAction` is
+guarded by `if (IA_X)`, so a single null would silently drop that input with no log line - worth
+re-checking whenever an input stops working).
+
+**So the ONLY unproven link in VR movement is physical thumbstick -> `IA_Drive`.** Everything after
+it - role assignment, IMC application, the Server RPC, `BP_SetDriveInput`, the Chaos sim - works.
+Do not re-debug those; reproduce this run first if in doubt.
+
+Command (client side; server is the same without the TSAuto options):
+```
+"127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1?TSAutoDrive=1,0,6" -game -nohmd
+```
+
+Remaining suspects for that last link, in order:
+1. the interaction profile actually bound at runtime. Quest 3 uses Touch Plus
+   (`XR_META_touch_controller_plus` is advertised in the log); UE's `OculusTouch` key prefix
+   suggests `/interaction_profiles/oculus/touch_controller`. Meta's runtime normally accepts that
+   as a fallback, but this has NOT been verified here.
+2. the Scalar-mask two-stick layout - derived from how Enhanced Input combines mappings for one
+   action, not from a documented Epic pattern. Untested in a headset.
