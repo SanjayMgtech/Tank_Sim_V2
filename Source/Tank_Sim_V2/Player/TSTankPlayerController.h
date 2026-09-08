@@ -67,6 +67,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
 	int32 RemoveMenuWidgets();
 
+	// The UI presentation router (flat vs world-space) and the menu-map rules live here. Public so
+	// Blueprints and tests can ask the same question C++ does, rather than re-deriving it.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	UTSUISubsystem* GetUISubsystem() const;
+
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Debug")
 	void ShowRoleDebugWidget(bool bShow);
 
@@ -254,7 +259,6 @@ protected:
 
 private:
 	ATSTankPlayerState* GetTankPlayerState() const;
-	UTSUISubsystem* GetUISubsystem() const;
 
 	// PlayerState -> owning PlayerController. Prefers GetOwner(), falling back to a controller scan
 	// because a PlayerState's owner can be null for a brief window around (re)connection.

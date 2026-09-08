@@ -86,10 +86,21 @@ void ATSTankPlayerController::ApplyInputModeForLocalState()
 		return;
 	}
 
-	const bool bWantCursor = IsOnMenuMap()
+	bool bWantCursor = IsOnMenuMap()
 		|| bLobbyConsoleFocused
 		|| ActiveTeamSelectionWidget != nullptr
 		|| ActiveRoleSelectionWidget != nullptr;
+
+	// Never in VR. There is no OS cursor in a headset, so bShowMouseCursor shows nothing - but
+	// FInputModeGameAndUI still CAPTURES input, which makes this a silent input sink that looks
+	// exactly like "nothing is happening". The UI router owns this decision.
+	if (const UTSUISubsystem* UI = GetUISubsystem())
+	{
+		if (!UI->ShouldUseMouseCursor())
+		{
+			bWantCursor = false;
+		}
+	}
 
 	bShowMouseCursor = bWantCursor;
 

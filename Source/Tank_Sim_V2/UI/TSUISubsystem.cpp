@@ -1,5 +1,7 @@
 #include "UI/TSUISubsystem.h"
 
+#include "Player/TSVRModeLibrary.h"
+
 #include "Blueprint/UserWidget.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
@@ -165,4 +167,37 @@ int32 UTSUISubsystem::RemoveMenuWidgets()
 	}
 
 	return RemovedCount;
+}
+
+// --- UI presentation routing --------------------------------------------------------------------
+
+ETSUIPresentationMode UTSUISubsystem::GetPresentationMode() const
+{
+	switch (PresentationOverride)
+	{
+	case ETSUIPresentationOverride::ForceFlat:  return ETSUIPresentationMode::Flat;
+	case ETSUIPresentationOverride::ForceWorld: return ETSUIPresentationMode::World;
+	default: break;
+	}
+
+	// Stereo rendering is a property of the local viewport, so this is inherently per-machine and
+	// client-side - exactly like the widgets themselves, which CreateWidget will only build for a
+	// LOCAL PlayerController. Nothing here replicates and nothing belongs on the server.
+	//
+	// IsVRModeActive, not IsHMDAvailable: a headset being plugged in is not the question. What
+	// matters is whether stereo is actually running for this client, which is also where the host's
+	// "flat-screen match admin" policy is already decided (see UTSVRModeLibrary).
+	return UTSVRModeLibrary::IsVRModeActive()
+		? ETSUIPresentationMode::World
+		: ETSUIPresentationMode::Flat;
+}
+
+bool UTSUISubsystem::ShouldUseWorldSpaceUI() const
+{
+	return GetPresentationMode() == ETSUIPresentationMode::World;
+}
+
+bool UTSUISubsystem::ShouldUseMouseCursor() const
+{
+	return GetPresentationMode() == ETSUIPresentationMode::Flat;
 }
