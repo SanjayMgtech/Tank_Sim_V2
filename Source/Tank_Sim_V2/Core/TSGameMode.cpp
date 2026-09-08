@@ -597,9 +597,20 @@ FTransform ATSGameMode::GetSpawnTransformForTeam(ETSTeamId TeamId) const
 		}
 	}
 
+	// Level had no spawn actor. Before dropping the tank at the world origin, use the transform
+	// held as GameMode data - see FallbackTeamSpawnTransforms for why that is not just belt and
+	// braces: the 167MB WarZone map cannot be committed, so its spawn actors do not reach a clone.
+	if (const FTransform* Configured = FallbackTeamSpawnTransforms.Find(TeamId))
+	{
+		UE_LOG(LogTankSim, Log,
+			TEXT("ATSGameMode: no actor tagged '%s' in the level - using the configured fallback transform for %s."),
+			*Tag.ToString(), *UTSTypeUtils::TeamIdToString(TeamId));
+		return *Configured;
+	}
+
 	const int32 TeamIndex = AllTeams.IndexOfByKey(TeamId);
 	const float Offset = TeamIndex >= 0 ? static_cast<float>(TeamIndex) : 0.f;
-	UE_LOG(LogTankSim, Warning, TEXT("ATSGameMode: no actor tagged '%s' in the level - falling back to a world-origin offset. Tag a spawn point for deterministic placement."), *Tag.ToString());
+	UE_LOG(LogTankSim, Warning, TEXT("ATSGameMode: no actor tagged '%s' in the level AND no FallbackTeamSpawnTransforms entry - dropping at a world-origin offset. Expect a bad landing on sloped ground."), *Tag.ToString());
 	return FTransform(FVector(Offset * FallbackTeamSpawnSpacing, 0.f, 200.f));
 }
 

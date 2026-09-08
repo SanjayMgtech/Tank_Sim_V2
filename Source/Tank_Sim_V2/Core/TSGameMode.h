@@ -153,6 +153,20 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	float FallbackTeamSpawnSpacing = 2000.f;
 
+	// Per-team spawn transforms held as GameMode DATA rather than as actors in the level.
+	//
+	// Why this exists: WarZone.umap is 167MB, over GitHub's hard 100MB per-file limit, so the map
+	// cannot be committed and .gitignore excludes /Content/TankSimulation/Maps entirely. Spawn
+	// points placed as actors in that map therefore do NOT survive a fresh clone - the tanks fall
+	// in at a world-origin offset on a slope, which reads as "driving is broken" because
+	// ThrottleControl correctly applies full brake to a tank sliding backwards.
+	//
+	// Consulted AFTER the tagged actor and PlayerStart lookups, so a level that DOES have spawn
+	// actors still wins and level designers keep control. This is only the safety net that makes a
+	// clean checkout playable.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
+	TMap<ETSTeamId, FTransform> FallbackTeamSpawnTransforms;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
 	FName GameplayMapName = TEXT("Controller_Demo_T90");
 
