@@ -2,6 +2,7 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "Components/Button.h"
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
 #include "Components/TextBlock.h"
@@ -77,7 +78,7 @@ TSharedRef<SWidget> UTSRoleDebugWidget::RebuildWidget()
 		RootBorder->SetContent(Column);
 
 		HeaderText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TSDebugHeader"));
-		HeaderText->SetText(FText::FromString(TEXT("TANK SIM - CREW ASSIGNMENT")));
+		HeaderText->SetText(FText::FromString(TEXT("TANK SIM - CREW ASSIGNMENT   [F1 = cursor]")));
 		HeaderText->SetColorAndOpacity(FSlateColor(FLinearColor(1.f, 0.82f, 0.25f)));
 		{
 			FSlateFontInfo Font = HeaderText->GetFont();
@@ -130,25 +131,43 @@ TSharedRef<SWidget> UTSRoleDebugWidget::RebuildWidget()
 		{
 			TankSlot->SetPadding(FMargin(0.f, 10.f, 0.f, 0.f));
 		}
+
+		// Host only (RefreshStartMatchButton collapses it otherwise). Without this the match could
+		// only reach InProgress when every seat on every team was filled, so a short-handed lobby had
+		// no way to start at all.
+		StartMatchButton = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("TSDebugStartMatch"));
+		StartMatchButton->SetVisibility(ESlateVisibility::Collapsed);
+		UTSRoleDebugRowWidget::MakeButtonNonFocusable(StartMatchButton);
+		{
+			FButtonStyle Style = StartMatchButton->GetStyle();
+			const FLinearColor Green(0.12f, 0.45f, 0.18f, 0.95f);
+			Style.Normal.TintColor = FSlateColor(Green);
+			Style.Hovered.TintColor = FSlateColor(Green * 1.6f);
+			Style.Pressed.TintColor = FSlateColor(Green * 2.0f);
+			StartMatchButton->SetStyle(Style);
+		}
+		StartMatchButton->OnClicked.AddDynamic(this, &UTSRoleDebugWidget::OnStartMatchClicked);
+
+		UTextBlock* StartLabel = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TSDebugStartMatchLabel"));
+		StartLabel->SetText(FText::FromString(TEXT("START MATCH")));
+		StartLabel->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+		StartLabel->SetJustification(ETextJustify::Center);
+		{
+			FSlateFontInfo Font = StartLabel->GetFont();
+			Font.Size = FontSize;
+			Font.TypefaceFontName = FName(TEXT("Bold"));
+			StartLabel->SetFont(Font);
+		}
+		StartMatchButton->SetContent(StartLabel);
+
+		if (UVerticalBoxSlot* StartSlot = Column->AddChildToVerticalBox(StartMatchButton))
+		{
+			StartSlot->SetPadding(FMargin(0.f, 12.f, 0.f, 0.f));
+			StartSlot->SetHorizontalAlignment(HAlign_Left);
+		}
 	}
 
 	return Super::RebuildWidget();
-}
-
-void UTSRoleDebugWidget::NativeDestruct()
-{
-	// Hand input back if we were holding the cursor for assignment.
-	if (bCursorTakenForAssignment)
-	{
-		if (APlayerController* PC = GetOwningPlayer())
-		{
-			PC->SetShowMouseCursor(false);
-			PC->SetInputMode(FInputModeGameOnly());
-		}
-		bCursorTakenForAssignment = false;
-	}
-
-	Super::NativeDestruct();
 }
 
 void UTSRoleDebugWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -189,7 +208,7 @@ void UTSRoleDebugWidget::RefreshNow()
 	}
 
 	RefreshPlayerRows();
-	UpdateInputModeForAssignment();
+	RefreshStartMatchButton();
 }
 
 void UTSRoleDebugWidget::RefreshPlayerRows()
@@ -274,42 +293,30 @@ void UTSRoleDebugWidget::RefreshPlayerRows()
 	}
 }
 
-void UTSRoleDebugWidget::UpdateInputModeForAssignment()
+void UTSRoleDebugWidget::RefreshStartMatchButton()
 {
-	if (!bTakeMouseCursorForAssignment)
+	if (!StartMatchButton)
 	{
 		return;
 	}
 
-	ATSTankPlayerController* PC = GetOwningPlayer<ATSTankPlayerController>();
-	if (!PC || !PC->IsMatchHost())
-	{
-		return;
-	}
-
+	const ATSTankPlayerController* PC = GetOwningPlayer<ATSTankPlayerController>();
 	const ATSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ATSGameState>() : nullptr;
-	const bool bAssignmentPhase = !GS || GS->GetMatchState() != ETSMatchState::InProgress;
+	const bool bInProgress = GS && GS->GetMatchState() == ETSMatchState::InProgress;
 
-	if (bAssignmentPhase == bCursorTakenForAssignment)
-	{
-		return;
-	}
+	// Only the host can start a match, and only one that has not started.
+	const bool bVisible = bShowStartMatchButton && PC && PC->IsMatchHost() && !bInProgress;
+	StartMatchButton->SetVisibility(bVisible ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+}
 
-	bCursorTakenForAssignment = bAssignmentPhase;
-	PC->SetShowMouseCursor(bAssignmentPhase);
+void UTSRoleDebugWidget::OnStartMatchClicked()
+{
+	if (ATSTankPlayerController* PC = GetOwningPlayer<ATSTankPlayerController>())
+	{
+		PC->ServerRequestStartMatch();
 
-	if (bAssignmentPhase)
-	{
-		// The defaults hide the cursor while a click is held and can lock it to the viewport, which
-		// makes the assignment buttons awkward to hit. Keep it visible and free.
-		FInputModeGameAndUI InputMode;
-		InputMode.SetHideCursorDuringCapture(false);
-		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-		PC->SetInputMode(InputMode);
-	}
-	else
-	{
-		PC->SetInputMode(FInputModeGameOnly());
+		// Hand the cursor back so the host drops straight into camera control. F1 brings it back.
+		PC->SetLobbyConsoleFocused(false);
 	}
 }
 

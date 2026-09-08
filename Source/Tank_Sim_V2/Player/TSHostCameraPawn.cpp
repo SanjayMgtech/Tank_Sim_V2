@@ -5,8 +5,6 @@
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/SpectatorPawnMovement.h"
 #include "InputMappingContext.h"
-#include "Player/TSVRModeLibrary.h"
-#include "Tank_Sim_V2.h"
 
 ATSHostCameraPawn::ATSHostCameraPawn(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -36,45 +34,29 @@ ATSHostCameraPawn::ATSHostCameraPawn(const FObjectInitializer& ObjectInitializer
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(RootComponent);
-	// The spectator pawn's own control rotation drives the view (ADefaultPawn's Turn/LookUp
-	// bindings write it), so the camera follows the pawn rather than adding a second rotation
-	// source on top.
+
+	// MUST be true. ADefaultPawn::MoveForward/MoveRight move along the CONTROL rotation, so the view
+	// has to follow the control rotation too or the two disagree. APawn defaults
+	// bUseControllerRotationYaw/Pitch/Roll to false and neither ADefaultPawn nor ASpectatorPawn
+	// changes them, so the actor never rotates - a camera parented to the root with this off is
+	// frozen facing the spawn direction while WASD flies off along wherever the mouse has aimed the
+	// control rotation. That is the "WASD goes sideways" bug.
+	// This does not fight VR: bLockToHmd composes the head pose on top of this rotation, so the host
+	// still looks with their head and steers with the stick.
 	Camera->bUsePawnControlRotation = true;
-	// Never ride the headset. NotifyControllerChanged clears this again on the live instance;
-	// setting it here means even an un-possessed preview of this pawn is flat.
-	Camera->bLockToHmd = false;
-}
-
-void ATSHostCameraPawn::NotifyControllerChanged()
-{
-	Super::NotifyControllerChanged();
-
-	const APlayerController* PC = Cast<APlayerController>(GetController());
-	if (!PC || !PC->IsLocalController())
-	{
-		// Stereo belongs to a local viewport. Doing this for a remote copy of the host pawn would
-		// switch VR off on somebody else's machine.
-		return;
-	}
-
-	// Two separate things have to be off, and only killing both makes the host truly flat:
-	// stereo rendering, and the camera following the headset's pose.
-	UTSVRModeLibrary::SetVRModeEnabled(false);
-
-	if (Camera)
-	{
-		Camera->bLockToHmd = false;
-	}
-
-	UE_LOG(LogTankSim, Log,
-		TEXT("ATSHostCameraPawn: host possessed the free-roam camera - VR forced off (HMD connected: %s)."),
-		UTSVRModeLibrary::IsHMDAvailable() ? TEXT("yes") : TEXT("no"));
 }
 
 void ATSHostCameraPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
-	// ADefaultPawn registers and binds MoveForward/MoveRight/MoveUp/Turn/LookUp here, so free flight
-	// works with no authored input assets.
+	// Binds DefaultPawn_MoveForward / _MoveRight / _MoveUp / _Turn / _TurnRate / _LookUp / _LookUpRate.
+	//
+	// Do NOT add project axis bindings on top of these. Those DefaultPawn_* axes are ENGINE-DEFINED
+	// (InitializeDefaultPawnInputBindings registers W/A/S/D, MouseX, MouseY, Q/E/Space/Ctrl and the
+	// gamepad sticks via UPlayerInput::AddEngineDefinedAxisMapping), so they exist whatever
+	// DefaultInput.ini says. An earlier version of this function bound "Turn Right / Left Mouse" and
+	// "Turn Right / Left Gamepad" here on the mistaken belief that ADefaultPawn's yaw binding was
+	// dead - both map to the same MouseX / Gamepad_RightX keys the engine already bound, so yaw was
+	// applied twice and the camera spun at double sensitivity.
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
 	if (!HostMappingContext)

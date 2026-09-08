@@ -1,5 +1,7 @@
 #include "Tank/TSTankControllerBase.h"
 
+#include "ChaosVehicleMovementComponent.h"
+
 #include "Components/SkeletalMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Kismet/GameplayStatics.h"
@@ -7,7 +9,9 @@
 #include "Net/UnrealNetwork.h"
 #include "GameFramework/PlayerController.h"
 #include "Player/TSTankPlayerState.h"
+#include "Tank_Sim_V2.h"
 #include "Engine/World.h"
+#include "TimerManager.h"
 
 ATSTankControllerBase::ATSTankControllerBase()
 {
@@ -283,8 +287,123 @@ void ATSTankControllerBase::BP_SetDriveInput_Implementation(float Throttle, floa
 	WarnNotOverridden(this, TEXT("BP_SetDriveInput"));
 }
 
+void ATSTankControllerBase::BeginPlay()
+{
+	Super::BeginPlay();
+
+	// Aim straight ahead until a Gunner actually aims.
+	//
+	// TurretsAndGunsRotCalculation selects ReceivedAimPoint whenever the tank is not locally
+	// controlled - which, under the crew model, is ALWAYS, because nobody possesses the tank. A
+	// zero default is not "unset" to that maths, it is the world origin, so a tank spawned away
+	// from the origin swung its turret round to point back at it the moment it appeared.
+	ReceivedAimPoint = GetActorLocation() + GetActorForwardVector() * DefaultAimDistance;
+
+	ApplyVehicleSimulationAuthorityPolicy();
+	AttachTurretCrewSeats();
+	SyncInteriorMeshTickToPawn();
+}
+
+void ATSTankControllerBase::SyncInteriorMeshTickToPawn()
+{
+	const USkeletalMeshComponent* RootMesh = GetMesh();
+
+	TArray<USkeletalMeshComponent*> Meshes;
+	GetComponents<USkeletalMeshComponent>(Meshes);
+
+	// NOT named 'Mesh': AWheeledVehiclePawn declares a member of that name, and UHT builds with
+	// -WarningsAsErrors so C4458 shadowing is fatal. Same trap as 'Role' (see CLAUDE.md).
+	for (USkeletalMeshComponent* MeshComp : Meshes)
+	{
+		if (!MeshComp || MeshComp == RootMesh)
+		{
+			continue;
+		}
+
+		// The anim evaluation happens in the component's tick, so making that tick depend on the
+		// pawn guarantees it sees THIS frame's TurretsRot rather than last frame's.
+		MeshComp->AddTickPrerequisiteActor(this);
+
+		UE_LOG(LogTankSim, Log, TEXT("[Tank] %s: '%s' now ticks after the pawn (removes the interior anim frame lag)."),
+			*GetName(), *MeshComp->GetName());
+	}
+}
+
+void ATSTankControllerBase::AttachTurretCrewSeats()
+{
+	USkeletalMeshComponent* MeshComp = GetMesh();
+	if (!MeshComp || TurretSocketName.IsNone())
+	{
+		return;
+	}
+
+	if (!MeshComp->DoesSocketExist(TurretSocketName))
+	{
+		UE_LOG(LogTankSim, Warning,
+			TEXT("[Tank] %s: no socket/bone '%s' on %s - the Gunner and Commander seats will stay ")
+			TEXT("bolted to the hull and will not traverse with the turret. Set TurretSocketName to ")
+			TEXT("this mesh's turret bone."),
+			*GetName(), *TurretSocketName.ToString(), *MeshComp->GetName());
+		return;
+	}
+
+	TArray<USceneComponent*> SceneComponents;
+	GetComponents<USceneComponent>(SceneComponents);
+
+	for (const FName& SeatName : TurretMountedSeatComponents)
+	{
+		USceneComponent** Found = SceneComponents.FindByPredicate(
+			[&SeatName](const USceneComponent* Component) { return Component && Component->GetFName() == SeatName; });
+
+		if (!Found || !*Found)
+		{
+			UE_LOG(LogTankSim, Warning, TEXT("[Tank] %s: turret seat '%s' not found."), *GetName(), *SeatName.ToString());
+			continue;
+		}
+
+		// KeepWorldTransform: the seat stays exactly where it was placed, it just rides the turret now.
+		(*Found)->AttachToComponent(MeshComp, FAttachmentTransformRules::KeepWorldTransform, TurretSocketName);
+
+		UE_LOG(LogTankSim, Log, TEXT("[Tank] %s: seat '%s' now rides socket '%s'."),
+			*GetName(), *SeatName.ToString(), *TurretSocketName.ToString());
+	}
+}
+
+void ATSTankControllerBase::ApplyVehicleSimulationAuthorityPolicy()
+{
+	if (!bSimulateVehicleOnAuthorityOnly)
+	{
+		return;
+	}
+
+	UChaosVehicleMovementComponent* Move = Cast<UChaosVehicleMovementComponent>(GetVehicleMovementComponent());
+	if (!Move)
+	{
+		return;
+	}
+
+	// True on a client makes Chaos require a controller; nothing possesses the tank, so bProcessLocally
+	// is false there and the client stops running its own sim. The server keeps False and remains the
+	// single simulator. See the header for why this cannot just be one value in the Blueprint.
+	const bool bRequiresController = !HasAuthority();
+	Move->SetRequiresControllerForInputs(bRequiresController);
+
+	UE_LOG(LogTankSim, Log, TEXT("[Tank] %s: vehicle sim %s (bRequiresControllerForInputs=%s)"),
+		*GetName(),
+		HasAuthority() ? TEXT("ENABLED (authority)") : TEXT("disabled (client - motion comes from replication)"),
+		bRequiresController ? TEXT("true") : TEXT("false"));
+}
+
 void ATSTankControllerBase::BP_AimTurret_Implementation(FVector_NetQuantize AimPoint)
 {
+	// Ignore the zero default. UTSTankWeaponComponent::CurrentAimPoint starts at zero and its
+	// OnRep fires on first replication, which would otherwise hand the turret the world origin as
+	// a target before any Gunner has aimed.
+	if (FVector(AimPoint).IsNearlyZero())
+	{
+		return;
+	}
+
 	// Now that the contract carries a world-space POINT, this is implementable in C++ and needs
 	// no Blueprint override: ReceivedAimPoint is exactly what TurretsAndGunsRotCalculation already
 	// consumes (it selects between its own camera trace and this value, then writes TargetPoint).
@@ -296,13 +415,59 @@ void ATSTankControllerBase::BP_AimTurret_Implementation(FVector_NetQuantize AimP
 
 void ATSTankControllerBase::BP_FireMainCannon_Implementation()
 {
-	// Firing lives in BP_TankWeapon, a Blueprint-only class C++ cannot name.
-	WarnNotOverridden(this, TEXT("BP_FireMainCannon"));
+	// One trigger pull. The weapon is a hold-to-fire pair (StartShooting/StopShooting) but
+	// ServerFireMainCannon is a single discrete request, so hold the trigger briefly and release it.
+	// Without the release the gun would stay held down after one press.
+	UE_LOG(LogTankSim, Log, TEXT("[Tank] %s: MAIN CANNON - trigger held %.2fs"), *GetName(), MainCannonTriggerHoldSeconds);
+	BP_WeaponStartShooting();
+	bWeaponFiring = true;
+
+	GetWorldTimerManager().SetTimer(WeaponStopTimerHandle, this,
+		&ATSTankControllerBase::ReleaseWeaponTrigger, MainCannonTriggerHoldSeconds, false);
 }
 
 void ATSTankControllerBase::BP_FireMachineGun_Implementation()
 {
-	WarnNotOverridden(this, TEXT("BP_FireMachineGun"));
+	// Hold-to-fire. ServerFireMachineGun arrives once per frame while the key is held, so start on
+	// the first request and keep pushing the release out; the gun stops once requests stop arriving.
+	// Re-sending StartShooting every frame would restart the weapon's own firing cycle.
+	if (!bWeaponFiring)
+	{
+		UE_LOG(LogTankSim, Log, TEXT("[Tank] %s: MACHINE GUN - opening fire"), *GetName());
+		bWeaponFiring = true;
+		BP_WeaponStartShooting();
+	}
+
+	GetWorldTimerManager().SetTimer(WeaponStopTimerHandle, this,
+		&ATSTankControllerBase::ReleaseWeaponTrigger, MachineGunReleaseDelaySeconds, false);
+}
+
+FRotator ATSTankControllerBase::GetInteriorTurretRotation() const
+{
+	// TurretsRot is the same array the exterior AnimBP reads, so the interior cannot drift out of
+	// step with the gun. Index 0 is the main turret; the array is pre-sized to 10 in the constructor,
+	// but guard anyway - this runs every frame from an AnimBP, including before BeginPlay.
+	if (TurretsRot.Num() == 0)
+	{
+		return FRotator::ZeroRotator;
+	}
+
+	const double Yaw = TurretsRot[0].Yaw * (bInvertInteriorTurretYaw ? -1.0 : 1.0) + InteriorTurretYawOffset;
+
+	// Yaw only. Pitch would tilt the whole crew compartment with the gun.
+	return FRotator(0.0, Yaw, 0.0);
+}
+
+void ATSTankControllerBase::ReleaseWeaponTrigger()
+{
+	if (!bWeaponFiring)
+	{
+		return;
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("[Tank] %s: weapon trigger released"), *GetName());
+	bWeaponFiring = false;
+	BP_WeaponStopShooting();
 }
 
 void ATSTankControllerBase::BP_UpdateCommanderIntel_Implementation(const FTSCommanderIntel& Intel)

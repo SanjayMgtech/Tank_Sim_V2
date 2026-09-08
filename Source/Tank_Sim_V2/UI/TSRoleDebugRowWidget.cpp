@@ -10,6 +10,7 @@
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Tank/TSTankCrewComponent.h"
+#include "UObject/UnrealType.h"
 
 namespace
 {
@@ -29,9 +30,23 @@ UTSRoleDebugRowWidget::UTSRoleDebugRowWidget(const FObjectInitializer& ObjectIni
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 }
 
+void UTSRoleDebugRowWidget::MakeButtonNonFocusable(UButton* Button)
+{
+	if (!Button)
+	{
+		return;
+	}
+	if (FBoolProperty* Prop = FindFProperty<FBoolProperty>(UButton::StaticClass(), TEXT("IsFocusable")))
+	{
+		Prop->SetPropertyValue_InContainer(Button, false);
+	}
+}
+
 UButton* UTSRoleDebugRowWidget::MakeButton(const FString& Label, float MinWidth)
 {
 	UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+
+	MakeButtonNonFocusable(Button);
 
 	FButtonStyle Style = Button->GetStyle();
 	Style.Normal.TintColor = FSlateColor(ButtonIdle);

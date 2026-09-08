@@ -98,6 +98,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	APawn* GetTankForTeam(ETSTeamId Team) const;
 
+#if WITH_DEV_AUTOMATION_TESTS
+	// Test-only. DefaultTankClass is EditDefaultsOnly (Blueprint data, per RULE 2), so an
+	// automation test spawning a raw C++ ATSGameMode has no tank class and every role assignment
+	// fails. This lets the flow test inject a native stand-in without exposing a setter to
+	// gameplay code.
+	void SetDefaultTankClassForTesting(TSubclassOf<APawn> InClass) { DefaultTankClass = InClass; }
+#endif
+
 protected:
 	// Tank Blueprint to spawn per team. Must implement ITSTankInterface directly - the MustImplement
 	// metadata below enforces it in the class picker.
@@ -147,6 +155,13 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
 	FName GameplayMapName = TEXT("Controller_Demo_T90");
+
+	// Gate StartTankMatch on every active team having all three seats filled. Off by default: a solo
+	// or two-player session can never satisfy it, and the match state would stay stuck out of
+	// InProgress forever. The match also still starts on its own the moment AreAllActiveTeamsFullyCrewed
+	// becomes true (see TryAssignRole), so this only affects the host's explicit Start Match.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
+	bool bRequireFullCrewsToStart = false;
 
 	// Capacity of the whole lobby, not of one tank. Renamed from MaxCrewMembers, which defaulted to 3
 	// and so kicked the fourth player to connect - fatal for a two-team match, which needs six.

@@ -5,6 +5,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "InputCoreTypes.h"
 #include "Core/TSTypes.h"
 #include "Engine/NetSerialization.h"
 #include "TSTankPlayerController.generated.h"
@@ -28,6 +29,7 @@ public:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void OnRep_PlayerState() override;
+	virtual void SetupInputComponent() override;
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	APawn* GetAssignedTank() const;
@@ -103,6 +105,79 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
 	void ServerHostClearPlayerAssignment(APlayerState* TargetPlayerState);
 
+	// Host only, re-checked server-side. Ends the assignment phase and starts the match. Deliberately
+	// does NOT require every seat filled: ATSGameMode::bRequireFullCrewsToStart decides that, and it
+	// is off by default so a two-player or solo test can actually get out of the lobby.
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ServerRequestStartMatch();
+
+	// --- Lobby console focus ---------------------------------------------------------------------
+	// Whether this local player's cursor is being lent to the lobby console. This is deliberately NOT
+	// derived from the match state: doing so meant the host held FInputModeGameAndUI (no camera look,
+	// no reliable WASD) for as long as the match had not started - which, before ServerRequestStartMatch
+	// existed, was forever. Focus is now an explicit toggle the player owns.
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void SetLobbyConsoleFocused(bool bFocused);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ToggleLobbyConsoleFocus();
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Lobby")
+	bool IsLobbyConsoleFocused() const { return bLobbyConsoleFocused; }
+
+	// Console command: type "TSLobbyFocus" in the ~ console if the bound key is unavailable.
+	UFUNCTION(Exec)
+	void TSLobbyFocus();
+
+	// --- Test console commands -------------------------------------------------------------------
+	// Drive the whole lobby+gameplay flow from the ~ console, so a listen-server test can be run
+	// headlessly (two -game processes) instead of needing someone to click the lobby UI. Without
+	// these, the tank only ever spawns on a host's mouse click and nothing about the networked crew
+	// path can be automated.
+	//
+	// These grant NO new authority: each one routes through the same Server RPC the UI uses, and the
+	// server re-validates exactly as before - a player can still only assign themselves, and
+	// TSStartMatch is still refused for anyone who is not the host. Bodies compile out of Shipping.
+
+	// TSTeam <A|B|C|D> (or 0-3). Requests a team for THIS player.
+	UFUNCTION(Exec)
+	void TSTeam(const FString& Team);
+
+	// TSRole <Driver|Gunner|Commander> (or 0-2). Requests a crew seat for THIS player.
+	UFUNCTION(Exec)
+	void TSRole(const FString& InRole);
+
+	// Returns this player to unassigned.
+	UFUNCTION(Exec)
+	void TSClear();
+
+	// Host only (re-checked server-side). Ends the assignment phase.
+	UFUNCTION(Exec)
+	void TSStartMatch();
+
+	// TSDrive <throttle> <steering> <seconds>. Holds the drive input for a duration, because a single
+	// call is cleared by Chaos on the next tick and proves nothing.
+	UFUNCTION(Exec)
+	void TSDrive(float Throttle, float Steering, float Seconds);
+
+	// TSFire <cannon|mg> [count]. Gunner only - the server enforces the capability.
+	UFUNCTION(Exec)
+	void TSFire(const FString& Weapon);
+
+	// Logs the assigned tank's gear / RPM / throttle / speed / location. Assert on GEAR and RPM, not
+	// speed: on a sloped map an unpowered tank rolls at ~100 cm/s (see CLAUDE.md).
+	UFUNCTION(Exec)
+	void TSTankStatus();
+
+	// URL options that apply the commands above once this controller is actually ready:
+	//   ...WarZone?listen?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1
+	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoDrive=1,0,8
+	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Gunner?TSAutoFire=cannon
+	// -ExecCmds cannot do this - it runs during engine init, long before a PlayerController or a
+	// PlayerState exists, so the exec silently routes nowhere. These fire on a short delay after
+	// BeginPlay instead, which is what makes an unattended listen-server test possible at all.
+
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerRequestRoleChange(ETSCrewRole NewRole);
 
@@ -164,6 +239,16 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
 	int32 RoleDebugWidgetZOrder = 1000;
 
+	// Toggles the lobby console cursor on/off. A raw FKey binding rather than an input action: this
+	// must work on the host camera pawn and on a crew pawn alike, neither of which owns a lobby IMC.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Lobby")
+	FKey LobbyConsoleFocusKey = EKeys::F1;
+
+	// Give the host the cursor as soon as it reaches a gameplay map, so crews can be assigned without
+	// hunting for the key first. Clients start unfocused - their console rows are read-only.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Lobby")
+	bool bFocusLobbyConsoleOnArrivalForHost = true;
+
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Debug")
 	TObjectPtr<UTSRoleDebugWidget> RoleDebugWidget;
 
@@ -179,8 +264,30 @@ private:
 	// then, so a widget it created in the same frame is caught by the sweep rather than surviving it.
 	void ApplyLocalUIForCurrentMap();
 
+	// Single owner of this client's cursor/input mode. Re-derives it from what is actually on screen
+	// (menu map, a selection panel, or a focused lobby console) instead of letting each caller set a
+	// mode of its own and stomp the others.
+	void ApplyInputModeForLocalState();
+
+	bool IsOnMenuMap() const;
+
 	UFUNCTION()
 	void HandleAssignmentChanged();
+
+	bool bLobbyConsoleFocused = false;
+
+	// TSDrive: repeating timer that re-sends the drive input every tick for the requested duration.
+	FTimerHandle TestDriveTimerHandle;
+	FTimerHandle TestDriveStopTimerHandle;
+	FVector2D TestDriveInput = FVector2D::ZeroVector;
+	void TickTestDrive();
+	void StopTestDrive();
+
+	// Applies the TSAuto* URL options. Staged, because each step depends on the previous one having
+	// round-tripped to the server and replicated back.
+	FTimerHandle AutoAssignTimerHandle;
+	int32 AutoAssignStage = 0;
+	void TickAutoAssign();
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> ActiveTeamSelectionWidget = nullptr;

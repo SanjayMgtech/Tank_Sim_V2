@@ -67,9 +67,34 @@ auto-save recovery modal, which freezes the MCP server until a human dismisses i
 (`LogMonolith: Warning: MODAL_OPEN ... MCP will be unresponsive until dismissed`).
 That costs a human round-trip on every single rebuild.
 
+### 🔁 DO THE REBUILD YOURSELF - never ask the human to close the editor
+Standing instruction from the user (2026-09-07): when a rebuild is needed, close the editor and
+rebuild without asking. `CloseMainWindow()` posts WM_CLOSE, which is exactly the window-close
+button RULE 5 permits - it runs the editor's own shutdown path, not a kill.
+
+```bash
+powershell -NoProfile -Command "Get-Process UnrealEditor -EA SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }"
+# then poll until it is gone - do NOT escalate to Stop-Process if it lingers
+powershell -NoProfile -Command "(Get-Process UnrealEditor -EA SilentlyContinue) -ne $null"
+```
+If the process is still alive after ~60s it is sitting on a **save-content modal**, which only a
+human can dismiss (see the human-only table). Say so and wait; do not force-kill, and do not
+answer the modal by guessing. **Never** save `Controller_Demo_T90.umap` (170 MB) - Don't Save.
+
+Remember the editor is SHARED with other concurrent sessions - closing it interrupts them too.
+Relaunch it as soon as the build finishes.
+
 Full rebuild with the editor closed:
 ```bash
-"C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" Tank_Sim_V2Editor Win64 Development -Project="C:\Users\Admin\Documents\GitHub\Tank_Sim_V2\Tank_Sim_V2.uproject" -WaitMutex -FromMsBuild
+"C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" Tank_Sim_V2Editor Win64 Development -Project="C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" -WaitMutex -FromMsBuild
+```
+`Unable to build while Live Coding is active` in the output means the editor is still up - the
+close did not take. UHT still runs before that error, so a clean UHT pass there proves headers
+parse but proves **nothing** about the `.cpp` files.
+
+Relaunch afterwards:
+```bash
+"C:/Program Files/Epic Games/UE_5.7/Engine/Binaries/Win64/UnrealEditor.exe" "C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject"
 ```
 If Live Coding was used, delete stale patches before relaunching, or the editor may hang/crash:
 ```bash
@@ -142,6 +167,11 @@ This has now bitten twice — `ATSGameMode::TryAssignRole` (named `RequestedRole
 `ATSVRPawn::GetSeatComponentNameForRole` (named `InRole`). Use `InRole`, `CrewRole` or
 `RequestedRole`, never bare `Role`, for parameters AND locals on any `AActor` subclass.
 
+**`Mesh` is the same trap.** `AWheeledVehiclePawn` declares a member `Mesh`, so a loop variable
+`for (USkeletalMeshComponent* Mesh : Meshes)` inside `ATSTankControllerBase` is also a hard error.
+Name it `MeshComp`. Assume any short, obvious name (`Mesh`, `Role`, `Owner`, `Controller`) is
+already taken somewhere in the `AActor` chain.
+
 ### Spawned sessions and git worktrees — Unreal is NOT reachable from a worktree
 `.mcp.json` starts the Monolith proxy from `Plugins/Monolith/Binaries/monolith_proxy.exe`.
 `Plugins/` is **not tracked in git**, so a worktree never contains it and the proxy reports
@@ -160,20 +190,12 @@ stage commits with an explicit pathspec, never `git add -A`.
 |---|---|
 | Rename a Blueprint **function parameter** | No rename-parameter action; `set_function_params` is additive. Done in the function's Details panel; the editor fixes up call sites and keeps connections (verified Phase 15). |
 | Dismiss editor modal dialogs | A modal blocks the game thread, so MCP is unresponsive until a human clicks. Seen with "Save Content", the reload-assets confirm, and the auto-save recovery prompt after a force-kill. |
-| Run PIE as **Listen Server with 2 players** | `run_pie_smoke` / `get_game_world` reach only one PIE world, so server-vs-client values cannot be compared. This is the only way to test replication (the open Phase 9 gap). |
+| ~~Run PIE as Listen Server with 2 players~~ **NO LONGER HUMAN-ONLY** | `run_pie_smoke` still reaches one PIE world, but two `-game` processes give a real listen server + client that a script can drive end to end. See *Automated listen-server testing* below. A human is still needed to JUDGE SMOOTHNESS - logs cannot see jitter. |
 | Drive real gameplay events | e.g. `DamageCausedUI` is only written by a macro reached through an actual damage-caused event; macros are inlined and cannot be invoked directly. |
 | Anything that is a Blueprint **editor-UI** operation with no MCP action | Reordering pins, graph-level refactors. NOTE: editing a macro's internals was previously listed here and is WRONG - `add_node`/`connect_pins` work on a macro graph (proven on `UpdateDamageCausedUI`). Test before declaring something human-only. |
 | Override an **inherited** component's property on a CHILD Blueprint | `set_component_property` only sees a Blueprint's own SCS ("Component not found: DriverSeat" on the child). The override lives in the Inheritable Component Handler, which neither the MCP surface nor Python can create. `SubobjectDataSubsystem` can *read* it (`k2_gather_subobject_data_for_blueprint`). Select the component in the child's Components panel and type the value; verify with `get_inherited_component_override`. |
-| Test anything in **VR** | No headset is reachable from script. `run_pie_smoke` renders flat, and `UTSVRModeLibrary::IsHMDAvailable()` is false in the editor, so the VR branch is never taken. Stereo, head-driven aim and motion-controller keys can only be confirmed by a human wearing the headset. |
 
 ### Open hand-offs (keep current)
-- 🔻 **REVERT `bVRTestAutoAssign`** on `ATSTeamMatchGameMode` once VR is verified (added
-  2026-09-07). It suppresses host designation and force-assigns a seat so one PIE run puts you
-  in a headset; shipping it would let any joining player bypass the host-admin rule. See the VR
-  section.
-- **VR has never run in an actual headset.** Everything in the VR section is compile-verified
-  and reload-verified only. Needs a rebuild of the EDITOR target (new UPROPERTYs) and a human
-  wearing the thing.
 - ~~Replication test~~ **DONE 2026-09-04.** A/B listen-server test showed identical behaviour  before and after the port. Phase 9 verified; the remaining turret faults are pre-existing  feature gaps, documented separately.
 - **Parameter renames** are only needed if a port hits shadowing. `WheelRotationDefinition`
   turned out NOT to need one (Phase 17) - its tuning arrives as parameters. Ask only when a
@@ -876,6 +898,163 @@ Native property count: **65 → 60**. The `DOREPLIFETIME` for `Rep_ControlRotati
 Verified after: BP `UpToDate`, 0 errored BPs, PIE clean (0 `Accessed None`, 0 index warnings),
 tank drove 379 units, turret/wheels/sagging all still working.
 
+## 🗺 END-TO-END LOGIC FLOW (traced from code 2026-09-07 — read this before touching the framework)
+
+Menu → session → travel → lobby → assignment → spawn → gameplay request. Traced from the source,
+not inferred. **Section 8 below records a genuine contradiction between two parallel workstreams —
+read it before building on either side.**
+
+### 1. Boot and the menu map
+```
+GameDefaultMap / EditorStartupMap = /Game/TankSimulation/Maps/MainMenu
+MainMenu World Settings GameMode  = /Game/TankSimulation/Blueprints/BP_TSGameMode
+```
+`UTSUISubsystem` hardcodes `MenuMapNames = { "MainMenu" }` and treats widgets whose class name
+contains Login / SessionBrowser / SessionList / MainMenu / HostMenu as menu widgets. On every
+**non-menu** map load it sweeps them from the viewport, because a widget owned by the
+GameInstance survives `ServerTravel` and would otherwise sit on top of the game.
+
+**Nothing in C++ creates the menu widgets.** The only `CreateWidget` calls are the role-debug and
+team/role-selection panels. `BP_TSGameMode` creates none. So `WBP_Login` / `WBP_SessionBrowser`
+must be spawned by the MainMenu **level Blueprint** (or a menu GameMode). That is the Blueprint
+side of the boundary, and it is where to look when "the menu shows nothing".
+
+### 2. Hosting
+```
+WBP_SessionBrowser
+  → UTSGameInstance::CreateSession(MaxPlayers, bIsLAN, bIsPresence, MapPath)   [BlueprintCallable]
+  → UTSSessionSubsystem::CreateSession
+       destroys a stale NAME_GameSession first and re-enters from the destroy callback
+       generates a lobby code, broadcasts OnLobbyCodeGenerated
+  → HandleCreateSessionComplete(success)
+  → World->ServerTravel("<MapPath>?listen?LobbyCode=<code>")
+```
+`MapPath` empty falls back to **`/Game/TankSimulation/Maps/WarZone`**. `bUseLobbiesIfAvailable` is
+deliberately false — `OnlineSubsystemNull` has no lobby backend.
+
+### 3. Joining
+```
+FindSessions → HandleFindSessionsComplete → results list
+JoinSession(index) → HandleJoinSessionComplete
+  → GetResolvedConnectString → PC->ClientTravel(ConnectString, TRAVEL_Absolute)
+```
+
+### 4. Arrival: who becomes host
+`ATSGameMode::PostLogin` designates the host **before** `Super::PostLogin`, because the parent
+restarts the player and `GetDefaultPawnClassForController` reads `bIsHost` to choose the pawn.
+Designating afterwards spawns the host into the wrong pawn.
+
+| NetMode | Host designation |
+|---|---|
+| Listen server | the local controller (whoever created the session) |
+| Dedicated server | first to connect, unless `bFirstPlayerHostsOnDedicatedServer` is off |
+| **Standalone** | **nobody** — by design, or the lone player would spawn into the free camera with no way to play |
+
+That last row explains a confusing observation: in PIE the play mode has been left on **listen
+server**, so player 0 comes up as host with `TSHostCameraPawn`. A true standalone run has no host
+at all and the player is an ordinary crew candidate. **Check the net mode before drawing any
+conclusion about host behaviour.**
+
+The host holds **no team, no crew role and no seat** — `TryAssignTeam` and `TryAssignRole` both
+refuse `PS->IsHost()` outright — and possesses `HostCameraPawnClass` (`ATSHostCameraPawn`).
+
+### 5. Team and role assignment — TWO paths
+```
+self-serve : ServerRequestTeamChange / ServerRequestRoleChange        (a player picks their own)
+host-driven: ServerHostAssignPlayerToTeam / ...ToRole / ...ClearPlayerAssignment
+```
+Both land on `ATSGameMode::TryAssignTeam` / `TryAssignRole`. The host RPCs **re-check
+`IsMatchHost()` server-side** — a Server RPC's `HasAuthority()` is trivially true, so without that
+any client could assign anyone.
+
+`bAutoShowSelectionUI` defaults to **false**: the intended lobby is host-driven, so no selection
+panel pops up on its own. Set it true for a free-for-all lobby.
+
+### 6. Tank spawn
+One tank per team, created lazily by `GetOrSpawnTankForTeam` on first team/role assignment.
+`bPreSpawnTeamTanks` (default off) instead spawns `NumTeamsToPreSpawn` tanks at BeginPlay.
+
+Spawn transform comes from an actor **tagged** `TSTeamSpawn_TeamA`..`TeamD`, or a `PlayerStart`
+with that `PlayerStartTag`. With neither it logs a warning and falls back to a world-origin offset
+at **z=200** — which is a long drop and will leave the tank bouncing on a low floor.
+
+### 7. A gameplay request, end to end
+```
+VR pawn input → ATSTankPlayerController::Server<Action>          (the PC owns a NetConnection)
+              → PS->GetAssignedTank() → FindComponentByClass<U...Component>
+              → Try<Action>(Requester, ...)
+                   factor 1: FTSPermissions::HasFullAccess(role, capability)
+                   factor 2: Crew->HasAccess(Requester, RequiredRole)   ← seat ON THIS TANK
+              → writes replicated state → OnRep_ → ITSTankInterface::Execute_BP_<Action>
+              → Blueprint does the tank-specific work
+```
+**Every Server RPC lives on the PlayerController**, never on the tank, because a Server RPC is
+silently dropped unless the calling client owns the actor.
+
+### 8. ⚠ A DORMANT possession path (originally mis-recorded here as a live contradiction)
+
+Two parallel workstreams disagree, and the code currently contains both answers.
+
+**`ATSGameMode::HandlePlayerReadyToSpawn` possesses the tank:**
+```cpp
+APawn* Tank = GetOrSpawnTankForTeam(TeamId);
+if (Tank) { PlayerController->Possess(Tank); }
+```
+
+**The three-crew design says nobody possesses it.** A Pawn has exactly one Controller, so
+possession cannot give three crew members a tank each; they possess their own `ATSVRPawn` and
+reach the tank through validated RPCs. Built on that assumption:
+- `IsLocalGunnerOfThisTank()`, added precisely because `IsLocallyControlled()` is false on an
+  unpossessed tank
+- `bRequiresControllerForInputs=False` on all six tanks, because Chaos discards input when there
+  is no controller
+- crew seat attachment in `ATSVRPawn::UpdateCrewStationAttachment`
+
+Both cannot be right. Under the possession path only one crew member gets the tank and the other
+two have no pawn relationship to it; under the three-crew path `HandlePlayerReadyToSpawn` should
+seat the player rather than possess.
+
+**CORRECTION after tracing further: the possession path is currently UNREACHABLE, so the two
+models are not actually fighting.** `HandlePlayerReadyToSpawn` returns immediately when the
+controller already has a pawn:
+```cpp
+if (!PlayerController || PlayerController->GetPawn()) { return; }
+```
+`AGameModeBase::PostLogin` has already restarted the player into `DefaultPawnClass`
+(`BP_TSVRPawn`), so a PlayerController always has a pawn by then and the `Possess(Tank)` line
+never runs. `ReadyToSpawn` is BlueprintCallable and nothing calls it yet either.
+
+Measured confirmation: the tank reports `controller=None, locallyControlled=False` at runtime,
+host players get `TSHostCameraPawn` and everyone else `BP_TSVRPawn`.
+
+So **the VR-pawn model is the one executing**, and the three-crew work built on it is consistent
+with reality. The possession code is a leftover that would only fire for a pawnless controller.
+Decide deliberately whether to delete it or wire `ReadyToSpawn` into the lobby flow — but it is
+dormant, not a live conflict. The turret predicates are additive
+(`HasAuthority() || IsLocallyControlled() || IsLocalGunnerOfThisTank()`) and hold either way.
+
+### 9. Known holes at the time of tracing
+- `MainMenu.umap` and `WarZone.umap` are **untracked** — `.gitignore` line 86 excludes
+  `/Content/TankSimulation/Maps`. Only `M_FrameworkTest` is tracked. A fresh clone gets no menu
+  map and cannot launch.
+- `BP_TeamMatchGameMode` is referenced by nothing.
+- `UTSRoleDefinition` (`DA_Role_Driver/Gunner/Commander`) is referenced by no C++ at all.
+- `UTSVoiceSubsystem` logs `no IVoiceChat implementation is loaded - voice will be a no-op`.
+- Standalone logs `Using CommonUI without a CommonGameViewportClient derived game viewport client`
+  — CommonUI input routing will misbehave until the viewport client class is set.
+
+### 10. Running the game standalone from Git Bash
+A `/Game/...` argument gets rewritten by MSYS path translation into
+`C:/Program Files/Git/Game/...` and the map load fails. Prefix the command with
+`MSYS_NO_PATHCONV=1`:
+```bash
+MSYS_NO_PATHCONV=1 "C:/Program Files/Epic Games/UE_5.7/Engine/Binaries/Win64/UnrealEditor.exe" \
+  "C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" "/Game/TankSimulation/Maps/MainMenu" \
+  -game -windowed -resx=1280 -resy=720 -log -abslog="...\Saved\Logs\Standalone.log"
+```
+
+---
+
 ## Unreal multiplayer — the model, and why this tank's turret does not replicate
 Researched from Epic's docs (links at the end of this section). Read this before touching
 anything networked in this project.
@@ -1357,169 +1536,210 @@ changes add `UPROPERTY`s, so Live Coding cannot carry them.
 
 ---
 
-## ✅ VR mode — headset when present, flat when not (2026-09-07)
+## ⚙ `bRequiresControllerForInputs` — the flag the whole crew model depends on
 
-Feature work, like the multiplayer fixes: own commits, own manual test. One build runs both ways;
-there is no VR build, no VR map and no VR toggle. `ATSVRPawn::ApplyVRMode` decides on possession,
-per client, from "is a headset connected" and "is this player allowed one".
+**Verified 2026-09-07 by reading the Chaos source and measuring, after this cost a long
+debugging session.** An earlier note in this file claimed the flag was already False on all six
+tanks. It was **True on all seven Blueprints, master included** — the value had never persisted.
 
-C++: `Source/Tank_Sim_V2/Player/TSVRModeLibrary.{h,cpp}` (the one place that answers both
-questions), plus VR handling on `ATSVRPawn`, host exclusion on `ATSHostCameraPawn`.
+`ChaosVehicleMovementComponent.cpp:1177`:
+```cpp
+bool bProcessLocally = bRequiresControllerForInputs
+    ? (Controller && Controller->IsLocalController()) : true;
 
-### ⚠ UE 5.7 has NO generic `MotionController_*` keys
-This is the VR analogue of the `DefaultKeyMappings` trap, and it fails exactly as silently.
-
-XR keys are **per controller profile**, declared in
-`Engine/Source/Runtime/InputCore/Classes/InputCoreTypes.h`:
+if (bProcessLocally && PVehicleOutput)
+{
+    // automatic gear shift 0 -> 1 lives HERE
+    // CalcThrottleBrakeInput  lives HERE
+    // the entire mechanical simulation lives HERE
+}
 ```
-OculusTouch_Left_Trigger_Click   ValveIndex_Right_Thumbstick_2D   Vive_Left_Trackpad_2D  ...
+Nobody possesses the tank under the three-crew model, so `Controller` is null and
+`bProcessLocally` was false.
+
+**The failure mode is silent and looks exactly like success.** `SetThrottleInput` still stores
+`RawThrottleInput = 1.0`, so `GetThrottleInput()` reads 1.0 and every log line up the chain looks
+right. What does not happen: the gearbox never leaves **Neutral (gear 0)** and the engine never
+revs above its **600 RPM idle**. Symptom: "the tank does not move" with no error anywhere.
+
+| | before | after |
+|---|---|---|
+| gear | 0, never shifts | 0 → 1 → 2 |
+| engine RPM | 600 (idle) | 804 |
+| forward speed | ~100 cm/s (sliding downhill) | 513 cm/s under power |
+
+**Children do NOT inherit the master's value.** Each per-tank Blueprint holds its own stored
+override, so setting it on `BP_TankController_Chaos` alone changes nothing. Set it on all seven
+and verify:
+```python
+mv = [c for c in cdo.get_components_by_class(unreal.ChaosVehicleMovementComponent)][0]
+mv.set_editor_property('bRequiresControllerForInputs', False)
 ```
-`grep MotionController InputCoreTypes.cpp` returns **0 hits**. Binding `MotionController_Left_*`
-compiles, saves, exports and does nothing at all.
+`set_component_property` also works, and works on children too, despite the human-only table's
+warning about inherited-component overrides — that warning is about creating a *new* override;
+changing one that already exists is fine.
 
-**`FKey` import does not validate.** Proven: `Key.import_text("TotallyFakeKey123")` round-trips
-verbatim. There is no Python-side validity check either — `KismetInputLibrary` is not exposed and
-`get_all_keys` does not exist. So a key name cannot be verified after the fact from script.
-**Read the name out of `InputCoreTypes.h` before authoring it**, or pick it in the editor's key
-picker, which only offers real keys.
+### ⚠ Speed is NOT evidence on a sloped map
+The WarZone spawn is on an incline and an unpowered tank rolls at **~100 cm/s with
+`CurrentDriveInput = (0,0)`**. Forward speed and displacement therefore cannot distinguish
+"driving" from "sliding downhill", and were used to wrongly report success twice in one session.
+Assert on **gear** and **engine RPM** instead, or on speed well above the roll rate.
 
-Real asymmetries in that header — these look like typos and are not:
-- only `OculusTouch_LEFT_Menu_Click` exists; there is no Right equivalent
-- Index has `Grip_Axis` / `Grip_Force`, **no** `Grip_Click`
-- Vive has a **trackpad**, no thumbstick
-- Touch left is X/Y, right is A/B
+### ⚠ Injecting an input ACTION skips the key mapping
+`pie_inject_input_action` calls `InjectInputForAction`, which starts at the Input Action and
+therefore proves nothing about the IMC key bindings — the exact layer UE 5.7's
+`DefaultKeyMappings` deprecation breaks. A pass there means "the action is wired", not "W works".
+To test the key layer you need a human at the keyboard, or a check of the live
+`DefaultKeyMappings` array.
 
-**A thumbstick needs no swizzle.** `IA_Drive` is Axis2D; WSAD needed Swizzle/Negate because a 1D
-key only writes X, but `*_Thumbstick_2D` is already Axis2D and maps straight through.
-
-### ⚠ In VR the Gunner's aim fires NO input action
-The aim trace hung off `IA_AimTurret`. In a headset the player aims by turning their head, which
-triggers no action, so the trace would never have run — the turret would have sat frozen for the
-whole session with nothing in the log, on a code path that works perfectly on a desktop.
-
-The trace now lives in `UpdateGunnerAim()`, called from the input action on a desktop **and from
-`Tick` in VR**. Tick is enabled only for a local VR Gunner (`UpdateAimTickEnabled`), so no other
-crew pawn pays for it. `IMC_Gunner` deliberately has **no** motion-controller binding for
-`IA_AimTurret` — head aim is the mechanism.
-
-Generalise: **any input-driven feature has to be re-checked for VR, because the HMD generates pose,
-not events.** Anything that only runs on an action callback is dead in a headset.
-
-### The host is never VR, and stereo alone is not enough to make that true
-Two separate things keep the host flat, and killing only one leaves a broken half-state:
-1. stereo rendering off (`UTSVRModeLibrary::SetVRModeEnabled(false)`), and
-2. `Camera->bLockToHmd = false`.
-
-Head tracking can be live while stereo is off, so a host with (2) still set gets a flat screen that
-swings around with a headset sitting on the desk. `ATSHostCameraPawn::NotifyControllerChanged`
-does both, guarded on `IsLocalController` — doing it for a remote copy would switch VR off on
-somebody else's machine.
-
-`ApplyVRMode` also re-checks `PS->IsHost()` rather than relying on pawn choice alone, so the rule
-survives a future spectate mode that hands a host a crew pawn.
-
-### Tracking origin: `Local`, not floor or stage
-A crew member is strapped into a chair, and the seat scene component already marks where their head
-goes. `EHMDTrackingOrigin::Local` centres tracking on the headset's start pose, so the head lands at
-the seat. `LocalFloor`/`Stage` would put the player's head on the tank's floor.
-
-### Build wiring
-`UHeadMountedDisplayFunctionLibrary` lives in the **XRBase plugin** in UE5; the types
-(`EHMDTrackingOrigin`) stayed in the **HeadMountedDisplay module**. Both are needed. XRBase also has
-to be listed in `Tank_Sim_V2.uproject` — UBT warns
-`does not list plugin 'XRBase' as a dependency` and that would bite at packaging time, not here.
-
-### Widget interaction is scaffolding, not a feature
-No crew widgets exist yet. What is in place: a **deactivated** `UWidgetInteractionComponent` on the
-right hand, `IMC_VR_Widget` (IA_Primary on the right trigger), and
-`ATSVRPawn::SetVRWidgetInteractionEnabled(bool)`, which points the laser and adds that context at
-**priority 3** — above the role context — so the trigger clicks the widget instead of firing the
-gun. Call it when a widget is shown/hidden; nothing guesses.
-
-### 🔻 TEMPORARY — `bVRTestAutoAssign` must be reverted
-`ATSTeamMatchGameMode` has a VR bring-up shortcut, off by default:
+### Open question for multiplayer
+With the flag False, `bProcessLocally` is true on **every** machine, so each client runs the
+mechanical simulation on its own copy rather than only the authority. Epic leaves a comment right
+above that line asking the same thing:
+```cpp
+// IsLocallyControlled will fail if the owner is unpossessed (i.e. Controller == nullptr);
+// Should we remove input instead of relying on replicated state in that case?
 ```
-bVRTestAutoAssign   bool         suppresses host designation, force-assigns the joining player
-VRTestTeam          ETSTeamId    default TeamA
-VRTestRole          ETSCrewRole  change between runs to test each seat
+Untested here. Watch for the same class of fault as the turret jitter (two writers fighting) in a
+two-window listen-server test. Single-player and server-side driving are verified.
+
+## 🤖 Automated listen-server testing (added 2026-09-07)
+
+Two `-game` processes give a real server/client pair with a real NetDriver, which `run_pie_smoke`
+cannot. The blocker used to be that a tank only spawns when a host clicks the lobby UI; the
+`TSAuto*` URL options remove that.
+
+```bash
+# server
+MSYS_NO_PATHCONV=1 "C:/Program Files/Epic Games/UE_5.7/Engine/Binaries/Win64/UnrealEditor.exe" \
+  "C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" "/Game/TankSimulation/Maps/WarZone?listen" \
+  -game -windowed -resx=800 -resy=450 -log -abslog="C:\Projects\Tank_Sim_V2\Saved\Logs\MPServer.log" &
+
+# client - assigns itself and drives, unattended
+MSYS_NO_PATHCONV=1 "C:/Program Files/Epic Games/UE_5.7/Engine/Binaries/Win64/UnrealEditor.exe" \
+  "C:\Projects\Tank_Sim_V2\Tank_Sim_V2.uproject" "127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoDrive=1,0,8" \
+  -game -windowed -resx=800 -resy=450 -log -abslog="C:\Projects\Tank_Sim_V2\Saved\Logs\MPClient.log" &
 ```
-Normal flow needs a host plus crew, which makes "put the headset on and check the Driver's stick" a
-two-person job. With this on, one Play-In-Editor run drops you straight into a seat.
+Wait on `grep -aq "TSAuto: sequence complete"` in the client log, then diff the two logs. Close
+both with `CloseMainWindow()`, never a kill.
 
-It **bypasses the host-admin rule on purpose**, which is exactly why it must not ship.
-`ShouldDesignateAsHost` was made `virtual` so the flag can suppress host designation *before*
-`GetDefaultPawnClassForController` reads `bIsHost` — designating afterwards would spawn the wrong
-pawn. Every assignment logs a `Warning` naming the flag.
+**`-ExecCmds` does NOT work for this.** It runs during engine init, long before a PlayerController
+or PlayerState exists, so an exec routes nowhere and logs *nothing at all* — which reads as "the
+command is broken" rather than "it ran too early". That dead end is why the URL options exist.
 
-**Revert `bVRTestAutoAssign` (and the override that supports it) once VR is verified.**
+Console commands (also usable by hand in `~`): `TSTeam A|B|C|D`, `TSRole Driver|Gunner|Commander`,
+`TSClear`, `TSStartMatch`, `TSDrive <throttle> <steering> <seconds>`, `TSTankStatus`. They route
+through the same Server RPCs the UI uses, so server validation is unchanged and they grant no extra
+authority. Bodies compile out of Shipping.
 
-### WarZone team spawn points
-`TSTeamSpawn_TeamA..D` are now four `TargetPoint`s in `WarZone`, ground-traced and placed as two
-opposing lines (A/C face +X at -2600, B/D face back at +1400). Without them
-`GetSpawnTransformForTeam` falls back to a world-origin offset and logs a warning.
-**`Content/TankSimulation/Maps` is git-ignored, so WarZone.umap is local-only** — these actors are
-not in the repo and will not reach another clone.
+**`TSDrive` holds the input on a timer, and must.** One `ServerSetDriveInput` is cleared by Chaos on
+the very next tick; a single call measures a stationary tank and looks like a failure. Same trap as
+calling a drive RPC in a Python loop — every call lands in one frame.
 
-### ⚠ Never toggle stereo during possession — it crashes in SetupPlayerInputComponent
-First run in a real headset crashed with this stack and nothing in the log:
+**Still human-only:** judging whether the client's *view* is smooth. Logs prove values, not jitter.
+
+## 🪑 Crew seats, the interior mesh, and the turret (2026-09-08)
+
+### Seats were all bolted to the HULL — two of the three were wrong
+`DriverSeat` / `GunnerSeat` / `CommanderSeat` are SCS scene components at the root of
+`BP_TankController_Chaos`, i.e. attached to the hull. That is correct for the Driver and wrong for
+the other two: a Gunner and Commander sit in the turret basket and must traverse with the gun, or
+the turret swings around them while they stay facing the hull's forward.
+
+**It cannot be fixed by parenting in the Blueprint through this tooling.** The seats are SCS
+components and the turret bone lives on `VehicleMesh`, an inherited NATIVE component;
+`reparent_component` only sees SCS nodes and answers `New parent component not found: VehicleMesh`.
+So `ATSTankControllerBase::AttachTurretCrewSeats()` does it at BeginPlay instead, with
+**KeepWorldTransform** — designers keep placing seats in the viewport in hull space exactly as
+before, and the attach only changes what they RIDE. RULE 8 stays intact: placement is still
+Blueprint data.
+
+`TurretSocketName` (default `turret`) and `TurretMountedSeatComponents` (Gunner + Commander, the
+Driver deliberately absent) are `EditDefaultsOnly`. The vendor meshes share the `turret` bone name
+— verified on both the VK1602 and the T90.
+
+Measured with the turret at 135°: Driver moved 0.6uu (stayed in the hull), Gunner 65uu and
+Commander 69uu (swung with the turret).
+
+### Interior crew compartment is a SEPARATE skeletal mesh with its own skeleton
+On the VK1602 it is the `Tank_SkeletalMesh` component (asset `Tank_New`, skeleton
+`Tank_New_Skeleton`) — **not** the hull's `SK_VK1602Leopard`. It had **no AnimClass at all**, so
+nothing drove its bones and the interior turret basket never moved.
+
+`ABP_VK1602Leopard_Interior` now drives bone `b_Upper` from `GetInteriorTurretRotation()`, which
+reads `TurretsRot[0].Yaw` — the same array the exterior turret uses, so the two cannot drift apart.
+
+**Transform (Modify) Bone must be Additive in COMPONENT space.** Bone space put the yaw onto the
+bone's *pitch* (its local frame is rolled ~90°), and Replace mode wipes the bind orientation
+entirely. Verified: turret +135.145 -> bone +135.11 from bind, turret -44.870 -> bone -44.90, with
+pitch ~0 and roll preserved.
+
+`USkeletalMeshComponent` has **no** `SetBoneRotationByName` — that is on `UPoseableMeshComponent`.
+An AnimBP is the only route for a skeletal mesh.
+
+Other bones on that skeleton, unused so far: `b_Lower`, `b_Brake`, `b_Brake_001`, `b_Gas`,
+`b_L_Lever`, `b_R_Lever` (driver controls).
+
+### ⚠ Interior animation lagged a frame behind the gun — it was TICK ORDER
+`TurretsAndGunsRotCalculation` writes `TurretsRot` in the pawn's Event Tick, but the interior mesh
+could evaluate its AnimBP *before* that ran, drawing last frame's angle while the exterior gun drew
+this frame's. Only the interior shows it, because `VehicleMesh` is the root and does not have the
+problem. `SyncInteriorMeshTickToPawn()` calls `AddTickPrerequisiteActor(this)` on every non-root
+skeletal mesh. The root is deliberately skipped — it carries the vehicle physics.
+
+Logs prove ordering, never smoothness. **Whether the lag is visually gone still needs a human.**
+
+## 🎯 Team spawn points
+
+`ATSGameMode::GetSpawnTransformForTeam` takes any actor tagged `TSTeamSpawn_TeamA`..`TeamD`, or a
+`PlayerStart` with that `PlayerStartTag`. WarZone had none, so tanks fell in at a world-origin
+offset of z=200.
+
+Two `TargetPoint`s are now placed and tagged, on ground chosen by a slope survey (sample a 600uu
+footprint, take the spots with the smallest height spread):
 ```
-ATSVRPawn::SetupPlayerInputComponent   TSVRPawn.cpp:360
-ATSGameMode::PostLogin                 TSGameMode.cpp:207   <- Super::PostLogin
-ATSTeamMatchGameMode::PostLogin        TSTeamMatchGameMode.cpp:28
+TSTeamSpawn_TeamA  (-4000, -1000, -277.8)  yaw  90   ground spread 11.7uu
+TSTeamSpawn_TeamB  (-4000,  1800, -389.5)  yaw -90   ground spread 20.3uu
 ```
-The reported line is a red herring — it is a null-guarded `BindAction`. The real cause is the
-frame below it. `ApplyVRMode` ran from `PossessedBy`, which is inside
-`AGameModeBase::RestartPlayer` inside `PostLogin`: **possession is still in progress and
-`SetupPlayerInputComponent` has not run yet.** `EnableHMD(true)` rebuilds the viewport and its
-render target, so flipping stereo there pulls the ground out from under the input setup that runs
-immediately afterwards.
+**Flat ground is not cosmetic.** The first attempt put TeamA on a slope where the tank slid
+backwards, and `ThrottleControl` then correctly applied FULL BRAKE (`Select(Throttle, Throttle*-1,
+bPickA = Throttle>0 AND ForwardSpeedMPH < -1)`) — so pressing forward locked the tank. It read as
+"driving is broken" and was not. On the flat spawn the tank reports `speed=0.0` at rest, which also
+makes speed a usable signal again.
 
-**Anything that rebuilds the viewport must be deferred out of the possession/restart call stack.**
-`ApplyVRMode` now does `SetTimerForNextTick(... ApplyVRModeDeferred)`. The role mapping context is
-still applied synchronously — that is plain Enhanced Input bookkeeping and is safe there.
+### ⚠ `unreal.Rotator(a, b, c)` is (ROLL, PITCH, YAW)
+Passing a yaw into the second slot pitches the spawn point 90°, and the tank arrives **upside
+down**. That is what happened on the first attempt.
 
-Make the toggle idempotent too. Under **Play > VR Preview stereo is ALREADY on**, so an
-unconditional `EnableHMD(true)` re-initialised the stereo device on every possession for no reason.
-`SetVRModeEnabled` now early-outs when `IsVRModeActive() == bEnable`, which removes the churn
-entirely in the normal case.
+### ⚠ WarZone.umap is GITIGNORED
+`.gitignore:86` excludes `/Content/TankSimulation/Maps`, so these spawn points do NOT survive a
+fresh clone. Un-ignore that folder, or re-place them per checkout.
 
-### ⚠ OpenXR never sees your Enhanced Input bindings unless they are in the PROJECT settings
-The log said it outright, and it is easy to scroll past:
-```
-LogHMD: Warning: No mapping context provided in the OpenXR Input project settings, action
-bindings will not be visible to the OpenXR runtime.
-```
-`OpenXRInput.cpp` builds its action set **at session start** from
-`UEnhancedInputDeveloperSettings::DefaultMappingContexts` (Project Settings > Engine > Enhanced
-Input). Empty list means it calls `BuildLegacyActions` instead and **no motion-controller binding
-reaches the runtime, however correct the IMC assets are.** Adding a context at runtime from the
-pawn is too late and does not count.
+### ⚠ Python `Vector` will not convert to `Vector_NetQuantize`
+`pc.server_aim_turret(unreal.Vector(...))` throws `NativizeStructInstance: Cannot nativize
+'Vector' as 'Vector_NetQuantize'`. Two test runs were misread as "the turret does not respond"
+before the type error was spotted. Use `unreal.Vector_NetQuantize(x, y, z)`.
 
-Registered in `Config/DefaultInput.ini`:
-```ini
-[/Script/EnhancedInput.EnhancedInputDeveloperSettings]
-bEnableDefaultMappingContexts=True
-+DefaultMappingContexts=(InputMappingContext="/Game/.../IMC_Driver.IMC_Driver",Priority=0,bAddImmediately=False,...)
-```
-**`bAddImmediately=False` is load-bearing.** It exposes the context to OpenXR without Enhanced Input
-auto-applying it to every local player — applying them all would hand the Driver the Gunner's
-bindings and destroy the role gating. `ATSVRPawn` still decides who gets which context.
+## 🔫 Firing
 
-(Also note the header's own caveat: these contexts must live in the game's root Content directory,
-not a plugin.)
+The tank's real firing is `StartShooting` / `StopShooting` on `BP_TankWeapon` — a hold-to-fire
+pair, while `ITSTankInterface`'s fire events are single discrete requests. `BP_TankWeapon_C` is a
+Blueprint-generated type C++ cannot name, so the master Blueprint implements two one-node events,
+`BP_WeaponStartShooting` / `BP_WeaponStopShooting`, and C++ keeps the timing:
+- `BP_FireMainCannon` holds the trigger `MainCannonTriggerHoldSeconds` (0.15) then releases.
+- `BP_FireMachineGun` starts on the first request and pushes the release out
+  `MachineGunReleaseDelaySeconds` (0.25) each frame, so the gun stops when requests stop arriving.
+  Must comfortably exceed one frame — `ServerFireMachineGun` is Unreliable.
 
-### Recentre needs a live head pose
-`Could not retrieve a valid head pose for recentering` on every run: the auto-recentre fired before
-the XR session produced a pose, so it silently did nothing. Guarded on
-`UTSVRModeLibrary::IsHeadTrackingActive()` now; if tracking is not up yet the player still has the
-Recenter button.
+Verified reaching `StartShooting -> FireWeapon -> UpdateWeaponAmmo -> ReloadWeapon`.
 
-### Still owed a human test
-Nothing here has run in an actual headset. The pawn changes add `UPROPERTY`s, so Live Coding cannot
-carry them: close the editor and rebuild the **editor** target first.
-
-
----
+### `WeaponReloadUI` was an infinite per-tick loop without a HUD
+It is `Switch on Int -> Reload Weapon UI macro -> NotReloaded -> Delay Until Next Tick -> retry`.
+The macro reads `HUD`, which no tank has under the crew model (nobody possesses the tank), so it
+never completed and span every tick on every server tank after the first shot. Now guarded with
+`Branch(IsValid(HUD))` at the event entry. This is the exception to the earlier note that
+`ReloadWeaponUI` must not be guarded — that warning was about the *function's* two exec outputs;
+this event's only consumer is its own retry loop.
 
 ## 6. Test Procedure (run after every phase)
 
