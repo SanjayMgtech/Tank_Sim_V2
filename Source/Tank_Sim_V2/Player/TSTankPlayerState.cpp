@@ -10,6 +10,7 @@ void ATSTankPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(ATSTankPlayerState, CrewRole);
 	DOREPLIFETIME(ATSTankPlayerState, AssignedTank);
 	DOREPLIFETIME(ATSTankPlayerState, bIsHost);
+	DOREPLIFETIME(ATSTankPlayerState, PlayMode);
 }
 
 void ATSTankPlayerState::CopyProperties(APlayerState* PlayerState)
@@ -27,6 +28,10 @@ void ATSTankPlayerState::CopyProperties(APlayerState* PlayerState)
 		// instead of the free-roam camera (CopyProperties runs before HandleStartingNewPlayer).
 		NewPlayerState->bIsHost = bIsHost;
 
+		// Carried for the same reason as the seat: a player who put a headset on in the lobby must
+		// still be in VR after the match travels to the battle map.
+		NewPlayerState->PlayMode = PlayMode;
+
 		// Deliberately not AssignedTank: that actor belongs to the world being left behind. The
 		// GameMode spawns the team's tank again on the new map and re-seats the crew there.
 		NewPlayerState->AssignedTank = nullptr;
@@ -43,6 +48,7 @@ void ATSTankPlayerState::OverrideWith(APlayerState* PlayerState)
 		CrewRole = OldPlayerState->CrewRole;
 		AssignedTank = OldPlayerState->AssignedTank;
 		bIsHost = OldPlayerState->bIsHost;
+		PlayMode = OldPlayerState->PlayMode;
 	}
 }
 
@@ -83,6 +89,16 @@ void ATSTankPlayerState::SetIsHost(bool bNewIsHost)
 		return;
 	}
 	bIsHost = bNewIsHost;
+	OnRep_Assignment();
+}
+
+void ATSTankPlayerState::SetPlayMode(ETSPlayMode NewPlayMode)
+{
+	if (!HasAuthority() || PlayMode == NewPlayMode)
+	{
+		return;
+	}
+	PlayMode = NewPlayMode;
 	OnRep_Assignment();
 }
 

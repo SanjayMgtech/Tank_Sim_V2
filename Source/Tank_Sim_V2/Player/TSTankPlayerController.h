@@ -10,6 +10,7 @@
 #include "Engine/NetSerialization.h"
 #include "TSTankPlayerController.generated.h"
 
+class ATSCrewPawn;
 class ATSTankPlayerState;
 class UTSRoleDebugWidget;
 class UTSSessionSubsystem;
@@ -28,6 +29,7 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void OnRep_PlayerState() override;
 	virtual void SetupInputComponent() override;
 
@@ -36,6 +38,46 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Session")
 	UTSSessionSubsystem* GetSessionSubsystem() const;
+
+	// --- Desktop / VR: this player's two bodies ---------------------------------------------------
+	// A crew member owns one pawn of EACH play mode for the whole session and possesses whichever one
+	// their assigned mode calls for; the other is parked (hidden, unpossessed). Holding both means a
+	// mid-match switch is a possession swap rather than a spawn, so nothing has to be rebuilt and no
+	// other machine sees an actor appear.
+	//
+	// Both are spawned and assigned by ATSGameMode::EnsureCrewPawnsFor on the server. They replicate
+	// to this player alone (COND_OwnerOnly) - nobody else needs to know which bodies you keep.
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew")
+	ATSCrewPawn* GetCrewPawnForMode(ETSPlayMode Mode) const;
+
+	// Server only. Called by the GameMode as it spawns or adopts each pawn.
+	void SetCrewPawnForMode(ETSPlayMode Mode, ATSCrewPawn* CrewPawn);
+
+	// Server only. Tears down both, including the parked one the engine knows nothing about.
+	void DestroyCrewPawns();
+
+	// This player's assigned mode, read from the PlayerState. Desktop before one has replicated.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew")
+	ETSPlayMode GetPlayMode() const;
+
+	// Ask the server to move this player into the other mode. Self-serve: the host assigns modes in
+	// the lobby, but a player may switch their own body at any time (requirement: mid-match switch).
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
+	void TogglePlayMode();
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Crew")
+	void ServerSetPlayMode(ETSPlayMode NewMode);
+
+	// Host-driven, alongside the team and seat buttons in the lobby console. Re-checks IsMatchHost()
+	// server-side for the same reason the team/role RPCs do: a Server RPC's HasAuthority() is
+	// trivially true, so without it any client could put anybody into VR.
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ServerHostAssignPlayerToPlayMode(APlayerState* TargetPlayerState, ETSPlayMode NewMode);
+
+	// TSPlayMode <vr|desktop> (or 0-1). Switches THIS player, through the same self-serve RPC.
+	UFUNCTION(Exec)
+	void TSPlayMode(const FString& Mode);
 
 	// --- UI Management --------------------------------------------------------------------------
 
@@ -244,6 +286,13 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Lobby")
 	FKey LobbyConsoleFocusKey = EKeys::F1;
 
+	// Switches this player between their desktop and VR pawn. A raw FKey binding rather than an input
+	// action, for the same reason as the lobby key above: it has to work from either crew pawn and
+	// from the host camera, none of which share one mapping context - and in a headset the player
+	// cannot see a keyboard to find a rebound key anyway.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew")
+	FKey PlayModeToggleKey = EKeys::F2;
+
 	// Give the host the cursor as soon as it reaches a gameplay map, so crews can be assigned without
 	// hunting for the key first. Clients start unfocused - their console rows are read-only.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Lobby")
@@ -288,6 +337,13 @@ private:
 	FTimerHandle AutoAssignTimerHandle;
 	int32 AutoAssignStage = 0;
 	void TickAutoAssign();
+
+	// Replicated to this player only. Both are server-assigned; a client never writes them.
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Tank Simulation|Crew", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<ATSCrewPawn> DesktopCrewPawn = nullptr;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Tank Simulation|Crew", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<ATSCrewPawn> VRCrewPawn = nullptr;
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> ActiveTeamSelectionWidget = nullptr;

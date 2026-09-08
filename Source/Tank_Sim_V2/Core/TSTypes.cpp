@@ -65,3 +65,8 @@ FString UTSTypeUtils::MatchStateToString(ETSMatchState State)
 {
 	return EnumDisplayName(State);
 }
+
+FString UTSTypeUtils::PlayModeToString(ETSPlayMode PlayMode)
+{
+	return EnumDisplayName(PlayMode);
+}

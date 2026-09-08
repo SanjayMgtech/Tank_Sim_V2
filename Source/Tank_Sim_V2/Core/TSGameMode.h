@@ -8,6 +8,7 @@
 #include "Core/TSTypes.h"
 #include "TSGameMode.generated.h"
 
+class ATSCrewPawn;
 class ATSTankPlayerController;
 class ATSTankPlayerState;
 
@@ -35,6 +36,33 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
 	void HandlePlayerReadyToSpawn(ATSTankPlayerController* PlayerController);
+
+	// ---------------------------------------------------------------------------------------------
+	// Desktop / VR - "one player, two pawns".
+	//
+	// A crew member is given a play mode along with their team and seat, and can change it mid-match.
+	// Changing it does not merely toggle stereo: it POSSESSES a different pawn. Both pawns are
+	// spawned up front and kept for the whole session, so switching is a possession swap rather than
+	// a spawn, and neither side loses the identity the other machines already replicate.
+	// ---------------------------------------------------------------------------------------------
+
+	// Server only. Records the mode on the PlayerState and possesses the pawn that serves it,
+	// spawning it first if this is the first time the player has asked for that mode. Refuses the
+	// host, which is a flat-screen match admin and holds no crew pawn at all.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
+	bool TrySetPlayMode(APlayerController* Player, ETSPlayMode NewMode);
+
+	// Server only. Makes sure this player owns a crew pawn for BOTH modes, adopting whatever
+	// RestartPlayer already handed them, then possesses the one their assigned mode calls for and
+	// parks the other. Safe to call repeatedly - it spawns only what is missing.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
+	void EnsureCrewPawnsFor(APlayerController* Player);
+
+	// The crew pawn class for a mode. Falls back to DefaultPawnClass when the mode's own class is
+	// unset, so a GameMode Blueprint that predates this feature keeps behaving exactly as it did -
+	// one Blueprint serving both modes, with the pawn deciding stereo from the assigned mode.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew")
+	TSubclassOf<APawn> GetCrewPawnClassForMode(ETSPlayMode Mode) const;
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Lobby")
 	bool AreAllRolesFilled() const;
@@ -124,6 +152,20 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Host")
 	TSubclassOf<APawn> HostCameraPawnClass;
 
+	// The crew pawn Blueprint for each play mode. Both are left NULL in C++ on purpose: they are
+	// Blueprint data (RULE 2), and an unset one falls back to DefaultPawnClass rather than to a raw
+	// native pawn - a native crew pawn carries none of the Enhanced Input assets and would leave the
+	// crew with no input at all.
+	//
+	// Point these at two Blueprints (duplicate the crew pawn Blueprint and reparent the copy) to get
+	// a genuinely separate pawn per mode. Leave them unset and one Blueprint serves both, which still
+	// works: the pawn reads the assigned mode and decides stereo from it.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew", meta = (DisplayName = "Desktop Crew Pawn Class"))
+	TSubclassOf<APawn> DesktopCrewPawnClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew", meta = (DisplayName = "VR Crew Pawn Class"))
+	TSubclassOf<APawn> VRCrewPawnClass;
+
 	// On a listen server the host is unambiguous: it is the local player, i.e. whoever created the
 	// session. A dedicated server has no local player, so with this enabled the first client to
 	// connect is designated host instead. Disable to run a dedicated server with no host at all.
@@ -131,6 +173,11 @@ protected:
 	bool bFirstPlayerHostsOnDedicatedServer = true;
 
 	virtual UClass* GetDefaultPawnClassForController_Implementation(AController* InController) override;
+
+	// Runs after the engine has restarted the player into their default pawn. This is where the
+	// SECOND crew pawn gets spawned, so it covers a fresh login and a seamless-travel arrival alike
+	// (AGameModeBase::HandleSeamlessTravelPlayer routes through here too).
+	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
 	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
 
 	// True if NewPlayer should be designated host. Called from PostLogin before the pawn is

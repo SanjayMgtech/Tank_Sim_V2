@@ -67,6 +67,11 @@ protected:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UButton>> RoleButtons;
 
+	// Play in Desktop / Play in VR, beside the team and seat buttons: which body this player takes is
+	// part of the same assignment, and the host picks it in the same place.
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UButton>> PlayModeButtons;
+
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> ClearButton;
 
@@ -78,10 +83,17 @@ private:
 	UFUNCTION() void OnDriverClicked();
 	UFUNCTION() void OnGunnerClicked();
 	UFUNCTION() void OnCommanderClicked();
+	UFUNCTION() void OnDesktopClicked();
+	UFUNCTION() void OnVRClicked();
 	UFUNCTION() void OnClearClicked();
 
 	void AssignTeam(ETSTeamId Team);
 	void AssignRole(ETSCrewRole Role);
+
+	// Host-driven for anyone, self-serve for yourself. The host assigns modes in the lobby, but a
+	// player is always allowed to move their own body between the headset and the keyboard - so this
+	// picks the host RPC or the self-serve one from who is clicking, and the server re-checks both.
+	void AssignPlayMode(ETSPlayMode PlayMode);
 
 	UButton* MakeButton(const FString& Label, float MinWidth);
 	class ATSTankPlayerController* GetOwningTankController() const;
