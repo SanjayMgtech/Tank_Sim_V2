@@ -181,6 +181,22 @@ public:
 	UFUNCTION(Exec)
 	void TSVRDiag();
 
+	// Periodic VR input heartbeat. Reads IA_Drive / IA_AimTurret straight off the player input, so it
+	// reports a value even when the BindAction callback never fires - which is the one distinction
+	// the existing Input_Drive log cannot make ("no value arrived" vs "value arrived, we ignored it").
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
+	bool bLogVRInputDiagnostics = true;
+
+	virtual void PlayerTick(float DeltaTime) override;
+
+private:
+	void LogVRInputHeartbeat(float DeltaTime);
+
+	float VRInputLogTimer = 0.f;
+	bool bVRInputWasNonZero = false;
+
+public:
+
 	// URL options that apply the commands above once this controller is actually ready:
 	//   ...WarZone?listen?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1
 	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoDrive=1,0,8

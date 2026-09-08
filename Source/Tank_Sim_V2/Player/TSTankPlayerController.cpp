@@ -1107,3 +1107,65 @@ void ATSTankPlayerController::TSVRDiag()
 	UE_LOG(LogTankSim, Log, TEXT("===== end TSVRDiag ====="));
 #endif
 }
+
+void ATSTankPlayerController::PlayerTick(float DeltaTime)
+{
+	Super::PlayerTick(DeltaTime);
+	LogVRInputHeartbeat(DeltaTime);
+}
+
+void ATSTankPlayerController::LogVRInputHeartbeat(float DeltaTime)
+{
+#if !UE_BUILD_SHIPPING
+	if (!bLogVRInputDiagnostics || !IsLocalController())
+	{
+		return;
+	}
+
+	const ATSTankPlayerState* PS = GetPlayerState<ATSTankPlayerState>();
+	if (!PS || PS->GetCrewRole() == ETSCrewRole::None)
+	{
+		// No role means no context is applied by design; logging here would just be noise.
+		return;
+	}
+
+	const ULocalPlayer* LP = GetLocalPlayer();
+	UEnhancedInputLocalPlayerSubsystem* EIS =
+		LP ? LP->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>() : nullptr;
+	const UEnhancedPlayerInput* PlayerInputPtr = EIS ? EIS->GetPlayerInput() : nullptr;
+	if (!PlayerInputPtr)
+	{
+		return;
+	}
+
+	static const UInputAction* DriveAction =
+		LoadObject<UInputAction>(nullptr, TEXT("/Game/TankSimulation/Input/Actions/IA_Drive.IA_Drive"));
+	static const UInputAction* AimAction =
+		LoadObject<UInputAction>(nullptr, TEXT("/Game/TankSimulation/Input/Actions/IA_AimTurret.IA_AimTurret"));
+
+	const FVector Drive = DriveAction ? PlayerInputPtr->GetActionValue(DriveAction).Get<FVector>() : FVector::ZeroVector;
+	const FVector Aim = AimAction ? PlayerInputPtr->GetActionValue(AimAction).Get<FVector>() : FVector::ZeroVector;
+
+	const bool bNonZero = !Drive.IsNearlyZero() || !Aim.IsNearlyZero();
+
+	// Log promptly while a stick is actually deflected, and only occasionally when everything is
+	// idle - so a session that is doing nothing does not bury the moment something arrives.
+	VRInputLogTimer += DeltaTime;
+	const float Interval = bNonZero ? 0.5f : 5.f;
+
+	// An edge (idle -> deflected, or back) is the interesting event, so never let the timer swallow it.
+	if (VRInputLogTimer < Interval && bNonZero == bVRInputWasNonZero)
+	{
+		return;
+	}
+	VRInputLogTimer = 0.f;
+	bVRInputWasNonZero = bNonZero;
+
+	UE_LOG(LogTankSim, Log,
+		TEXT("[VRInput] role=%d vr=%s | IA_Drive=(%.3f, %.3f) IA_AimTurret=(%.3f, %.3f) | %s"),
+		static_cast<int32>(PS->GetCrewRole()),
+		UTSVRModeLibrary::IsVRModeActive() ? TEXT("on") : TEXT("off"),
+		Drive.X, Drive.Y, Aim.X, Aim.Y,
+		bNonZero ? TEXT("INPUT ARRIVING") : TEXT("nothing arriving"));
+#endif
+}
