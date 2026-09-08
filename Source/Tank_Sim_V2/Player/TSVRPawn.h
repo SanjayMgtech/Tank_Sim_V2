@@ -92,6 +92,22 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0", ClampMax = "89.0"))
 	float MaxAimPitch = 25.f;
 
+	// --- Gunner stick slew (VR) -----------------------------------------------------------------
+	// In VR the head aims and ApplySeatViewDelta deliberately does nothing, so a thumbstick would be
+	// inert. Rather than rotate the camera - which fights the tracked pose and is a reliable way to
+	// make people sick - the stick accumulates an OFFSET that is added to the head's forward vector
+	// when the aim ray is built. The gunner still looks where they like; the stick slews the gun.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0"))
+	float VRStickSlewSpeed = 60.f;
+
+	// Clamp for that offset, in degrees, relative to where the gunner is looking. Bounded so the gun
+	// can never end up somewhere the gunner has no way to see.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float VRStickSlewYawLimit = 180.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0", ClampMax = "89.0"))
+	float VRStickSlewPitchLimit = 30.f;
+
 	UFUNCTION()
 	void ApplyRoleMappingContext_FromPlayerState();
 
@@ -283,6 +299,14 @@ private:
 	// a controller/actor rotation would not.
 	float SeatViewYaw = 0.f;
 	float SeatViewPitch = 0.f;
+
+	// VR only: stick-driven slew added to the head's aim direction. See VRStickSlewSpeed.
+	float VRSlewYaw = 0.f;
+	float VRSlewPitch = 0.f;
+
+	// Applies a stick deflection as a slew rate. Returns true when it consumed the input, i.e. when
+	// the headset is driving the camera and ApplySeatViewDelta would have been a no-op.
+	bool ApplyVRStickSlew(const FVector2D& StickAxis);
 
 	// Desktop only. Turns a mouse/stick delta into the seated view rotation; a no-op while the
 	// headset drives the camera, where writing a relative rotation would fight the tracked pose.

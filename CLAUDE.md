@@ -2047,3 +2047,154 @@ targeted signal instead. Do not report a pass or a regression off mismatched har
 - Inputs: `/Game/YI_TankCollection/Inputs/`
 - Attempt-1 reference (do not build): `CPP_Port_WIP_DO_NOT_USE_YET/Attempt1_Reference/`
 - Pre-reparent BP backups: `CPP_Port_WIP_DO_NOT_USE_YET/PreReparentBackup/`
+
+---
+
+## 🥽 VR INPUT — an Axis2D action MUST bind a 2D XR key (root cause, 2026-09-08)
+
+**Symptom:** "VR inputs aint working." Driving and gunner stick aim did nothing in the headset.
+Everything looked correct: valid `FKey` names, mappings in the live `DefaultKeyMappings` array,
+modifiers outered to the asset, all five IMCs listed in `DefaultMappingContexts`. Nothing logged a
+warning. **This was self-inflicted** — a previous session had it working and this session broke it
+by "improving" the bindings into separate `_X` / `_Y` keys.
+
+### The rule
+**The XR key's component type must match the Input Action's `ValueType`.** An `Axis2D` action can
+only bind a `*_2D` key. Binding it to a 1D key (`..._Thumbstick_X`, `..._Thumbstick_Y`) leaves the
+action **silently unbound in VR**.
+
+What was authored, and why each layer accepted it anyway:
+
+| Layer | Behaviour on `IA_Drive` (Axis2D) + `OculusTouch_Left_Thumbstick_Y` |
+|---|---|
+| `FKey` validity | fine — `_X`/`_Y` genuinely exist in `InputCoreTypes.h` |
+| Enhanced Input | fine — happily stores it, and it would work on a desktop |
+| `OpenXRInput.cpp` | builds ONE OpenXR action per Input Action, typed from `ValueType`: `ToActionType(Mapping.Action->ValueType)` -> `XR_ACTION_TYPE_VECTOR2F_INPUT` |
+| `SuggestBindingForKey` | component `y` -> suggests the **float** path `/user/hand/left/input/thumbstick/y`; component `2d` is special-cased to append **nothing**, giving `/user/hand/left/input/thumbstick` |
+| OpenXR runtime | a Vector2f action's binding path "must refer to the parent of input values ... that parent path must contain subpaths `/x` and `/y`". Otherwise "the runtime **may** provide an alternate binding for the action or **it will be unbound**" |
+
+So the action ends up **unbound and inactive**, and `isActive = XR_FALSE` produces no log line
+anywhere. `_2D` is not merely the tidier option — it is the only legal one for an Axis2D action.
+
+**Scope, stated honestly:** this explains the two Axis2D actions (`IA_Drive`, `IA_AimTurret`) going
+dead. Boolean actions on `*_Trigger_Click` were correctly typed and unaffected. Whether a runtime
+*also* rejects the whole `xrSuggestInteractionProfileBindings` array (called once per interaction
+profile with every binding at once, `OpenXRInput.cpp` ~line 566) is runtime-dependent and was NOT
+confirmed here — do not assume one bad key kills every VR input.
+
+### Getting a per-stick layout without 1D keys
+The ask was left stick = throttle, right stick = steering — two different sticks feeding one Axis2D
+action. The instinct is to bind `Left_Thumbstick_Y` and `Right_Thumbstick_X`. That is the trap above.
+
+Bind **both 2D keys** and mask each with a `Scalar` modifier so they occupy disjoint axes:
+
+| Key | Scalar | Contributes |
+|---|---|---|
+| `<Profile>_Left_Thumbstick_2D` | `(0,1,0)` | Y only -> Throttle |
+| `<Profile>_Right_Thumbstick_2D` | `(1,0,0)` | X only -> Steering |
+
+Enhanced Input combines both mappings for the action, so the result is `(rightX, leftY)` — exactly
+the requested layout, with every suggested path XR-legal. Identical masks give the Gunner right
+stick = traverse, left stick = elevation on `IA_AimTurret`.
+
+Applied to `IMC_Driver` and `IMC_Gunner` for all three profiles (`OculusTouch`, `ValveIndex`,
+`Vive` — note Vive's input is `Trackpad`, not `Thumbstick`).
+
+### ⚠ Related traps confirmed here
+- **`GetMappings()` is NOT the deprecated array.** It returns `DefaultKeyMappings.Mappings`, the
+  same live data `ForEachKeyMapping` walks. An earlier reading of the deprecation note above led to
+  a theory that OpenXR reads the dead `Mappings` array — it does not. Checked, disproven, recorded
+  so nobody re-derives it.
+- **A 4-token key name is mandatory.** `SuggestBindingForKey` bails when
+  `ParseIntoArray("_") != NUM_XR_KEY_TOKENS` (4). Shape is `Profile_Hand_Input_Component`.
+- **Modifiers must be outered to the IMC** and verified across a package reload, or they come back
+  null. Still true; all 12 new Scalar modifiers survived `reload_packages` with 0 nulls.
+
+### ⚠ A stick cannot aim the gun in VR by rotating the camera
+`ApplySeatViewDelta` deliberately early-returns while `IsHeadTrackingActive()` — writing a relative
+camera rotation fights the tracked pose, and rotating a VR player's view from a stick is a reliable
+way to make them sick. So even with the bindings fixed, gunner stick input would still have been
+inert.
+
+`ApplyVRStickSlew` handles it instead: the stick accumulates a yaw/pitch **offset applied to the
+head's forward vector** when the aim ray is built in `UpdateGunnerAim`. The head still aims, the
+camera never moves, and the stick slews the gun on top of it. Two details that matter:
+- **The deflection is a RATE, scaled by `DeltaSeconds`.** A held stick fires `Input_AimTurret` every
+  frame; without the scale the gun traverses ~1.7x faster on a 120Hz tethered headset than on a
+  72Hz standalone one.
+- **Slew yaw rotates about `FVector::UpVector`, not the camera's up.** Tilting your head must not
+  roll the direction the gun slews.
+
+This does not replace the head-aim design recorded above — it is additive, and head aim remains the
+primary mechanism, with `UpdateGunnerAim` still driven from Tick in VR.
+
+### VR UI removed from the headset (2026-09-08)
+`CrewUIPanel.PanelWidgetClass` is set to **None** on both `BP_TSVRPawn` and `BP_XRPawn` — the panel
+sat in the player's face and was not wanted. The component and all of `UTSVRUIPanelComponent` /
+`UTSVRPointerComponent` remain, so re-enabling is one property, not a re-port. A panel with no
+widget class never becomes visible and its collision stays off (`ShouldPanelBeVisible` returns false
+on a null class), so the pointer has nothing to hit and the whole path is inert.
+
+### ✅ Test cases — run these on any change to a VR binding or an Input Action's ValueType
+
+**T1 — Every XR key matches its action's ValueType.** Static, cheap, needs no headset, and is the
+one test that would have caught this bug. Run it before any VR session.
+```python
+import unreal
+V2 = unreal.InputActionValueType.AXIS2D
+BAD = 0
+for p in ['IMC_Shared','IMC_Driver','IMC_Gunner','IMC_Commander','IMC_VR_Widget']:
+    imc = unreal.load_asset('/Game/TankSimulation/Input/Contexts/' + p)
+    for m in imc.get_editor_property('default_key_mappings').get_editor_property('mappings'):
+        kn = str(m.get_editor_property('key').get_editor_property('key_name'))
+        act = m.get_editor_property('action')
+        toks = kn.split('_')
+        if len(toks) != 4 or toks[0] not in ('OculusTouch','ValveIndex','Vive'):
+            continue                      # not an XR key; SuggestBindingForKey ignores it too
+        is2d = toks[3] == '2D'
+        wants2d = act.get_editor_property('value_type') == V2
+        if is2d != wants2d:
+            BAD += 1
+            unreal.log_error('%s: %s vs action valuetype %s' % (p, kn, act.get_editor_property('value_type')))
+unreal.log('XR key/ValueType mismatches: %d' % BAD)     # MUST be 0
+```
+**Expected `0`.** Non-zero means those actions will be silently unbound in the headset.
+
+**T2 — Modifiers survive serialisation.** After ANY scripted IMC edit:
+```python
+pkgs = [unreal.load_package('/Game/TankSimulation/Input/Contexts/IMC_Driver')]
+unreal.EditorLoadingAndSavingUtils.reload_packages(pkgs)
+# re-read every mapping's modifiers; expect zero None entries
+```
+**Expected 0 null modifiers.** A null means the modifier was outered to `/Engine/Transient` and the
+axis mask is gone — the binding still exists and silently does the wrong thing.
+
+**T3 — The 4-token parse.** Every XR key name must split into exactly 4 `_`-separated tokens. This
+is covered by T1's skip clause, with a twist: **if a key you expect T1 to test is being SKIPPED,
+that is itself the failure** — OpenXR is ignoring it for the same reason.
+
+**T4 — Axis masks produce the intended layout (desktop).** Inject the action, read what the pawn got:
+```
+pie_inject_input_action  IA_Drive  (0.0, 1.0)   -> throttle 1.0, steering 0.0
+pie_inject_input_action  IA_Drive  (1.0, 0.0)   -> throttle 0.0, steering 1.0
+```
+**Caveat, already recorded above:** injecting an ACTION skips the key layer entirely, so this
+validates the pawn's consumption of X/Y, *not* the stick bindings. T1 covers the key layer.
+
+**T5 — Human, in the headset.** The only test that proves the whole chain end to end:
+
+| Role | Input | Expected |
+|---|---|---|
+| Driver | left stick fwd/back | drives forward/back, no turn |
+| Driver | right stick left/right | turns, no throttle |
+| Gunner | right stick left/right | turret traverses; **view does not move** |
+| Gunner | left stick up/down | gun elevates; **view does not move** |
+| Gunner | right trigger | main cannon fires |
+| Gunner | left trigger | machine gun fires while held |
+
+Camera movement during either gunner stick test is a regression — it means the slew went back to
+rotating the camera.
+
+**T6 — Regression guard: assert gear and RPM, never speed.** Per the sloped-spawn warning above,
+check the tank leaves gear 0 and the engine rises above its 600 RPM idle. Speed alone cannot
+distinguish driving from rolling downhill.

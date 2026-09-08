@@ -522,6 +522,34 @@ void ATSVRPawn::ApplySeatViewDelta(const FVector2D& LookDelta)
 	Camera->SetRelativeRotation(FRotator(SeatViewPitch, SeatViewYaw, 0.f));
 }
 
+bool ATSVRPawn::ApplyVRStickSlew(const FVector2D& StickAxis)
+{
+	// Desktop keeps the existing seat-rotation behaviour; only report that we handled the input when
+	// the headset is actually driving the camera.
+	if (!UTSVRModeLibrary::IsHeadTrackingActive())
+	{
+		return false;
+	}
+
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return true;
+	}
+
+	// A held stick fires this every frame, so the deflection is a RATE, not a delta. Scaling by
+	// DeltaSeconds is what keeps the slew speed the same on a 72Hz standalone headset and a 120Hz
+	// tethered one - without it the gun traverses nearly twice as fast on the faster device.
+	const float DeltaSeconds = World->GetDeltaSeconds();
+
+	VRSlewYaw = FMath::Clamp(VRSlewYaw + StickAxis.X * VRStickSlewSpeed * DeltaSeconds,
+		-VRStickSlewYawLimit, VRStickSlewYawLimit);
+	VRSlewPitch = FMath::Clamp(VRSlewPitch + StickAxis.Y * VRStickSlewSpeed * DeltaSeconds,
+		-VRStickSlewPitchLimit, VRStickSlewPitchLimit);
+
+	return true;
+}
+
 bool ATSVRPawn::IsLocalGunner() const
 {
 	const APlayerController* PC = Cast<APlayerController>(GetController());
@@ -556,7 +584,14 @@ void ATSVRPawn::Input_AimTurret(const FInputActionValue& Value)
 	// FVector(Axis.X, Axis.Y, 0) - a 2D stick axis packed into a vector - which could never work:
 	// the tank's turret consumes a world-space point, so a stick reading of (0.4, 0.1) asked the gun
 	// to aim at a spot half a centimetre from the world origin.
-	ApplySeatViewDelta(Value.Get<FVector2D>());
+	const FVector2D Axis = Value.Get<FVector2D>();
+
+	// VR takes the slew path, desktop the seat-rotation path. ApplyVRStickSlew reports which one
+	// applies, so there is exactly one place that knows the difference.
+	if (!ApplyVRStickSlew(Axis))
+	{
+		ApplySeatViewDelta(Axis);
+	}
 	UpdateGunnerAim();
 }
 
@@ -572,7 +607,18 @@ void ATSVRPawn::UpdateGunnerAim()
 	}
 
 	const FVector Start = Camera->GetComponentLocation();
-	const FVector End = Start + Camera->GetForwardVector() * AimTraceDistance;
+
+	// The head sets the base direction; the stick slew rotates it. In yaw the rotation is about the
+	// WORLD up axis, not the camera's - tilting your head must not roll the direction the gun slews.
+	FVector Direction = Camera->GetForwardVector();
+	if (!FMath::IsNearlyZero(VRSlewYaw) || !FMath::IsNearlyZero(VRSlewPitch))
+	{
+		Direction = Direction.RotateAngleAxis(VRSlewPitch, Camera->GetRightVector());
+		Direction = Direction.RotateAngleAxis(VRSlewYaw, FVector::UpVector);
+		Direction = Direction.GetSafeNormal();
+	}
+
+	const FVector End = Start + Direction * AimTraceDistance;
 
 	// Ignore ourselves and our own tank, or the trace hits the hull we are sitting inside and the
 	// turret tries to aim at its own armour.
