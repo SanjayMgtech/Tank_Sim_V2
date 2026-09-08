@@ -328,6 +328,12 @@ private:
 	// this frame's turret angle rather than last frame's.
 	void UpdateGunnerSightCamera();
 
+	// Takes the camera's ROTATION out of the attachment chain while the sight is locked, and puts it
+	// back when it is not. See the .cpp - this is what actually stops the view doubling the traverse.
+	void SetGunnerSightLockActive(bool bActive);
+
+	bool bGunnerSightLockActive = false;
+
 	// The direction the Gunner is ASKING for, in world space: the mouse command applied in tank space.
 	FRotator GetGunnerAimWorldRotation() const;
 
