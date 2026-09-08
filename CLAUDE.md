@@ -2290,3 +2290,18 @@ unreal.log('empty-or-duplicate descriptions: %d' % bad)   # MUST be 0
 **T0b — the log check, which is faster than any of this.** After the first VR session of an editor
 run: `grep -a "XR_ERROR" Saved/Logs/Tank_Sim_V2.log`. **Expected: no hits.** Any hit means the XR
 action system failed to build and no binding work can possibly help until it is fixed.
+
+### ✅ DESIGN CONFIRMED — the host is NOT crew and NOT VR (2026-09-08)
+Asked and answered by the user directly. The host is an admin/spectator: `TryAssignTeam` and
+`TryAssignRole` refuse `PS->IsHost()`, the host possesses `ATSHostCameraPawn`, and
+`ATSHostCameraPawn::NotifyControllerChanged` forces stereo off and clears `bLockToHmd`. **This is
+intended, not a bug** — do not "fix" it by letting the host take a seat.
+
+Consequence to design around, because it causes real confusion in testing:
+**a VR player must always be a JOINING CLIENT, never the host.**
+
+In PIE this bites immediately: only one instance can own the headset, and UE always gives OpenXR to
+**instance 0** (`[NetMode: Standalone 0] ... OpenXR Oculus` in the window title). Instance 0 is also
+the natural one to host from — so by default the headset lands on the one machine structurally
+barred from playing. **Host from instance 1 and join with instance 0**, or run two `-game` processes
+and pass `-nohmd` to the server and `-vr` to the client.
