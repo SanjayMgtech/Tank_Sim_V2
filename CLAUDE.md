@@ -2198,3 +2198,95 @@ rotating the camera.
 **T6 — Regression guard: assert gear and RPM, never speed.** Per the sloped-spawn warning above,
 check the tank leaves gear 0 and the engine rises above its 600 RPM idle. Speed alone cannot
 distinguish driving from rolling downhill.
+
+### ⛔ THE ACTUAL CAUSE of total VR input failure — an EMPTY IMC/Action Description (2026-09-08)
+
+**Correction to the section above.** The Axis2D/`_2D` key mismatch documented above is a real bug and
+the fix stands, but it was **NOT** what made VR input dead. The real fault killed the entire OpenXR
+action system before any binding mattered. Found by grepping the log for `XR_ERROR`, which is the
+first thing to do on any "VR input does nothing" report.
+
+```
+Error: xrCreateActionSet(...)                 failed: XR_ERROR_LOCALIZED_NAME_INVALID   [Line 186]
+Error: xrCreateAction(Set, ...)               failed: XR_ERROR_HANDLE_INVALID           [Line 134]
+Error: xrSuggestInteractionProfileBindings(.) failed: XR_ERROR_HANDLE_INVALID           [Line 566]
+Error: xrAttachSessionActionSets(...)         failed: XR_ERROR_VALIDATION_FAILURE       [Line 601]
+```
+
+One cascade from one cause. `FOpenXRActionSet` passes the IMC's `ContextDescription` as the OpenXR
+`localizedActionSetName`. **Every `IMC_*` in this project had an EMPTY description**, and an empty
+localized name is invalid per the OpenXR spec, so `xrCreateActionSet` fails. The resulting handle is
+garbage, so every `xrCreateAction` against it fails, so no bindings can be suggested, so the session
+attaches nothing. **Result: not one motion-controller input reaches the game — including inputs that
+were bound perfectly correctly.**
+
+Same rule for Input Actions: `ActionDescription` becomes the `localizedActionName`. All 12 `IA_*`
+were empty too.
+
+**The warnings that were being scrolled past were the tell:**
+```
+LogHMD: Warning: Input Mapping Context IMC_Driver has a Description, "", which exactly matches
+the Description already used by Input Mapping Context IMC_Shared.
+```
+UE's own de-duplication substitutes the FName for a *duplicate* description — but it only fixes the
+second and later ones. The **first** context keeps its empty `""`, and empty is what OpenXR rejects.
+So the warning names IMC_Driver while the asset that actually fails is IMC_Shared. Read that warning
+as "somebody has an empty description", not as a localisation nicety.
+
+**Fix:** give every IMC a non-empty, unique `ContextDescription` and every InputAction a non-empty,
+unique `ActionDescription`. They are user-facing localized strings in the OpenXR runtime's binding
+UI, so write them as readable names ("Tank Sim - gunner station"), not identifiers.
+
+### ⚠ `XR_ENSURE` uses `ensure`, so it fires ONCE PER PROCESS
+The second XR session in the same editor run logged **only the warnings, no errors** — which looks
+exactly like a session that succeeded. It did not; `ensure` had already fired for those call sites
+and stays quiet afterwards. **A clean-looking second PIE run proves nothing about XR.** Judge XR
+health from the FIRST XR session after an editor launch, or restart the editor before re-testing.
+
+### ⚠ Do not read "VR Preview" as the client
+The window title records the truth:
+```
+'Yarrawah Tank Collection Preview [NetMode: Standalone 0] ... OpenXR Oculus (1.207.0)'
+```
+`VR Preview` runs a **Standalone** session, and in Standalone `ShouldDesignateAsHost` returns false
+by design, so there is no host, nobody can assign a role, `ApplyRoleMappingContext` logs
+`role=0 context=<none>`, and **no mapping context is applied at all**. That is a second, independent
+way to get "VR inputs do nothing", with a completely different cause from the two above.
+
+Three distinct failures, same symptom. Tell them apart from the log before changing anything:
+
+| Log evidence | Cause | Fix |
+|---|---|---|
+| `XR_ERROR_LOCALIZED_NAME_INVALID` | empty IMC/Action description | fill descriptions (T0) |
+| `role=0 context=<none>` | no team/role assigned | assign from host, or `TSTeam`/`TSRole` |
+| no errors, role applied, one stick dead | key/ValueType mismatch | T1 |
+
+**T0 — no empty or duplicate descriptions.** Run this FIRST on any VR input problem; it is the
+cheapest of the three and the only one that can kill everything at once.
+```python
+import unreal
+bad = 0; seen = {}
+paths = ['/Game/TankSimulation/Input/Contexts/' + n for n in
+         ['IMC_Shared','IMC_Driver','IMC_Gunner','IMC_Commander','IMC_VR_Widget']]
+for p in paths:
+    a = unreal.load_asset(p)
+    d = str(a.get_editor_property('context_description')).strip()
+    if not d or d in seen:
+        bad += 1; unreal.log_error('%s: %r' % (a.get_name(), d))
+    seen[d] = a.get_name()
+ars = unreal.AssetRegistryHelpers.get_asset_registry(); seen2 = {}
+for asset in ars.get_assets_by_path('/Game/TankSimulation/Input/Actions', recursive=True):
+    o = asset.get_asset()
+    if not isinstance(o, unreal.InputAction):
+        continue
+    d = str(o.get_editor_property('action_description')).strip()
+    if not d or d in seen2:
+        bad += 1; unreal.log_error('%s: %r' % (o.get_name(), d))
+    seen2[d] = o.get_name()
+unreal.log('empty-or-duplicate descriptions: %d' % bad)   # MUST be 0
+```
+**Expected `0`.** Currently 0 across 5 contexts and 12 actions.
+
+**T0b — the log check, which is faster than any of this.** After the first VR session of an editor
+run: `grep -a "XR_ERROR" Saved/Logs/Tank_Sim_V2.log`. **Expected: no hits.** Any hit means the XR
+action system failed to build and no binding work can possibly help until it is fixed.
