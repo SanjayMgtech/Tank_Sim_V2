@@ -15,6 +15,28 @@ public:
 
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
+	// =====================================================================
+	// TEMPORARY - VR bring-up only. REMOVE once VR is verified.
+	//
+	// Normal flow: the host assigns everyone's team and seat from the lobby console, and the
+	// host itself never plays. That needs at least two people, which makes putting on a headset
+	// and checking whether the Driver's stick works a two-person job.
+	//
+	// With this on, the joining player is NOT made host and is dropped straight into
+	// VRTestTeam/VRTestRole, so a single Play-In-Editor run puts you in a seat. It bypasses the
+	// host-admin rule deliberately - that is the whole point, and it is also exactly why it must
+	// not survive into a real match. Every assignment logs a warning naming this flag.
+	// =====================================================================
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Testing (TEMPORARY)")
+	bool bVRTestAutoAssign = false;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Testing (TEMPORARY)", meta = (EditCondition = "bVRTestAutoAssign"))
+	ETSTeamId VRTestTeam = ETSTeamId::TeamA;
+
+	// The seat the joining player takes. Change this between runs to test each role.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Testing (TEMPORARY)", meta = (EditCondition = "bVRTestAutoAssign"))
+	ETSCrewRole VRTestRole = ETSCrewRole::Driver;
+
 	// Per-team tank class override map. If a team has an entry here, that tank class will be spawned;
 	// otherwise DefaultTankClass will be used.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Teams")
@@ -43,4 +65,8 @@ public:
 
 protected:
 	virtual APawn* GetOrSpawnTankForTeam(ETSTeamId TeamId) override;
+
+	// TEMPORARY (see bVRTestAutoAssign). Suppresses host designation so the lone Play-In-Editor
+	// player becomes crew instead of a match admin with no seat.
+	virtual bool ShouldDesignateAsHost(const APlayerController* NewPlayer) const override;
 };

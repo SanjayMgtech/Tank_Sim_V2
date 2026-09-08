@@ -23,10 +23,18 @@ public:
 
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
+	// The host is a match admin on a FLAT SCREEN, never a VR participant, even when a headset is
+	// plugged into the same machine. Possession therefore switches stereo off rather than
+	// leaving whatever the previous pawn set - a listen-server host that had been a crew member
+	// before, or a host who simply has a headset connected, would otherwise be dropped into a
+	// stereo free-cam it cannot fly.
+	virtual void NotifyControllerChanged() override;
+
 protected:
-	// Explicit camera (rather than relying on APawn::CalcCamera's eye-height fallback) so an HMD-wearing
-	// host gets head tracking via UCameraComponent::bLockToHmd, and so designers have a component to
-	// tune post-process/FOV on.
+	// Explicit camera (rather than relying on APawn::CalcCamera's eye-height fallback) so designers
+	// have a component to tune post-process/FOV on. bLockToHmd is cleared on possession: head
+	// tracking can still be live while stereo is off, and a free-cam that swings around with a
+	// headset sitting on the desk is unusable.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank Simulation|Host")
 	TObjectPtr<UCameraComponent> Camera;
 

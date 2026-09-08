@@ -5,11 +5,15 @@
 #include "Player/TSTankPlayerState.h"
 #include "Tank/TSTankCrewComponent.h"
 #include "Tank/TSTankInterface.h"
+#include "Engine/World.h"
 #include "Tank_Sim_V2.h"
 
 UTSTankControlComponent::UTSTankControlComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	// Ticks only while a non-zero drive input is latched, purely to run the timeout below.
+	// An idle or unmanned tank never ticks this component.
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false;
 	SetIsReplicatedByDefault(true);
 }
 
@@ -61,10 +65,51 @@ bool UTSTankControlComponent::TryApplyDriveInput(ATSTankPlayerState* Requester, 
 		return false;
 	}
 
-	CurrentDriveInput = FVector2D(FMath::Clamp(Throttle, -1.f, 1.f), FMath::Clamp(Steering, -1.f, 1.f));
-	OnRep_DriveInput();
+	SetDriveInputInternal(FVector2D(FMath::Clamp(Throttle, -1.f, 1.f), FMath::Clamp(Steering, -1.f, 1.f)));
 
 	return true;
+}
+
+void UTSTankControlComponent::SetDriveInputInternal(const FVector2D& NewInput)
+{
+	CurrentDriveInput = NewInput;
+	OnRep_DriveInput();
+
+	const UWorld* World = GetWorld();
+	LastDriveInputTime = World ? World->GetTimeSeconds() : 0.f;
+
+	// Only run the timeout while something is actually being commanded.
+	SetComponentTickEnabled(!CurrentDriveInput.IsNearlyZero());
+}
+
+void UTSTankControlComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	const UWorld* World = GetWorld();
+	if (!World || !GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	if (CurrentDriveInput.IsNearlyZero())
+	{
+		SetComponentTickEnabled(false);
+		return;
+	}
+
+	if (World->GetTimeSeconds() - LastDriveInputTime < DriveInputTimeoutSeconds)
+	{
+		return;
+	}
+
+	// No input for a while and the tank is still being told to drive: the release packet was
+	// lost, or the driver went away. Stop.
+	UE_LOG(LogTankSim, Warning,
+		TEXT("UTSTankControlComponent: no drive input on '%s' for %.2fs - releasing a latched throttle of (%.2f, %.2f)."),
+		*GetNameSafe(GetOwner()), DriveInputTimeoutSeconds, CurrentDriveInput.X, CurrentDriveInput.Y);
+
+	SetDriveInputInternal(FVector2D::ZeroVector);
 }
 
 void UTSTankControlComponent::OnRep_DriveInput()
