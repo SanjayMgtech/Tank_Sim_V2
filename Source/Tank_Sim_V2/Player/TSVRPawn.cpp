@@ -17,6 +17,8 @@
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Player/TSVRModeLibrary.h"
+#include "Engine/GameInstance.h"
+#include "UI/TSUISubsystem.h"
 #include "Tank_Sim_V2.h"
 
 ATSVRPawn::ATSVRPawn()
@@ -165,7 +167,22 @@ void ATSVRPawn::ApplyVRModeDeferred()
 	// mode), so the rule lives in one place instead of resting on pawn choice alone.
 	const ATSTankPlayerState* PS = PC->GetPlayerState<ATSTankPlayerState>();
 	const bool bIsHost = PS && PS->IsHost();
-	const bool bWantVR = bAutoEnableVRWhenHMDPresent && !bIsHost && UTSVRModeLibrary::IsHMDAvailable();
+
+	// Menu maps stay FLAT even with a headset connected.
+	//
+	// The Login and Session Browser widgets are screen-space, and screen-space draws to the flat
+	// viewport that does not exist in stereo - so going VR on the menu makes it invisible and the
+	// player cannot join at all without taking the headset off. Keeping the menu flat is a design
+	// decision, not a limitation: the menu is where names and session codes get typed, which a
+	// keyboard does far better than a laser pointer.
+	//
+	// It also means stereo has exactly ONE transition per session - off on the menu, on when the
+	// gameplay map is entered - instead of toggling back and forth. That matters: EnableHMD
+	// rebuilds the viewport, and repeated toggling is the sensitive path.
+	const UTSUISubsystem* UI = GetGameInstance() ? GetGameInstance()->GetSubsystem<UTSUISubsystem>() : nullptr;
+	const bool bOnMenuMap = UI && UI->IsCurrentMapMenuMap();
+
+	const bool bWantVR = bAutoEnableVRWhenHMDPresent && !bIsHost && !bOnMenuMap && UTSVRModeLibrary::IsHMDAvailable();
 
 	UTSVRModeLibrary::SetVRModeEnabled(bWantVR, VRTrackingOrigin);
 
