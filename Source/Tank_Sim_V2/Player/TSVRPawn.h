@@ -92,6 +92,31 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0", ClampMax = "89.0"))
 	float MaxAimPitch = 25.f;
 
+	// --- Gunner sight lock (desktop) ------------------------------------------------------------
+	// The Gunner's seat is bolted to the turret socket by ATSTankControllerBase::AttachTurretCrewSeats,
+	// so the seat ALREADY carries the traverse. Writing the mouse's view rotation onto the camera as
+	// well stacked a second rotation on top of it, and the view came round roughly twice as fast as
+	// the barrel it was supposed to be looking down.
+	//
+	// With this on, the mouse stops turning the camera and instead commands where the gun should go;
+	// the camera is put on the gun's ACHIEVED rotation every frame. The sight can then never outrun
+	// the gun, because it is the gun. Aiming still works exactly as before - the aim ray follows the
+	// mouse command, the gun chases it at its own traverse rate, and the view arrives when the gun
+	// does.
+	//
+	// Gunner only, and flat screen only: the Driver and Commander have no gun to be locked to, and in
+	// a headset the camera is the player's head - nothing may take that away from them.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	bool bLockGunnerViewToGun = true;
+
+	// How far the mouse command may run ahead of where the gun has actually got to, in degrees.
+	//
+	// Without a cap this winds up: a long mouse sweep against a slowly traversing turret banks the
+	// whole sweep, and the turret keeps spinning for seconds after the player has stopped moving the
+	// mouse. Capping the lead keeps the gun responsive and makes it stop when the hand stops.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "1.0", ClampMax = "180.0"))
+	float MaxGunnerAimLead = 45.f;
+
 	UFUNCTION()
 	void ApplyRoleMappingContext_FromPlayerState();
 
@@ -278,9 +303,13 @@ private:
 	// destroyed on travel or disconnect cannot be dereferenced while unbinding.
 	TWeakObjectPtr<class ATSTankPlayerState> BoundPlayerState;
 
-	// Accumulated seat-relative view rotation driven by the mouse. Not the pawn's rotation: the pawn
-	// is attached to a seat component on a moving hull, so the view has to turn WITH the tank, which
-	// a controller/actor rotation would not.
+	// Accumulated view rotation driven by the mouse, in the TANK's space. Not the pawn's rotation:
+	// the pawn is attached to a seat component on a moving hull, so the view has to turn WITH the
+	// tank, which a controller/actor rotation would not.
+	//
+	// For a Gunner with the sight lock on, this is not the view at all but the aim COMMAND - where
+	// the player is asking the gun to point. Tank space, deliberately: a seat-relative command would
+	// turn with the turret it is driving and the gun would spin without ever arriving.
 	float SeatViewYaw = 0.f;
 	float SeatViewPitch = 0.f;
 
@@ -290,6 +319,31 @@ private:
 
 	// True only for the local player who currently holds the Gunner seat.
 	bool IsLocalGunner() const;
+
+	// --- Gunner sight lock ------------------------------------------------------------------------
+	// True when this pawn's camera should be pinned to the gun rather than turned by the mouse.
+	bool IsGunnerViewLockedToGun() const;
+
+	// Puts the camera on the gun's achieved rotation, and keeps the tank ticking before us so we read
+	// this frame's turret angle rather than last frame's.
+	void UpdateGunnerSightCamera();
+
+	// The direction the Gunner is ASKING for, in world space: the mouse command applied in tank space.
+	FRotator GetGunnerAimWorldRotation() const;
+
+	// Stops the mouse command banking an unbounded lead over the gun. See MaxGunnerAimLead.
+	void ClampGunnerAimLead();
+
+	// The tank this pawn is crewing, or null. Cast once, here, so callers do not repeat it.
+	class ATSTankControllerBase* GetAssignedTankController() const;
+
+	// Cleared whenever the crew assignment changes so the aim command re-seeds from wherever the gun
+	// happens to be pointing. Without it, sitting down mid-match would order the turret back to hull
+	// forward as the first thing it did.
+	bool bGunnerAimSynced = false;
+
+	// The tank we currently hold a tick prerequisite on, so it can be dropped when we leave it.
+	TWeakObjectPtr<AActor> TickPrerequisiteTank;
 
 	// Ticking exists solely for the VR Gunner's head aim, so it is switched on and off with the
 	// role rather than left running on every crew pawn in the level.

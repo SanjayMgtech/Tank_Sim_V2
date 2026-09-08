@@ -715,6 +715,17 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Turret")
 	float InteriorTurretYawOffset = 0.f;
 
+	// --- Where the gun is ACTUALLY pointing -------------------------------------------------------
+	// Turret traverse and gun elevation as one rotation in the tank's own space: yaw from the turret,
+	// pitch from the main gun. Both come out of TurretsRot/GunsRot, the same arrays the AnimBP draws
+	// the mesh from, so a reader of this cannot disagree with what the player sees on the barrel.
+	//
+	// This is the ACHIEVED rotation, already rate-limited by UpdateTurretRotation/UpdateGunRotation -
+	// deliberately not the requested one. ATSVRPawn hangs the Gunner's sight off it so the view can
+	// only turn as fast as the gun does.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Turret")
+	FRotator GetMainGunAimRotation() const;
+
 	// One trigger pull: how long StartShooting stays held for a main-cannon shot.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Weapons", meta = (ClampMin = "0.01"))
 	float MainCannonTriggerHoldSeconds = 0.15f;
