@@ -257,6 +257,11 @@ private:
 	void Input_Secondary(const FInputActionValue& Value);
 	void Input_Menu(const FInputActionValue& Value);
 	void Input_Drive(const FInputActionValue& Value);
+
+	// Bound to Completed/Canceled on IA_Drive. Triggered fires ONLY while the axis is actuated,
+	// so letting go of the stick or the keys produces no event at all - without this the last
+	// non-zero throttle stays latched on the server and the tank drives on for ever.
+	void Input_DriveReleased(const FInputActionValue& Value);
 	void Input_AimTurret(const FInputActionValue& Value);
 	void Input_FireMainCannon(const FInputActionValue& Value);
 	void Input_FireMachineGun(const FInputActionValue& Value);

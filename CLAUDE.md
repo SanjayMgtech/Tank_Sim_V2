@@ -1741,6 +1741,216 @@ never completed and span every tick on every server tank after the first shot. N
 `ReloadWeaponUI` must not be guarded — that warning was about the *function's* two exec outputs;
 this event's only consumer is its own retry loop.
 
+## ✅ VR mode — headset when present, flat when not (2026-09-07)
+
+Feature work, like the multiplayer fixes: own commits, own manual test. One build runs both ways;
+there is no VR build, no VR map and no VR toggle. `ATSVRPawn::ApplyVRMode` decides on possession,
+per client, from "is a headset connected" and "is this player allowed one".
+
+C++: `Source/Tank_Sim_V2/Player/TSVRModeLibrary.{h,cpp}` (the one place that answers both
+questions), plus VR handling on `ATSVRPawn`, host exclusion on `ATSHostCameraPawn`.
+
+### ⚠ UE 5.7 has NO generic `MotionController_*` keys
+This is the VR analogue of the `DefaultKeyMappings` trap, and it fails exactly as silently.
+
+XR keys are **per controller profile**, declared in
+`Engine/Source/Runtime/InputCore/Classes/InputCoreTypes.h`:
+```
+OculusTouch_Left_Trigger_Click   ValveIndex_Right_Thumbstick_2D   Vive_Left_Trackpad_2D  ...
+```
+`grep MotionController InputCoreTypes.cpp` returns **0 hits**. Binding `MotionController_Left_*`
+compiles, saves, exports and does nothing at all.
+
+**`FKey` import does not validate.** Proven: `Key.import_text("TotallyFakeKey123")` round-trips
+verbatim. There is no Python-side validity check either — `KismetInputLibrary` is not exposed and
+`get_all_keys` does not exist. So a key name cannot be verified after the fact from script.
+**Read the name out of `InputCoreTypes.h` before authoring it**, or pick it in the editor's key
+picker, which only offers real keys.
+
+Real asymmetries in that header — these look like typos and are not:
+- only `OculusTouch_LEFT_Menu_Click` exists; there is no Right equivalent
+- Index has `Grip_Axis` / `Grip_Force`, **no** `Grip_Click`
+- Vive has a **trackpad**, no thumbstick
+- Touch left is X/Y, right is A/B
+
+**A thumbstick needs no swizzle.** `IA_Drive` is Axis2D; WSAD needed Swizzle/Negate because a 1D
+key only writes X, but `*_Thumbstick_2D` is already Axis2D and maps straight through.
+
+### ⚠ In VR the Gunner's aim fires NO input action
+The aim trace hung off `IA_AimTurret`. In a headset the player aims by turning their head, which
+triggers no action, so the trace would never have run — the turret would have sat frozen for the
+whole session with nothing in the log, on a code path that works perfectly on a desktop.
+
+The trace now lives in `UpdateGunnerAim()`, called from the input action on a desktop **and from
+`Tick` in VR**. Tick is enabled only for a local VR Gunner (`UpdateAimTickEnabled`), so no other
+crew pawn pays for it. `IMC_Gunner` deliberately has **no** motion-controller binding for
+`IA_AimTurret` — head aim is the mechanism.
+
+Generalise: **any input-driven feature has to be re-checked for VR, because the HMD generates pose,
+not events.** Anything that only runs on an action callback is dead in a headset.
+
+### The host is never VR, and stereo alone is not enough to make that true
+Two separate things keep the host flat, and killing only one leaves a broken half-state:
+1. stereo rendering off (`UTSVRModeLibrary::SetVRModeEnabled(false)`), and
+2. `Camera->bLockToHmd = false`.
+
+Head tracking can be live while stereo is off, so a host with (2) still set gets a flat screen that
+swings around with a headset sitting on the desk. `ATSHostCameraPawn::NotifyControllerChanged`
+does both, guarded on `IsLocalController` — doing it for a remote copy would switch VR off on
+somebody else's machine.
+
+`ApplyVRMode` also re-checks `PS->IsHost()` rather than relying on pawn choice alone, so the rule
+survives a future spectate mode that hands a host a crew pawn.
+
+### Tracking origin: `Local`, not floor or stage
+A crew member is strapped into a chair, and the seat scene component already marks where their head
+goes. `EHMDTrackingOrigin::Local` centres tracking on the headset's start pose, so the head lands at
+the seat. `LocalFloor`/`Stage` would put the player's head on the tank's floor.
+
+### Build wiring
+`UHeadMountedDisplayFunctionLibrary` lives in the **XRBase plugin** in UE5; the types
+(`EHMDTrackingOrigin`) stayed in the **HeadMountedDisplay module**. Both are needed. XRBase also has
+to be listed in `Tank_Sim_V2.uproject` — UBT warns
+`does not list plugin 'XRBase' as a dependency` and that would bite at packaging time, not here.
+
+### Widget interaction is scaffolding, not a feature
+No crew widgets exist yet. What is in place: a **deactivated** `UWidgetInteractionComponent` on the
+right hand, `IMC_VR_Widget` (IA_Primary on the right trigger), and
+`ATSVRPawn::SetVRWidgetInteractionEnabled(bool)`, which points the laser and adds that context at
+**priority 3** — above the role context — so the trigger clicks the widget instead of firing the
+gun. Call it when a widget is shown/hidden; nothing guesses.
+
+### 🔻 TEMPORARY — `bVRTestAutoAssign` must be reverted
+`ATSTeamMatchGameMode` has a VR bring-up shortcut, off by default:
+```
+bVRTestAutoAssign   bool         suppresses host designation, force-assigns the joining player
+VRTestTeam          ETSTeamId    default TeamA
+VRTestRole          ETSCrewRole  change between runs to test each seat
+```
+Normal flow needs a host plus crew, which makes "put the headset on and check the Driver's stick" a
+two-person job. With this on, one Play-In-Editor run drops you straight into a seat.
+
+It **bypasses the host-admin rule on purpose**, which is exactly why it must not ship.
+`ShouldDesignateAsHost` was made `virtual` so the flag can suppress host designation *before*
+`GetDefaultPawnClassForController` reads `bIsHost` — designating afterwards would spawn the wrong
+pawn. Every assignment logs a `Warning` naming the flag.
+
+**Revert `bVRTestAutoAssign` (and the override that supports it) once VR is verified.**
+
+### WarZone team spawn points
+`TSTeamSpawn_TeamA..D` are now four `TargetPoint`s in `WarZone`, ground-traced and placed as two
+opposing lines (A/C face +X at -2600, B/D face back at +1400). Without them
+`GetSpawnTransformForTeam` falls back to a world-origin offset and logs a warning.
+**`Content/TankSimulation/Maps` is git-ignored, so WarZone.umap is local-only** — these actors are
+not in the repo and will not reach another clone.
+
+### ⚠ Never toggle stereo during possession — it crashes in SetupPlayerInputComponent
+First run in a real headset crashed with this stack and nothing in the log:
+```
+ATSVRPawn::SetupPlayerInputComponent   TSVRPawn.cpp:360
+ATSGameMode::PostLogin                 TSGameMode.cpp:207   <- Super::PostLogin
+ATSTeamMatchGameMode::PostLogin        TSTeamMatchGameMode.cpp:28
+```
+The reported line is a red herring — it is a null-guarded `BindAction`. The real cause is the
+frame below it. `ApplyVRMode` ran from `PossessedBy`, which is inside
+`AGameModeBase::RestartPlayer` inside `PostLogin`: **possession is still in progress and
+`SetupPlayerInputComponent` has not run yet.** `EnableHMD(true)` rebuilds the viewport and its
+render target, so flipping stereo there pulls the ground out from under the input setup that runs
+immediately afterwards.
+
+**Anything that rebuilds the viewport must be deferred out of the possession/restart call stack.**
+`ApplyVRMode` now does `SetTimerForNextTick(... ApplyVRModeDeferred)`. The role mapping context is
+still applied synchronously — that is plain Enhanced Input bookkeeping and is safe there.
+
+Make the toggle idempotent too. Under **Play > VR Preview stereo is ALREADY on**, so an
+unconditional `EnableHMD(true)` re-initialised the stereo device on every possession for no reason.
+`SetVRModeEnabled` now early-outs when `IsVRModeActive() == bEnable`, which removes the churn
+entirely in the normal case.
+
+### ⚠ OpenXR never sees your Enhanced Input bindings unless they are in the PROJECT settings
+The log said it outright, and it is easy to scroll past:
+```
+LogHMD: Warning: No mapping context provided in the OpenXR Input project settings, action
+bindings will not be visible to the OpenXR runtime.
+```
+`OpenXRInput.cpp` builds its action set **at session start** from
+`UEnhancedInputDeveloperSettings::DefaultMappingContexts` (Project Settings > Engine > Enhanced
+Input). Empty list means it calls `BuildLegacyActions` instead and **no motion-controller binding
+reaches the runtime, however correct the IMC assets are.** Adding a context at runtime from the
+pawn is too late and does not count.
+
+Registered in `Config/DefaultInput.ini`:
+```ini
+[/Script/EnhancedInput.EnhancedInputDeveloperSettings]
+bEnableDefaultMappingContexts=True
++DefaultMappingContexts=(InputMappingContext="/Game/.../IMC_Driver.IMC_Driver",Priority=0,bAddImmediately=False,...)
+```
+**`bAddImmediately=False` is load-bearing.** It exposes the context to OpenXR without Enhanced Input
+auto-applying it to every local player — applying them all would hand the Driver the Gunner's
+bindings and destroy the role gating. `ATSVRPawn` still decides who gets which context.
+
+(Also note the header's own caveat: these contexts must live in the game's root Content directory,
+not a plugin.)
+
+### Recentre needs a live head pose
+`Could not retrieve a valid head pose for recentering` on every run: the auto-recentre fired before
+the XR session produced a pose, so it silently did nothing. Guarded on
+`UTSVRModeLibrary::IsHeadTrackingActive()` now; if tracking is not up yet the player still has the
+Recenter button.
+
+### Still owed a human test
+Nothing here has run in an actual headset. The pawn changes add `UPROPERTY`s, so Live Coding cannot
+carry them: close the editor and rebuild the **editor** target first.
+
+### ⚠ `ETriggerEvent::Triggered` fires ONLY while actuated — releasing sends nothing
+Reported as "the tank keeps moving forward even after releasing the input", in VR and on desktop.
+
+`IA_Drive` was bound to `Triggered` only. Enhanced Input raises `Triggered` every frame the axis is
+actuated and **nothing at all** when it returns to zero, so the release never reached the server,
+`UTSTankControlComponent::CurrentDriveInput` kept its last non-zero value, and `BP_SetDriveInput`
+went on feeding that throttle for ever.
+
+Verified in the engine before fixing rather than assumed —
+`UEnhancedPlayerInput::GetTriggerStateChangeEvent`: `Triggered -> None` yields
+`ETriggerEventInternal::Completed`, `Ongoing -> None` yields `Canceled`. So for an action with no
+explicit triggers, `Completed` fires exactly once on release. Both now bind to
+`ATSVRPawn::Input_DriveReleased`, which sends an explicit `(0,0)`.
+
+**Generalise: any state LATCHED from a `Triggered` binding needs a `Completed`/`Canceled` binding to
+clear it.** A one-shot action (fire, reload) is fine on `Triggered` alone; a continuous one the
+receiver keeps applying is not.
+
+### ⚠ An Unreliable RPC is the wrong channel for a TERMINAL command
+`ServerSetDriveInput` is `Server, Unreliable` — right for a per-frame stream, where a dropped packet
+is superseded by the next one. But the **release is a single terminal packet**, and if that one
+drops the tank drives away for ever with nothing to recover it.
+
+Fixed with a server-side dead-man switch rather than by making the RPC reliable (a reliable stop can
+still be overtaken by a late unreliable non-zero packet and re-latch the throttle).
+`UTSTankControlComponent` ticks **only while a non-zero input is latched** and zeroes it after
+`DriveInputTimeoutSeconds` (0.5s) without fresh input, logging which throttle it released. A held
+input refreshes the timer every frame, so it never fires while someone is driving.
+
+### ⚠ A merge once took the .h from one side and the .cpp from the other
+`36813ab` (merge of `origin/SessionCreation`) kept `TSVRPawn.h` / `TSHostCameraPawn.h` from the VR
+branch and took both `.cpp` files from the remote, which predated that work. The result **declared
+nine functions that nothing defined** and the branch would not link:
+```
+error LNK2001: unresolved external symbol ATSVRPawn::Tick / ApplyVRMode / IsVRCrewMode /
+               UpdateGunnerAim / SetVRWidgetInteractionEnabled /
+               ATSHostCameraPawn::NotifyControllerChanged
+```
+It was invisible for a while because the running editor still held a DLL built *before* the merge.
+
+Repaired by redoing the merge per-file with `git merge-file` against the real base
+(`git merge-base`), which reduced it to three genuinely additive conflicts — VR code on one side,
+diagnostics on the other — all resolved by keeping both. **If a link error names a function you
+know you wrote, suspect a merge that split a header from its implementation**, and check
+`git show <merge>^1:<file>` against `^2` before assuming the code was deleted deliberately.
+
+
+---
+
 ## 6. Test Procedure (run after every phase)
 
 1. Close editor fully. Rebuild C++ (Rule 5). Relaunch.

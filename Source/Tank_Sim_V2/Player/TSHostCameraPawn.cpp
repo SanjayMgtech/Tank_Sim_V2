@@ -5,6 +5,8 @@
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/SpectatorPawnMovement.h"
 #include "InputMappingContext.h"
+#include "Player/TSVRModeLibrary.h"
+#include "Tank_Sim_V2.h"
 
 ATSHostCameraPawn::ATSHostCameraPawn(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -41,9 +43,39 @@ ATSHostCameraPawn::ATSHostCameraPawn(const FObjectInitializer& ObjectInitializer
 	// changes them, so the actor never rotates - a camera parented to the root with this off is
 	// frozen facing the spawn direction while WASD flies off along wherever the mouse has aimed the
 	// control rotation. That is the "WASD goes sideways" bug.
-	// This does not fight VR: bLockToHmd composes the head pose on top of this rotation, so the host
-	// still looks with their head and steers with the stick.
 	Camera->bUsePawnControlRotation = true;
+
+	// The host is a match admin on a FLAT SCREEN and never a VR participant, so unlike a crew pawn
+	// it must NOT compose the head pose on top of the control rotation - a free-cam that swings
+	// around with a headset sitting on the desk is unusable. NotifyControllerChanged clears this
+	// again on the live instance; setting it here means even an un-possessed preview is flat.
+	Camera->bLockToHmd = false;
+}
+
+void ATSHostCameraPawn::NotifyControllerChanged()
+{
+	Super::NotifyControllerChanged();
+
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !PC->IsLocalController())
+	{
+		// Stereo belongs to a local viewport. Doing this for a remote copy of the host pawn would
+		// switch VR off on somebody else's machine.
+		return;
+	}
+
+	// Two separate things have to be off, and only killing both makes the host truly flat:
+	// stereo rendering, and the camera following the headset's pose.
+	UTSVRModeLibrary::SetVRModeEnabled(false);
+
+	if (Camera)
+	{
+		Camera->bLockToHmd = false;
+	}
+
+	UE_LOG(LogTankSim, Log,
+		TEXT("ATSHostCameraPawn: host possessed the free-roam camera - VR forced off (HMD connected: %s)."),
+		UTSVRModeLibrary::IsHMDAvailable() ? TEXT("yes") : TEXT("no"));
 }
 
 void ATSHostCameraPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
