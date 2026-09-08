@@ -609,6 +609,18 @@ void ATSVRPawn::UpdateGunnerAimCommand()
 	// lead that is only ever checked on input would sit stale until they moved again.
 	ClampGunnerAimLead();
 
+	// The Gunner's camera carries NO rotation of its own, so where they face is decided entirely by
+	// the seat component - one knob, in the Blueprint, where a designer can see it.
+	//
+	// It has to be asserted rather than assumed: ApplySeatViewDelta writes a relative rotation for
+	// any role that is not steering the gun, and a player who moved the mouse in the moment before
+	// their Gunner assignment landed would keep that stray angle for the rest of the session, with
+	// nothing to clear it and no way to tell it from a mis-authored seat.
+	if (Camera && !Camera->GetRelativeRotation().IsNearlyZero())
+	{
+		Camera->SetRelativeRotation(FRotator::ZeroRotator);
+	}
+
 	// AND THAT IS ALL. The camera is deliberately NOT touched.
 	//
 	// The Gunner sits at GunnerScene, parented to the interior mesh's turret basket bone, so the
