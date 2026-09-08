@@ -175,6 +175,12 @@ public:
 	UFUNCTION(Exec)
 	void TSTankStatus();
 
+	// One-shot dump of everything that decides whether VR input and VR UI work. Added because
+	// repeated asset-level fixes kept being followed by "still not working" with no way to tell
+	// WHICH layer was failing. Reports live runtime state, not what the assets claim.
+	UFUNCTION(Exec)
+	void TSVRDiag();
+
 	// URL options that apply the commands above once this controller is actually ready:
 	//   ...WarZone?listen?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1
 	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoDrive=1,0,8

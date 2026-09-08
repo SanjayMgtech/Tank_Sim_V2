@@ -13,6 +13,14 @@
 #include "Tank_Sim_V2.h"
 #include "TimerManager.h"
 #include "UI/TSRoleDebugWidget.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Components/WidgetComponent.h"
+#include "EnhancedInputSubsystems.h"
+#include "EnhancedPlayerInput.h"
+#include "InputAction.h"
+#include "InputMappingContext.h"
+#include "Player/TSVRModeLibrary.h"
+#include "IXRTrackingSystem.h"
 #include "UI/TSUISubsystem.h"
 #include "Tank/TSTankCommanderComponent.h"
 #include "Tank/TSTankControlComponent.h"
@@ -47,9 +55,23 @@ void ATSTankPlayerController::ApplyLocalUIForCurrentMap()
 		UE_LOG(LogTankSim, Log, TEXT("ATSTankPlayerController: removed %d leftover menu widget(s) after entering the gameplay map."), Removed);
 	}
 
-	if (bShowRoleDebugWidgetOnGameplayMaps)
+	// Screen-space widgets are unreadable in a headset - they render plastered across the view. This
+	// panel is a flat-screen debug aid, so a VR player must never get it.
+	//
+	// The check is HMD AVAILABILITY, not IsVRModeActive(): ApplyVRMode is deferred to the next tick
+	// (it rebuilds the viewport, which is unsafe inside the possession call stack), so stereo is
+	// still off at this point even for a player who is about to be in VR. Asking "is a headset
+	// present and is this player eligible for it" is decidable now; asking "is stereo on" is not.
+	const bool bWillBeVR = UTSVRModeLibrary::IsHMDAvailable() && !IsMatchHost();
+	if (bShowRoleDebugWidgetOnGameplayMaps && !bWillBeVR)
 	{
 		ShowRoleDebugWidget(true);
+	}
+	else if (bShowRoleDebugWidgetOnGameplayMaps)
+	{
+		UE_LOG(LogTankSim, Log,
+			TEXT("ATSTankPlayerController: skipping the flat role debug panel - this player has a "
+				 "headset and is not the host, so it would render across their view."));
 	}
 
 	// The host arrives needing to assign crews; everyone else arrives needing to play.
@@ -964,4 +986,124 @@ void ATSTankPlayerController::ServerIssueCrewCommand_Implementation(ETSCrewComma
 bool ATSTankPlayerController::ServerIssueCrewCommand_Validate(ETSCrewCommand Command)
 {
 	return Command != ETSCrewCommand::None;
+}
+
+void ATSTankPlayerController::TSVRDiag()
+{
+#if !UE_BUILD_SHIPPING
+	UE_LOG(LogTankSim, Log, TEXT("===== TSVRDiag ====="));
+
+	// --- 1. VR / XR state -----------------------------------------------------------------------
+	UE_LOG(LogTankSim, Log, TEXT("[VR] HMDAvailable=%s VRModeActive=%s HeadTracking=%s"),
+		UTSVRModeLibrary::IsHMDAvailable() ? TEXT("yes") : TEXT("NO"),
+		UTSVRModeLibrary::IsVRModeActive() ? TEXT("yes") : TEXT("NO"),
+		UTSVRModeLibrary::IsHeadTrackingActive() ? TEXT("yes") : TEXT("NO"));
+
+	if (GEngine && GEngine->XRSystem.IsValid())
+	{
+		UE_LOG(LogTankSim, Log, TEXT("[VR] XRSystem='%s' hmdConnected=%s"),
+			*GEngine->XRSystem->GetSystemName().ToString(),
+			GEngine->XRSystem->IsHeadTrackingAllowed() ? TEXT("yes") : TEXT("NO"));
+	}
+	else
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("[VR] no XRSystem - this instance does not own the headset."));
+	}
+
+	// --- 2. Who am I ----------------------------------------------------------------------------
+	const ATSTankPlayerState* PS = GetPlayerState<ATSTankPlayerState>();
+	UE_LOG(LogTankSim, Log, TEXT("[Who] pawn=%s local=%s host=%s team=%d role=%d"),
+		*GetNameSafe(GetPawn()),
+		IsLocalController() ? TEXT("yes") : TEXT("NO"),
+		(PS && PS->IsHost()) ? TEXT("yes") : TEXT("no"),
+		PS ? static_cast<int32>(PS->GetTeamId()) : -1,
+		PS ? static_cast<int32>(PS->GetCrewRole()) : -1);
+
+	// --- 3. Which mapping contexts are ACTUALLY applied ------------------------------------------
+	// The asset can be perfect and still never be added. This distinguishes those two cases.
+	const ULocalPlayer* LP = GetLocalPlayer();
+	UEnhancedInputLocalPlayerSubsystem* EIS =
+		LP ? LP->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>() : nullptr;
+
+	if (!EIS)
+	{
+		UE_LOG(LogTankSim, Error, TEXT("[IMC] no EnhancedInput subsystem - no input can work at all."));
+	}
+	else
+	{
+		static const TCHAR* ContextPaths[] = {
+			TEXT("/Game/TankSimulation/Input/Contexts/IMC_Shared.IMC_Shared"),
+			TEXT("/Game/TankSimulation/Input/Contexts/IMC_Driver.IMC_Driver"),
+			TEXT("/Game/TankSimulation/Input/Contexts/IMC_Gunner.IMC_Gunner"),
+			TEXT("/Game/TankSimulation/Input/Contexts/IMC_Commander.IMC_Commander"),
+			TEXT("/Game/TankSimulation/Input/Contexts/IMC_VR_Widget.IMC_VR_Widget"),
+		};
+		for (const TCHAR* Path : ContextPaths)
+		{
+			const UInputMappingContext* Ctx = LoadObject<UInputMappingContext>(nullptr, Path);
+			UE_LOG(LogTankSim, Log, TEXT("[IMC] %-16s applied=%s"),
+				Ctx ? *Ctx->GetName() : TEXT("<load failed>"),
+				(Ctx && EIS->HasMappingContext(Ctx)) ? TEXT("YES") : TEXT("no"));
+		}
+
+		// --- 4. Live action values ---------------------------------------------------------------
+		// Hold a stick while running this. A non-zero value proves the whole key -> OpenXR ->
+		// Enhanced Input chain works and the fault is downstream; all-zero proves the opposite.
+		// NOT named 'PI': UE defines PI as a math macro, so the declaration expands to a constant and
+		// fails with a bare "syntax error: 'constant'". Same family as the Role / Mesh traps.
+		if (const UEnhancedPlayerInput* PlayerInputPtr = EIS->GetPlayerInput())
+		{
+			static const TCHAR* ActionPaths[] = {
+				TEXT("/Game/TankSimulation/Input/Actions/IA_Drive.IA_Drive"),
+				TEXT("/Game/TankSimulation/Input/Actions/IA_AimTurret.IA_AimTurret"),
+				TEXT("/Game/TankSimulation/Input/Actions/IA_FireMainCannon.IA_FireMainCannon"),
+				TEXT("/Game/TankSimulation/Input/Actions/IA_FireMachineGun.IA_FireMachineGun"),
+			};
+			for (const TCHAR* Path : ActionPaths)
+			{
+				const UInputAction* Action = LoadObject<UInputAction>(nullptr, Path);
+				if (!Action)
+				{
+					continue;
+				}
+				const FVector V = PlayerInputPtr->GetActionValue(Action).Get<FVector>();
+				UE_LOG(LogTankSim, Log, TEXT("[Action] %-18s value=(%.3f, %.3f, %.3f)"),
+					*Action->GetName(), V.X, V.Y, V.Z);
+			}
+		}
+	}
+
+	// --- 5. What is on screen -------------------------------------------------------------------
+	// "The UI is still in my face" needs to name the widget actually in the viewport, rather than
+	// assuming it is the one we already disabled.
+	TArray<UUserWidget*> Widgets;
+	UWidgetBlueprintLibrary::GetAllWidgetsOfClass(this, Widgets, UUserWidget::StaticClass(), false);
+	int32 InViewport = 0;
+	for (const UUserWidget* W : Widgets)
+	{
+		if (W && W->IsInViewport())
+		{
+			++InViewport;
+			UE_LOG(LogTankSim, Log, TEXT("[Widget] IN VIEWPORT: %s (class %s) visibility=%d"),
+				*W->GetName(), *GetNameSafe(W->GetClass()), static_cast<int32>(W->GetVisibility()));
+		}
+	}
+	UE_LOG(LogTankSim, Log, TEXT("[Widget] %d widget(s) in viewport, %d total"), InViewport, Widgets.Num());
+
+	// World-space panels are a separate mechanism and do not appear above.
+	if (const APawn* P = GetPawn())
+	{
+		TArray<UWidgetComponent*> Panels;
+		P->GetComponents<UWidgetComponent>(Panels);
+		for (const UWidgetComponent* Panel : Panels)
+		{
+			UE_LOG(LogTankSim, Log, TEXT("[Panel] %s widgetClass=%s visible=%s hiddenInGame=%s"),
+				*Panel->GetName(), *GetNameSafe(Panel->GetWidgetClass()),
+				Panel->IsVisible() ? TEXT("YES") : TEXT("no"),
+				Panel->bHiddenInGame ? TEXT("yes") : TEXT("no"));
+		}
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("===== end TSVRDiag ====="));
+#endif
 }
