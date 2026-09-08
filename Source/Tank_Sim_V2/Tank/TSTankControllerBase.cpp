@@ -469,6 +469,17 @@ FRotator ATSTankControllerBase::GetMainGunAimRotation() const
 	return FRotator(Pitch, Yaw, 0.0);
 }
 
+FVector ATSTankControllerBase::GetTurretPivotLocation() const
+{
+	const USkeletalMeshComponent* MeshComp = GetMesh();
+	if (MeshComp && !TurretSocketName.IsNone() && MeshComp->DoesSocketExist(TurretSocketName))
+	{
+		return MeshComp->GetSocketLocation(TurretSocketName);
+	}
+
+	return GetActorLocation();
+}
+
 void ATSTankControllerBase::ReleaseWeaponTrigger()
 {
 	if (!bWeaponFiring)

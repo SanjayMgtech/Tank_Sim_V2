@@ -602,6 +602,11 @@ void ATSVRPawn::UpdateGunnerSightCamera()
 		bGunnerAimSynced = true;
 	}
 
+	// Every frame, not just on mouse input. The gun can fall behind the command without the player
+	// touching the mouse at all - a blocked traverse, a hitch, the hull turning under them - and a
+	// lead that is only ever checked on input would sit stale until they moved again.
+	ClampGunnerAimLead();
+
 	// World, not relative. The seat is attached to the turret socket, so a relative rotation would be
 	// added ON TOP of the traverse the seat already carries. Stating the world rotation says where the
 	// sight points once and stays correct whatever the seat happens to be parented to.
@@ -665,21 +670,33 @@ void ATSVRPawn::UpdateGunnerAim()
 		return;
 	}
 
+	const ATSTankControllerBase* Tank = GetAssignedTankController();
+	const bool bLocked = IsGunnerViewLockedToGun() && Tank != nullptr;
+
 	// With the sight locked, the camera points down the gun, so tracing along it would only ever ask
 	// the gun to stay where it is and the turret would never move. The ray follows the mouse COMMAND
 	// instead; the camera arrives once the gun has caught up with it.
-	const FVector Start = Camera->GetComponentLocation();
-	const FVector Direction = IsGunnerViewLockedToGun()
+	//
+	// And it leaves from the TURRET PIVOT, not the eye. UpdateTurretRotation turns the aim point back
+	// into an angle measured from the turret socket, so a ray fired from the seat - which sits off
+	// that socket and swings around it as the turret traverses - resolves to a DIFFERENT angle than
+	// the one the player asked for. The error grows as the range shrinks, so sweeping the gun across
+	// nearby ground threw it off by degrees at a time, and because the mouse command is a free
+	// integrator nothing ever pulled the two back together: the gap just kept opening. Projecting the
+	// command from the pivot the tank measures at makes the angle it resolves equal the angle asked
+	// for, so the sight and the barrel cannot separate.
+	const FVector Start = bLocked ? Tank->GetTurretPivotLocation() : Camera->GetComponentLocation();
+	const FVector Direction = bLocked
 		? GetGunnerAimWorldRotation().Vector()
 		: Camera->GetForwardVector();
 	const FVector End = Start + Direction * AimTraceDistance;
 
 	// Ignore ourselves and our own tank, or the trace hits the hull we are sitting inside and the
-	// turret tries to aim at its own armour.
+	// turret tries to aim at its own armour. Doubly so now the ray starts inside the turret itself.
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(TSVRAimTrace), /*bTraceComplex=*/false, this);
-	if (const APawn* Tank = PC->GetAssignedTank())
+	if (const APawn* AssignedTank = PC->GetAssignedTank())
 	{
-		Params.AddIgnoredActor(Tank);
+		Params.AddIgnoredActor(AssignedTank);
 	}
 
 	FHitResult Hit;

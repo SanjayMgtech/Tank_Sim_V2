@@ -726,6 +726,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Turret")
 	FRotator GetMainGunAimRotation() const;
 
+	// World location of the turret socket - the point the aim maths actually pivots about.
+	//
+	// UpdateTurretRotation resolves the aim POINT into an angle from here (SocketToTargetTurret),
+	// so anyone building an aim point out of a direction has to project it from this location. Fire
+	// the same ray from anywhere else - the Gunner's eye, say - and the angle that comes back is not
+	// the angle that was asked for, by an error that scales with 1/range.
+	//
+	// Falls back to the actor location if the socket is missing, which is where the aim previously
+	// pivoted anyway and is still far better than the seat.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Turret")
+	FVector GetTurretPivotLocation() const;
+
 	// One trigger pull: how long StartShooting stays held for a main-cannon shot.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Weapons", meta = (ClampMin = "0.01"))
 	float MainCannonTriggerHoldSeconds = 0.15f;
