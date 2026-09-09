@@ -52,6 +52,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
 	bool TrySetPlayMode(APlayerController* Player, ETSPlayMode NewMode);
 
+	// Manual controls need a rigged interior AND VR hands, so this refuses Manual for a player who is
+	// not in VR rather than leaving them with a stick that no longer works and levers they cannot
+	// reach. Returns false when refused.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Lobby")
+	bool TrySetDriveControlMode(APlayerController* Player, ETSDriveControlMode NewMode);
+
 	// Server only. Makes sure this player owns a crew pawn for BOTH modes, adopting whatever
 	// RestartPlayer already handed them, then possesses the one their assigned mode calls for and
 	// parks the other. Safe to call repeatedly - it spawns only what is missing.

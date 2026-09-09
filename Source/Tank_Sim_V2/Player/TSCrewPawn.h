@@ -376,6 +376,11 @@ private:
 	// so letting go of the stick or the keys produces no event at all - without this the last
 	// non-zero throttle stays latched on the server and the tank drives on for ever.
 	void Input_DriveReleased(const FInputActionValue& Value);
+	// Analog when there is no PlayerState yet - a pawn with no assignment must still be drivable by
+	// the stick, or a mid-join player is stuck with nothing.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Control")
+	ETSDriveControlMode GetDriveControlMode() const;
+
 	void Input_AimTurret(const FInputActionValue& Value);
 	void Input_FireMainCannon(const FInputActionValue& Value);
 	void Input_FireMachineGun(const FInputActionValue& Value);

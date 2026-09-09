@@ -40,6 +40,22 @@ enum class ETSPlayMode : uint8
 	VR		UMETA(DisplayName = "Play in VR")
 };
 
+// How the Driver's input reaches the tank.
+//
+// These are mutually exclusive on purpose: the interior lever bones can be driven BY the input
+// (Analog - the stick moves the tank and the levers follow) or they can BE the input (Manual - a VR
+// hand pulls a lever and that produces the drive command). Both cannot own the pose at once, so this
+// is a switch rather than a layer.
+UENUM(BlueprintType)
+enum class ETSDriveControlMode : uint8
+{
+	// Thumbstick or WSAD. The interior controls animate to follow it.
+	Analog	UMETA(DisplayName = "Analog stick / keyboard"),
+
+	// The VR driver physically works the levers and pedals; the controls produce the input.
+	Manual	UMETA(DisplayName = "Manual controls (VR hands)")
+};
+
 UENUM(BlueprintType)
 enum class ETSMatchState : uint8
 {
@@ -151,4 +167,7 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
 	static FString PlayModeToString(ETSPlayMode PlayMode);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Types")
+	static FString DriveControlModeToString(ETSDriveControlMode Mode);
 };

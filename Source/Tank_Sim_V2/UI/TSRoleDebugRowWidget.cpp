@@ -17,6 +17,7 @@ namespace
 	const TArray<ETSTeamId> RowTeams = { ETSTeamId::TeamA, ETSTeamId::TeamB, ETSTeamId::TeamC, ETSTeamId::TeamD };
 	const TArray<ETSCrewRole> RowRoles = { ETSCrewRole::Driver, ETSCrewRole::Gunner, ETSCrewRole::Commander };
 	const TArray<ETSPlayMode> RowPlayModes = { ETSPlayMode::Desktop, ETSPlayMode::VR };
+	const TArray<ETSDriveControlMode> RowDriveModes = { ETSDriveControlMode::Analog, ETSDriveControlMode::Manual };
 
 	const FLinearColor ButtonIdle(0.10f, 0.10f, 0.12f, 0.90f);
 	const FLinearColor ButtonCurrent(0.15f, 0.55f, 0.22f, 0.95f);
@@ -179,6 +180,28 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 			}
 		}
 
+		UTextBlock* DriveDivider = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+		DriveDivider->SetText(FText::FromString(TEXT("  ")));
+		Row->AddChildToWrapBox(DriveDivider);
+
+		static const TCHAR* DriveModeLabels[] = { TEXT("Stick"), TEXT("Levers") };
+		for (int32 Index = 0; Index < RowDriveModes.Num(); ++Index)
+		{
+			UButton* Button = MakeButton(DriveModeLabels[Index], 46.f);
+			switch (Index)
+			{
+			case 0: Button->OnClicked.AddDynamic(this, &UTSRoleDebugRowWidget::OnAnalogClicked); break;
+			default: Button->OnClicked.AddDynamic(this, &UTSRoleDebugRowWidget::OnManualClicked); break;
+			}
+			DriveModeButtons.Add(Button);
+
+			if (UWrapBoxSlot* ButtonSlot = Row->AddChildToWrapBox(Button))
+			{
+				ButtonSlot->SetPadding(FMargin(2.f, 1.f));
+				ButtonSlot->SetVerticalAlignment(VAlign_Center);
+			}
+		}
+
 		ClearButton = MakeButton(TEXT("Clear"), 42.f);
 		ClearButton->OnClicked.AddDynamic(this, &UTSRoleDebugRowWidget::OnClearClicked);
 		if (UWrapBoxSlot* ClearSlot = Row->AddChildToWrapBox(ClearButton))
@@ -262,6 +285,31 @@ void UTSRoleDebugRowWidget::AssignPlayMode(ETSPlayMode PlayMode)
 
 void UTSRoleDebugRowWidget::OnDesktopClicked() { AssignPlayMode(ETSPlayMode::Desktop); }
 void UTSRoleDebugRowWidget::OnVRClicked() { AssignPlayMode(ETSPlayMode::VR); }
+
+void UTSRoleDebugRowWidget::OnAnalogClicked() { AssignDriveControlMode(ETSDriveControlMode::Analog); }
+void UTSRoleDebugRowWidget::OnManualClicked() { AssignDriveControlMode(ETSDriveControlMode::Manual); }
+
+void UTSRoleDebugRowWidget::AssignDriveControlMode(ETSDriveControlMode Mode)
+{
+	ATSTankPlayerController* PC = GetOwningTankController();
+	APlayerState* Target = TargetPlayerState.Get();
+	if (!PC || !Target)
+	{
+		return;
+	}
+
+	if (PC->IsMatchHost())
+	{
+		PC->ServerHostAssignPlayerToDriveControlMode(Target, Mode);
+		return;
+	}
+
+	// A player may switch their OWN scheme; the server refuses anything else.
+	if (Target == PC->PlayerState)
+	{
+		PC->ServerSetDriveControlMode(Mode);
+	}
+}
 
 void UTSRoleDebugRowWidget::OnClearClicked()
 {
@@ -371,6 +419,29 @@ void UTSRoleDebugRowWidget::RefreshRow()
 		// Clickable by the host for anyone, and by a player for themselves - that second case is the
 		// mid-match switch. The host's own row stays disabled: it holds no crew pawn to switch.
 		Button->SetIsEnabled((bIsHost || bIsLocalPlayer) && !TargetPS->IsHost());
+
+		FButtonStyle Style = Button->GetStyle();
+		Style.Normal.TintColor = FSlateColor(bIsMine ? ButtonCurrent : ButtonIdle);
+		Button->SetStyle(Style);
+	}
+
+	for (int32 Index = 0; Index < DriveModeButtons.Num(); ++Index)
+	{
+		UButton* Button = DriveModeButtons[Index];
+		if (!Button)
+		{
+			continue;
+		}
+
+		const ETSDriveControlMode Mode = RowDriveModes[Index];
+		const bool bIsMine = Mode == TargetPS->GetDriveControlMode();
+
+		// Manual needs VR hands, so it is disabled for a Desktop player rather than offered and then
+		// refused by the server - a button that does nothing when clicked reads as a bug.
+		const bool bModeAvailable = (Mode == ETSDriveControlMode::Analog)
+			|| TargetPS->GetPlayMode() == ETSPlayMode::VR;
+
+		Button->SetIsEnabled((bIsHost || bIsLocalPlayer) && !TargetPS->IsHost() && bModeAvailable);
 
 		FButtonStyle Style = Button->GetStyle();
 		Style.Normal.TintColor = FSlateColor(bIsMine ? ButtonCurrent : ButtonIdle);

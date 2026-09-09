@@ -514,8 +514,25 @@ void ATSCrewPawn::Input_Menu(const FInputActionValue& Value)
 	OnMenuPressed();
 }
 
+ETSDriveControlMode ATSCrewPawn::GetDriveControlMode() const
+{
+	const ATSTankPlayerState* PS = GetController() ? GetController()->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	return PS ? PS->GetDriveControlMode() : ETSDriveControlMode::Analog;
+}
+
 void ATSCrewPawn::Input_Drive(const FInputActionValue& Value)
 {
+	// In Manual mode the LEVERS are the input: a VR hand pulls them and that produces the drive
+	// command. Letting the stick through as well would give the tank two masters, and the stick would
+	// win every frame it was touched - the levers would appear to do nothing.
+	//
+	// The release path is deliberately NOT gated (see Input_DriveReleased): switching mode mid-hold
+	// must still be able to stop the tank.
+	if (GetDriveControlMode() == ETSDriveControlMode::Manual)
+	{
+		return;
+	}
+
 	const FVector2D Axis = Value.Get<FVector2D>();
 	ATSTankPlayerController* PC = GetTankController();
 

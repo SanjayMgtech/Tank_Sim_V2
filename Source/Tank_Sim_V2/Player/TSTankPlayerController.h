@@ -69,11 +69,17 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Crew")
 	void ServerSetPlayMode(ETSPlayMode NewMode);
 
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ServerSetDriveControlMode(ETSDriveControlMode NewMode);
+
 	// Host-driven, alongside the team and seat buttons in the lobby console. Re-checks IsMatchHost()
 	// server-side for the same reason the team/role RPCs do: a Server RPC's HasAuthority() is
 	// trivially true, so without it any client could put anybody into VR.
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
 	void ServerHostAssignPlayerToPlayMode(APlayerState* TargetPlayerState, ETSPlayMode NewMode);
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ServerHostAssignPlayerToDriveControlMode(APlayerState* TargetPlayerState, ETSDriveControlMode NewMode);
 
 	// TSPlayMode <vr|desktop> (or 0-1). Switches THIS player, through the same self-serve RPC.
 	UFUNCTION(Exec)
@@ -220,6 +226,9 @@ public:
 	// One-shot dump of everything that decides whether VR input and VR UI work. Added because
 	// repeated asset-level fixes kept being followed by "still not working" with no way to tell
 	// WHICH layer was failing. Reports live runtime state, not what the assets claim.
+	UFUNCTION(Exec)
+	void TSDriveMode(const FString& Mode);
+
 	UFUNCTION(Exec)
 	void TSVRDiag();
 

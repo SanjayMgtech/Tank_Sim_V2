@@ -2683,3 +2683,31 @@ Requested and deliberately deferred. The animation above is INPUT-DRIVEN: the bo
 `CurrentDriveInput`. Grabbing a lever in VR is the opposite direction - the hand moves the bone and
 the bone produces the input - so the two cannot both own the pose. Expect to need an authority
 switch per control (driven-by-input vs driven-by-hand) rather than layering grab on top.
+
+### 🕹 `ETSDriveControlMode` — the host's Stick/Levers switch (2026-09-09)
+Answers the authority conflict flagged above: the interior lever bones can be driven BY the input
+(the stick moves the tank, the levers follow) or they can BE the input (a VR hand pulls a lever,
+which produces the drive command). **Both cannot own the pose**, so this is a switch, not a layer.
+
+Wired exactly like `ETSPlayMode`, because it is the same shape of decision:
+- `ATSTankPlayerState::DriveControlMode`, `ReplicatedUsing = OnRep_Assignment`, **Analog by default**
+  (a stick works on every device; Manual needs VR hands and a rigged interior)
+- `ATSGameMode::TrySetDriveControlMode` holds the rules
+- `ServerSetDriveControlMode` (self-serve) and `ServerHostAssignPlayerToDriveControlMode`
+  (host-gated, re-checked server-side - a Server RPC's `HasAuthority` is trivially true)
+- `TSDriveMode Analog|Manual` console command
+- **Stick / Levers** buttons on each crew-assignment row
+
+**Manual is refused for a non-VR player**, deliberately: switching a desktop driver to Manual would
+take their stick away and give them nothing to work the levers with - a dead control scheme that
+presents as broken input. The row disables the button rather than offering it and having the server
+refuse, because a button that does nothing when clicked reads as a bug.
+
+`ATSCrewPawn::Input_Drive` early-returns in Manual so the stick cannot fight the levers - it would
+win every frame it was touched and the levers would appear dead. **`Input_DriveReleased` is
+deliberately NOT gated**: switching mode mid-hold must still be able to stop the tank.
+
+**What this does NOT do yet:** nothing produces drive input in Manual mode, because the VR hand
+interaction does not exist. Manual currently means "the stick is off". Do not read that as broken -
+it is the switch landing before the mechanism it selects. The next step is grabbable levers writing
+into the same `ServerSetDriveInput` the stick uses today.

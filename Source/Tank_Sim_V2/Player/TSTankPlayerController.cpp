@@ -187,6 +187,48 @@ bool ATSTankPlayerController::ServerSetPlayMode_Validate(ETSPlayMode NewMode)
 	return true;
 }
 
+void ATSTankPlayerController::ServerSetDriveControlMode_Implementation(ETSDriveControlMode NewMode)
+{
+	// Self-serve like the play mode: choosing whether YOUR hands or YOUR stick drive your own tank
+	// takes nothing from anyone. The GameMode still refuses the host and refuses Manual outside VR.
+	if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
+	{
+		const bool bAccepted = GM->TrySetDriveControlMode(this, NewMode);
+		UE_LOG(LogTankSim, Log, TEXT("ServerSetDriveControlMode: '%s' -> %s (%s)"),
+			*GetNameSafe(PlayerState), *UTSTypeUtils::DriveControlModeToString(NewMode),
+			bAccepted ? TEXT("ok") : TEXT("rejected"));
+	}
+}
+
+bool ATSTankPlayerController::ServerSetDriveControlMode_Validate(ETSDriveControlMode NewMode)
+{
+	return true;
+}
+
+void ATSTankPlayerController::ServerHostAssignPlayerToDriveControlMode_Implementation(APlayerState* TargetPlayerState, ETSDriveControlMode NewMode)
+{
+	// Re-checked server-side: a Server RPC's HasAuthority is trivially true, so without this any
+	// client could switch anyone else's control scheme.
+	if (!IsMatchHost())
+	{
+		return;
+	}
+
+	APlayerController* TargetPC = ResolveControllerForPlayerState(TargetPlayerState);
+	if (ATSGameMode* GM = TargetPC ? GetWorld()->GetAuthGameMode<ATSGameMode>() : nullptr)
+	{
+		const bool bAccepted = GM->TrySetDriveControlMode(TargetPC, NewMode);
+		UE_LOG(LogTankSim, Log, TEXT("Host assign drive control mode: '%s' -> %s (%s)"),
+			*GetNameSafe(TargetPlayerState), *UTSTypeUtils::DriveControlModeToString(NewMode),
+			bAccepted ? TEXT("ok") : TEXT("rejected"));
+	}
+}
+
+bool ATSTankPlayerController::ServerHostAssignPlayerToDriveControlMode_Validate(APlayerState* TargetPlayerState, ETSDriveControlMode NewMode)
+{
+	return true;
+}
+
 void ATSTankPlayerController::ServerHostAssignPlayerToPlayMode_Implementation(APlayerState* TargetPlayerState, ETSPlayMode NewMode)
 {
 	if (!IsMatchHost())
@@ -316,6 +358,15 @@ namespace
 		return false;
 	}
 
+	// Accepts "Analog"/"Stick"/"0" or "Manual"/"Hands"/"1".
+	bool ParseDriveControlMode(const FString& In, ETSDriveControlMode& Out)
+	{
+		const FString S = In.TrimStartAndEnd().ToUpper();
+		if (S.StartsWith(TEXT("A")) || S.StartsWith(TEXT("S")) || S == TEXT("0")) { Out = ETSDriveControlMode::Analog; return true; }
+		if (S.StartsWith(TEXT("M")) || S.StartsWith(TEXT("H")) || S == TEXT("1")) { Out = ETSDriveControlMode::Manual; return true; }
+		return false;
+	}
+
 	// Accepts a name (any unambiguous prefix) or "0".."2".
 	bool ParseCrewRole(const FString& In, ETSCrewRole& Out)
 	{
@@ -370,6 +421,21 @@ void ATSTankPlayerController::TSPlayMode(const FString& Mode)
 
 	UE_LOG(LogTankSim, Log, TEXT("TSPlayMode: requesting %s"), *UTSTypeUtils::PlayModeToString(Parsed));
 	ServerSetPlayMode(Parsed);
+#endif
+}
+
+void ATSTankPlayerController::TSDriveMode(const FString& Mode)
+{
+#if !UE_BUILD_SHIPPING
+	ETSDriveControlMode Parsed = ETSDriveControlMode::Analog;
+	if (!ParseDriveControlMode(Mode, Parsed))
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSDriveMode: could not parse '%s'. Use Analog|Manual or 0-1."), *Mode);
+		return;
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("TSDriveMode: requesting %s"), *UTSTypeUtils::DriveControlModeToString(Parsed));
+	ServerSetDriveControlMode(Parsed);
 #endif
 }
 

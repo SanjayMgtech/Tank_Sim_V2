@@ -491,6 +491,42 @@ void ATSGameMode::EnsureCrewPawnsFor(APlayerController* Player)
 		*PS->GetPlayerName(), *UTSTypeUtils::PlayModeToString(PS->GetPlayMode()), *Desired->GetName());
 }
 
+bool ATSGameMode::TrySetDriveControlMode(APlayerController* Player, ETSDriveControlMode NewMode)
+{
+	ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(Player);
+	ATSTankPlayerState* PS = PC ? PC->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	if (!PC || !PS)
+	{
+		return false;
+	}
+
+	// The host holds no crew pawn, so it has nothing to drive with either way.
+	if (PS->IsHost())
+	{
+		UE_LOG(LogTankSim, Warning,
+			TEXT("TrySetDriveControlMode: refused - '%s' is the match host and crews no tank."),
+			*PS->GetPlayerName());
+		return false;
+	}
+
+	// Manual means the levers ARE the input. Without VR hands there is nothing to work them with, and
+	// switching a desktop player to Manual would silently take their stick away and give them
+	// nothing - a dead control scheme that looks like broken input.
+	if (NewMode == ETSDriveControlMode::Manual && PS->GetPlayMode() != ETSPlayMode::VR)
+	{
+		UE_LOG(LogTankSim, Warning,
+			TEXT("TrySetDriveControlMode: refused Manual for '%s' - manual controls need VR hands, and ")
+			TEXT("this player is in Desktop mode. Put them in VR first."),
+			*PS->GetPlayerName());
+		return false;
+	}
+
+	PS->SetDriveControlMode(NewMode);
+	UE_LOG(LogTankSim, Log, TEXT("Drive control mode: '%s' -> %s"),
+		*PS->GetPlayerName(), *UTSTypeUtils::DriveControlModeToString(NewMode));
+	return true;
+}
+
 bool ATSGameMode::TrySetPlayMode(APlayerController* Player, ETSPlayMode NewMode)
 {
 	ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(Player);
