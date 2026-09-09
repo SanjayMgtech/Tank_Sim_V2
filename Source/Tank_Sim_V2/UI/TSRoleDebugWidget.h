@@ -67,6 +67,27 @@ protected:
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Debug")
 	TObjectPtr<UBorder> RootBorder;
 
+	// Caps the panel against the CURRENT viewport instead of letting it run off the edge. A fixed
+	// pixel layout is fine at 1080p and clips the moment the window is small, which is exactly what
+	// a second PIE window is.
+	UPROPERTY(Transient)
+	TObjectPtr<class USizeBox> RootSizeBox;
+
+	// Scrolls rather than clips once the content is taller than that cap.
+	UPROPERTY(Transient)
+	TObjectPtr<class UScrollBox> RootScrollBox;
+
+	// Fraction of the viewport the panel may occupy before it starts scrolling.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float MaxViewportWidthFraction = 0.5f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float MaxViewportHeightFraction = 0.8f;
+
+	// Re-fits the panel to the viewport. Cheap, and called on refresh because the window can be
+	// resized at any time.
+	void UpdateResponsiveLayout();
+
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Debug")
 	TObjectPtr<UTextBlock> HeaderText;
 

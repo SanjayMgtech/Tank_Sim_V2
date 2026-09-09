@@ -3,7 +3,10 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
+#include "Blueprint/WidgetLayoutLibrary.h"
 #include "Components/Overlay.h"
+#include "Components/ScrollBox.h"
+#include "Components/SizeBox.h"
 #include "Components/OverlaySlot.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
@@ -74,8 +77,17 @@ TSharedRef<SWidget> UTSRoleDebugWidget::RebuildWidget()
 			OverlaySlot->SetPadding(FMargin(24.f, 24.f, 0.f, 0.f));
 		}
 
+		// Border -> SizeBox -> ScrollBox -> Column. The SizeBox bounds the panel against the viewport
+		// and the ScrollBox turns "too tall" into a scroll instead of content disappearing off the
+		// bottom edge.
+		RootSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("TSDebugSizeBox"));
+		RootBorder->SetContent(RootSizeBox);
+
+		RootScrollBox = WidgetTree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("TSDebugScroll"));
+		RootSizeBox->AddChild(RootScrollBox);
+
 		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("TSDebugColumn"));
-		RootBorder->SetContent(Column);
+		RootScrollBox->AddChild(Column);
 
 		HeaderText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TSDebugHeader"));
 		HeaderText->SetText(FText::FromString(TEXT("TANK SIM - CREW ASSIGNMENT   [F1 = cursor]")));
@@ -184,6 +196,10 @@ void UTSRoleDebugWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTi
 
 void UTSRoleDebugWidget::RefreshNow()
 {
+	// Re-fit first: the window may have been resized since the last refresh, and the text below is
+	// wrapped to whatever width this decides.
+	UpdateResponsiveLayout();
+
 	if (BodyText)
 	{
 		BodyText->SetText(FText::FromString(BuildDebugString()));
@@ -411,4 +427,43 @@ FString UTSRoleDebugWidget::DescribeTeamTanks() const
 	}
 
 	return FString::Join(Lines, TEXT("\n"));
+}
+
+void UTSRoleDebugWidget::UpdateResponsiveLayout()
+{
+	if (!RootSizeBox)
+	{
+		return;
+	}
+
+	// Viewport size is in PIXELS; widget coordinates are DPI-scaled, so dividing by the scale is
+	// what makes the cap mean the same thing at any resolution. Without it the panel is bounded
+	// correctly at 100% and wrongly everywhere else.
+	const FVector2D ViewportSize = UWidgetLayoutLibrary::GetViewportSize(this);
+	const float Scale = FMath::Max(UWidgetLayoutLibrary::GetViewportScale(this), KINDA_SMALL_NUMBER);
+	const float UsableWidth = (ViewportSize.X / Scale) - 48.f;   // the 24px margin on each side
+	const float UsableHeight = (ViewportSize.Y / Scale) - 48.f;
+
+	if (UsableWidth <= 0.f || UsableHeight <= 0.f)
+	{
+		// The viewport has no size yet (first frame, or a hidden window). Leave the last good fit
+		// rather than collapsing the panel to nothing.
+		return;
+	}
+
+	const float MaxWidth = FMath::Min(PanelWrapWidth, UsableWidth * MaxViewportWidthFraction);
+	RootSizeBox->SetMaxDesiredWidth(MaxWidth);
+	RootSizeBox->SetMaxDesiredHeight(UsableHeight * MaxViewportHeightFraction);
+
+	// Wrap the prose to the width the panel actually got, not the design-time constant - otherwise
+	// long lines still push past the edge inside a correctly-sized box.
+	const float WrapAt = FMath::Max(MaxWidth - 24.f, 120.f);
+	if (BodyText)
+	{
+		BodyText->SetWrapTextAt(WrapAt);
+	}
+	if (TankText)
+	{
+		TankText->SetWrapTextAt(WrapAt);
+	}
 }

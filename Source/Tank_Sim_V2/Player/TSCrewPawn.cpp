@@ -139,6 +139,16 @@ void ATSCrewPawn::ApplyRoleMappingContext_FromPlayerState()
 	// leave the sight lock switched off for the rest of the session.
 	bGunnerAimSynced = false;
 	UpdateAimTickEnabled();
+
+	// ...and the PLAY MODE arrives through this same signal, so stereo has to be re-evaluated here
+	// too. On a client the controller and the PlayerState replicate in either order: when PlayMode
+	// lands AFTER possession, ApplyDisplayMode has already run and decided Desktop, and without this
+	// call nothing ever asks again - the player is recorded as "Play in VR" on both machines while
+	// their headset stays black. That was the whole of "I chose VR and it is still dark".
+	//
+	// Safe to call on every assignment change: it defers a tick and SetVRModeEnabled early-outs when
+	// the mode already matches, so a role-only change costs nothing.
+	ApplyDisplayMode();
 }
 
 bool ATSCrewPawn::IsSeatedInTank() const
