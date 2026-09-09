@@ -471,9 +471,29 @@ void ATSTankControllerBase::UpdateInteriorControlState(float DeltaTime)
 	// driver's client, and a passenger watching from another seat all smooth the same source and
 	// therefore see the same lever positions.
 	FVector2D Input = FVector2D::ZeroVector;
-	if (const UTSTankControlComponent* Control = FindComponentByClass<UTSTankControlComponent>())
+	const UTSTankControlComponent* Control = FindComponentByClass<UTSTankControlComponent>();
+	if (Control)
 	{
 		Input = Control->GetCurrentDriveInput();
+	}
+
+	// Rate-limited diagnostic: this is the one place that can silently leave every interior control
+	// at its rest pose, and a missing component looks identical to zero input from outside.
+	if (bLogInteriorControlState)
+	{
+		// A MEMBER, not a static local. A static is shared by every tank AND survives PIE teardown,
+		// so world time - which restarts at 0 each session - never exceeds the value left over from
+		// the last run and the log goes silent for the rest of the editor's life. That is exactly
+		// what happened here, and it made a working diagnostic look like dead code.
+		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		if (Now - LastInteriorLogTime > 1.0 || Now < LastInteriorLogTime)
+		{
+			LastInteriorLogTime = Now;
+			UE_LOG(LogTankSim, Log,
+				TEXT("[InteriorCtl] %s ctrl=%s input=(%.2f, %.2f) -> thr=%.3f brk=%.3f steer=%.3f"),
+				*GetName(), Control ? TEXT("YES") : TEXT("*** NULL ***"),
+				Input.X, Input.Y, DisplayThrottle, DisplayBrake, DisplaySteering);
+		}
 	}
 
 	// X is throttle, Y is steering - the same convention Input_Drive and BP_SetDriveInput use.

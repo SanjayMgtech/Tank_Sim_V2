@@ -538,9 +538,11 @@ void ATSCrewPawn::Input_Drive(const FInputActionValue& Value)
 
 	// Rate-limited: this fires every frame a key is held, and an unthrottled log would drown the
 	// very output we are reading. One line per second is enough to answer "does the key arrive".
-	static double LastLogTime = 0.0;
+	// Static, so it survives PIE teardown while world time restarts at 0 - without the
+		// "Now < LastLogTime" escape below the log goes silent for the rest of the editor session.
+		static double LastLogTime = 0.0;
 	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-	if (Now - LastLogTime > 1.0)
+	if (Now - LastLogTime > 1.0 || Now < LastLogTime)
 	{
 		LastLogTime = Now;
 		UE_LOG(LogTankSim, Log, TEXT("[TSCrewPawn] Input_Drive throttle=%.2f steer=%.2f pc=%s"),

@@ -854,6 +854,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior", meta = (ClampMin = "0.0"))
 	float InteriorControlInterpSpeed = 8.f;
 
+	// Logs what UpdateInteriorControlState actually sees, once a second. On by default while the
+	// interior controls are being brought up.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior")
+	bool bLogInteriorControlState = true;
+
 	// --- Where the gun is ACTUALLY pointing -------------------------------------------------------
 	// Turret traverse and gun elevation as one rotation in the tank's own space: yaw from the turret,
 	// pitch from the main gun. Both come out of TurretsRot/GunsRot, the same arrays the AnimBP draws
@@ -889,6 +894,7 @@ public:
 	float MachineGunReleaseDelaySeconds = 0.25f;
 
 private:
+	double LastInteriorLogTime = 0.0;
 	float DisplayThrottle = 0.f;
 	float DisplayBrake = 0.f;
 	float DisplaySteering = 0.f;
