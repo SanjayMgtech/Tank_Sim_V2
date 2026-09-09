@@ -2287,6 +2287,12 @@ unreal.log('empty-or-duplicate descriptions: %d' % bad)   # MUST be 0
 ```
 **Expected `0`.** Currently 0 across 5 contexts and 12 actions.
 
+> ⚠ **This check is INCOMPLETE as written — it misses the length condition.** A description must
+> also be **under 128 chars** (`XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE`). An oversized one produced
+> the identical `XR_ERROR_LOCALIZED_NAME_INVALID` cascade *after* this check reported 0, which read
+> as a regression. Add `or len(d) >= 128` to both conditions above. See the RESOLVED section at the
+> end of this file.
+
 **T0b — the log check, which is faster than any of this.** After the first VR session of an editor
 run: `grep -a "XR_ERROR" Saved/Logs/Tank_Sim_V2.log`. **Expected: no hits.** Any hit means the XR
 action system failed to build and no binding work can possibly help until it is fixed.
@@ -2338,3 +2344,118 @@ Remaining suspects for that last link, in order:
    as a fallback, but this has NOT been verified here.
 2. the Scalar-mask two-stick layout - derived from how Enhanced Input combines mappings for one
    action, not from a documented Epic pattern. Untested in a headset.
+
+---
+
+## ✅ RESOLVED — VR input and VR UI both working (2026-09-09)
+
+**Confirmed working in the headset by the user.** This section supersedes the "Remaining suspects"
+list at the end of the previous VR section — both suspects there were wrong, and are struck below.
+
+Four independent faults produced one symptom ("VR inputs aint working"). Each had to be fixed
+before the next became visible, which is why several rounds of "fixed it / still not working"
+happened. **When VR input is dead, assume more than one cause and work the table in order.**
+
+| # | Fault | Evidence that names it | Fix |
+|---|---|---|---|
+| 1 | Empty `ContextDescription` / `ActionDescription` on every IMC and Input Action | `XR_ERROR_LOCALIZED_NAME_INVALID` on `xrCreateActionSet` | give every one a non-empty, unique string |
+| 2 | `IMC_VR_Widget`'s description was **136 chars**, over the 128 limit | same error, still firing after fix 1 | shorten to under 128 |
+| 3 | Axis2D actions bound to 1D `_X`/`_Y` XR keys | no error at all; action silently unbound | bind `*_2D`, mask axes with `Scalar` |
+| 4 | The flat role debug panel rendered across the headset view | "UI is still in my face" | skip it for a non-host with an HMD |
+
+### The one that hid the longest: a localized name has THREE constraints, not two
+Fix 1 was necessary but incomplete, and the incompleteness looked exactly like a regression - the
+identical four-error cascade came straight back. The missed condition was **length**:
+
+```cpp
+FTCHARToUTF8_Convert::Convert(Info.localizedActionSetName,
+    XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE, *InLocalizedName, InLocalizedName.Len() + 1);
+```
+A 136-char string into a 128-byte buffer is **not politely truncated** - the conversion leaves the
+field malformed and `xrCreateActionSet` returns `XR_ERROR_LOCALIZED_NAME_INVALID`. The handle is
+then garbage, so every `xrCreateAction`, every suggested binding and the session attach all fail on
+it. **One oversized description on one context kills every VR input in the project.**
+
+So the rule is: **non-empty AND unique AND under 128 characters.** Checking only the first two is
+what let this survive a "fix". `T0` in the previous section now checks all three.
+
+Not a risk, checked and cleared: the raw `actionSetName` / `actionName` are sanitised by UE's own
+`FilterActionName`, so the `IMC_*` / `IA_*` FName casing and underscores are fine. Only the
+localized string reaches the runtime's validator.
+
+### What the working input actually looks like in the log
+This is the signature to compare against, and it also proves the Scalar-mask layout works:
+```
+IA_Drive=(-0.000, 0.955)   X=0, Y varies  -> LEFT stick, throttle only
+IA_Drive=( 0.103, 0.000)   Y=0, X varies  -> RIGHT stick, steering only
+IA_Drive=( 1.000, 1.000)   clean +/-1     -> WASD, not a stick
+```
+**Fractional values can only come from an analog stick.** That single observation separates "the
+sticks work" from "only the keyboard works", and it is worth checking before theorising - a run
+that shows only clean ±1.000 values has not actually tested the sticks at all.
+
+### ~~Remaining suspects~~ - both were WRONG, recorded so nobody re-investigates them
+- ~~the Quest 3 interaction profile (`XR_META_touch_controller_plus` vs UE's `oculus/touch_controller`)~~
+  Never a problem. Meta's runtime accepts the base profile, and the analog values above prove the
+  bindings resolved.
+- ~~the Scalar-mask two-stick layout~~ Works exactly as designed - see the axis separation above.
+
+### The diagnostic that ended the guessing loop
+After several asset-level fixes each followed by "still not working", the approach changed from
+fixing to **instrumenting**. Two things, both cheap, both worth keeping:
+
+- **`TSVRDiag`** (console, `!UE_BUILD_SHIPPING`) - one-shot dump of HMD/XR state, pawn and role,
+  which mapping contexts are *actually applied*, live values for the four gameplay actions, every
+  widget in the viewport, and every world-space panel on the pawn.
+- **The `[VRInput]` heartbeat** on `ATSTankPlayerController::PlayerTick` - reads `IA_Drive` and
+  `IA_AimTurret` straight off `UEnhancedPlayerInput`, **independently of any BindAction callback**,
+  and appends the tank's gear / RPM / throttle / speed:
+  ```
+  [VRInput] role=1 vr=on | IA_Drive=(0.000, 0.955) ... | INPUT ARRIVING | gear=1 rpm=1438 speed=350.5
+  ```
+  Rate: 0.5s while deflected, 5s while idle, always on the idle<->moving edge. Silent until a role
+  exists. Disable with `bLogVRInputDiagnostics`.
+
+The heartbeat is the important one. `Input_Drive`'s own log only fires when the binding fires, so
+it cannot distinguish **"no value ever arrived"** from **"a value arrived and we ignored it"** -
+and that was precisely the unknown. Reading the action value directly answers it in one line.
+
+### Method notes worth carrying forward
+- **`grep -a "XR_ERROR" Saved/Logs/Tank_Sim_V2.log` is the FIRST thing to run** on any VR input
+  report. It would have found faults 1 and 2 immediately; instead they were reasoned around for
+  several rounds.
+- **`XR_ENSURE` uses `ensure`, which fires once per process.** A clean-looking second PIE run in the
+  same editor session proves nothing. Judge XR health from the first XR session after a launch.
+- **A `-game` process with `-vr` exercises the real OpenXR path** and can be launched and read
+  without a human in the headset. That is how fix 2 was verified (`XR_ERROR` 4 -> 0, no fallback to
+  legacy actions) rather than handed back untested.
+- **Absence of the fallback warning is the positive signal.** `No mapping context provided in the
+  OpenXR Input project settings` missing from the log proves `BuildEnhancedActions` ran; its
+  presence would mean OpenXR silently used legacy actions and no IMC binding could ever work.
+- **Self-inflicted damage is a real category.** Fault 3 was introduced *by this work* - a previous
+  session had working `*_Thumbstick_2D` bindings and they were "improved" into `_X`/`_Y`. The note
+  already in this file ("a thumbstick needs no swizzle") was the warning, and it was overridden.
+  Read the existing notes as constraints, not as background.
+
+### ⚠ A local or parameter named `PI` will not compile
+`UE` defines `PI` as a math macro, so `const UEnhancedPlayerInput* PI = ...` expands to a constant
+and fails with a bare `error C2059: syntax error: 'constant'` that names nothing useful. Same
+family as the `Role` and `Mesh` shadowing traps already recorded above. Use `PlayerInputPtr`.
+
+Also: the Chaos accessors (`GetThrottleInput`, `GetCurrentGear`, `GetEngineRotationSpeed`) are
+**not const-qualified**, so a `const UChaosWheeledVehicleMovementComponent*` cannot call them.
+
+### VR UI — what was actually in the way
+Not the world-space `CrewUIPanel` (that had already been disabled and was inert). It was the
+**role debug panel**, created by `bShowRoleDebugWidgetOnGameplayMaps`, which defaults to **true**
+and adds a screen-space widget for every local player. Screen-space widgets render plastered across
+the view in a headset. `ATSTankPlayerController` now skips it for any non-host player with an HMD.
+
+The gate tests **HMD availability**, not `IsVRModeActive()`, and that distinction matters:
+`ApplyVRMode` is deferred a tick (it rebuilds the viewport, which is unsafe inside the possession
+call stack), so stereo is still off at the moment this decision is made even for a player who is
+about to be in VR. "Is a headset present and is this player eligible for it" is decidable then;
+"is stereo on" is not.
+
+**Generalise: any screen-space widget added on a gameplay map needs a VR gate.** This one was a
+debug aid; a real HUD would have the same problem and needs the world-space panel path instead.
