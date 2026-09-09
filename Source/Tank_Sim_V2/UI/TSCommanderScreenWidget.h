@@ -88,8 +88,21 @@ protected:
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Commander Screen")
 	TObjectPtr<UTSVisionFeedWidget> VisionFeedWidget;
 
+	virtual void NativeConstruct() override;
+
+	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
+		const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId,
+		const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
+
 private:
 	int32 TickCount = 0;
+
+	// One line each, the first time this screen constructs / ticks / paints. Two of those three can
+	// be true while the third is not, and the difference decides whether an instrument reading zero
+	// is a data problem or a lifecycle problem - which is exactly the ambiguity that made this hard
+	// to pin down the first time. Cheap enough to keep: three lines per session, ever.
+	mutable bool bLoggedFirstPaint = false;
+	bool bLoggedFirstTick = false;
 
 	// Only runs when the widget tree is empty - i.e. this class used directly, with no WBP.
 	void BuildDefaultLayout();

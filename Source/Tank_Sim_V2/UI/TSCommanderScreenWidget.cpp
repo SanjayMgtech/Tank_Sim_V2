@@ -1,6 +1,7 @@
 #include "UI/TSCommanderScreenWidget.h"
 
 #include "Blueprint/WidgetTree.h"
+#include "Tank_Sim_V2.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/VerticalBox.h"
@@ -30,9 +31,39 @@ TSharedRef<SWidget> UTSCommanderScreenWidget::RebuildWidget()
 	return Super::RebuildWidget();
 }
 
+void UTSCommanderScreenWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+
+	UE_LOG(LogTankSim, Log, TEXT("[CmdScreen] NativeConstruct - radar=%s attitude=%s vision=%s"),
+		RadarWidget ? TEXT("yes") : TEXT("NO"),
+		AttitudeWidget ? TEXT("yes") : TEXT("NO"),
+		VisionFeedWidget ? TEXT("yes") : TEXT("NO"));
+}
+
+int32 UTSCommanderScreenWidget::NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
+	const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId,
+	const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
+{
+	if (!bLoggedFirstPaint)
+	{
+		bLoggedFirstPaint = true;
+		UE_LOG(LogTankSim, Log, TEXT("[CmdScreen] first NativePaint - size %s"),
+			*AllottedGeometry.GetLocalSize().ToString());
+	}
+
+	return Super::NativePaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+}
+
 void UTSCommanderScreenWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	if (!bLoggedFirstTick)
+	{
+		bLoggedFirstTick = true;
+		UE_LOG(LogTankSim, Log, TEXT("[CmdScreen] first NativeTick - size %s"), *MyGeometry.GetLocalSize().ToString());
+	}
 
 	++TickCount;
 
