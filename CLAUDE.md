@@ -2070,7 +2070,76 @@ AFTER-DSK mode=DESKTOP  possessed=BP_TSDesktopPawn_C_0
 mean the swap was really a respawn. That one query for `ATSCrewPawn` returned both is also what
 proves they share a base.
 
+### ⚠ Clicking "Play in VR" with no headset used to take the GPU down (fixed 2026-09-09)
+Reported as "even when I click VR by mistake, the game crashes". The dump is a GPU crash, not a
+script one, which is why nothing in the Blueprint logs pointed at it:
+```
+LogD3D12RHI: Error: GPU crash detected:
+  - Device 0 Removed: DXGI_ERROR_DEVICE_HUNG
+```
+The log going in tells the whole story:
+```
+[932] ATSGameMode: '...' is now in Play in VR (pawn 'BP_TSVRPawn_C_0')
+[933] Ensure condition failed: InvocationList[CurFunctionIndex] != InDelegate
+      Script Stack: /Script/Engine.Pawn.OnRep_PlayerState
+[933] UTSVRModeLibrary: VR mode OFF (requested OFF, HMD connected: no)      x3
+[935] GPU crash detected: DXGI_ERROR_DEVICE_HUNG
+```
+**The XR runtime initialises whether or not a headset is attached.** This machine logs
+`Initialized OpenXR on Oculus runtime version 1.207.0` and `HMD configured for shader platform
+PCD3D_SM5` with nothing plugged in. So "is an XR stack present" is NOT the same question as "can
+this client render stereo", and only the second one is safe to act on. `IsHMDAvailable` now demands
+both (`IsStereoDeviceUsable() && IsHeadMountedDisplayConnected()`).
+
+**HMD presence is a CLIENT fact, so the server cannot validate it by itself.** That is the whole
+reason the old code let the click through: the server accepted, swapped the pawn, and only then did
+the client discover it had nothing to render to. The client now reports its headset state up
+(`ServerReportHeadsetConnected`, at BeginPlay and on a slow poll so plugging one in later still
+counts), the server keeps it on `ATSTankPlayerState::bHeadsetConnected`, and
+`ATSGameMode::GetPlayModeDenialReason` refuses VR without it **before anything is spawned,
+possessed or written**.
+
+Guarded at five layers, and each catches something the others cannot:
+| Layer | Catches |
+|---|---|
+| lobby VR button disabled + shown blocked | the misclick, before it happens |
+| F2 / `TSPlayMode` drop the request locally | a keypress the client already knows the answer to |
+| `GetPlayModeDenialReason` on the server | everything, including a modified client |
+| `SetVRModeEnabled` refuses at the last moment | a headset unplugged between grant and call |
+| unplug mid-match returns the player to Desktop | being stranded in a pawn you cannot render |
+
+### ⚠ `AddDynamic` is NOT `AddUnique` - it ensures on a duplicate
+A comment in `RefreshCrewBinding` claimed it was. It is not, and the ensure above is the proof:
+`AddDynamic` maps to `Add()`, whose `AddInternal` runs "Verify same function isn't already bound"
+(`ScriptDelegates.h:1025`). **`AddUniqueDynamic` is the one that checks first.**
+
+Re-entry there is NORMAL - `NotifyControllerChanged` and `OnRep_PlayerState` both refresh the
+binding for the same PlayerState, and the unbind deliberately skips when it has not changed - so
+every possession swap double-added. Any `AddDynamic` on a path that can legitimately run twice for
+the same object needs to be `AddUniqueDynamic`.
+
+### ⚠ `SetTimerForNextTick` does not de-duplicate
+`ApplyDisplayMode` is reached from possession, `OnRep_PlayerState` and the assignment delegate,
+which all land in the same frame - and a later commit added a fourth caller. Each queued its own
+viewport-mode application, which is the `x3` in the log above. They now coalesce behind a bool onto
+one non-virtual timer target, `HandleApplyDisplayModeDeferred`, so the flag is cleared exactly once
+however a subclass chooses to chain (`ATSVRPawn` calls `Super` only on the flat-screen fallback).
+
+Runtime proof, PIE on WarZone, `ok:true` with **`Ensure condition failed: 0`** and no GPU crash:
+```
+START             mode=DESKTOP  headset=False  possessed=BP_TSDesktopPawn_C_0
+denial for VR     = NO_HEADSET
+denial for DESKTOP= NONE
+TrySetPlayMode(VR) with no headset -> False
+AFTER-VR-ATTEMPT  mode=DESKTOP  possessed=BP_TSDesktopPawn_C_0    <- NOTHING changed
+TrySetPlayMode(DESKTOP)            -> True
+```
+The point of the middle line is that the refusal is total: no pawn swap, no recorded mode, no
+stereo attempt. A misclick costs the player nothing at all.
+
 ### Still owed a human test
+Whether the switch is clean **with a headset actually attached** is untested - none of the above
+can be verified without one, and the guard only proves the headless case is now refused.
 Two-window listen server with a Driver on desktop and a Gunner in a headset, and the switch
 performed mid-match. Logs prove which pawn is possessed; they cannot see whether the viewport
 transition is clean. The pawn changes add `UPROPERTY`s and two new `UCLASS`es, so Live Coding
