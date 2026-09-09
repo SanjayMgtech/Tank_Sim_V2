@@ -83,12 +83,10 @@ Content/YI_TankCollection/Textures/Ignore/
 *.py
 /Content/YI_TankCollection/Textures
 /Content/YI_TankCollection/Maps
-# WarZone.umap is 167MB - over GitHub's hard 100MB per-file limit - so this folder stays
-# ignored. Consequence: spawn points placed as ACTORS in WarZone do not reach a fresh clone.
-# ATSGameMode::FallbackTeamSpawnTransforms carries them as GameMode data instead, which IS
-# committed. Un-ignore this folder only behind Git LFS.
-# Note the trailing /* : git cannot re-include a file whose parent DIRECTORY is excluded, so
-# excluding the contents rather than the folder is what makes the MainMenu exception below work.
-/Content/TankSimulation/Maps/*
-# MainMenu is 9KB and is the game's startup map - without it a clone cannot launch at all.
-!/Content/TankSimulation/Maps/MainMenu.umap
+# Maps are NO LONGER ignored - they are tracked through Git LFS instead. See .gitattributes:
+#   *.umap filter=lfs diff=lfs merge=lfs -text
+# WarZone.umap is 167MB, over GitHub's hard 100MB per-file limit, so it can only reach the
+# remote as an LFS object. Anyone cloning needs git-lfs installed, or the .umap files arrive
+# as small pointer stubs and the editor will fail to open them.
+# Quota note: GitHub's free LFS tier is 1GB storage and 1GB/month bandwidth, so roughly six
+# fetches of WarZone.umap per month before a paid data pack is needed.
