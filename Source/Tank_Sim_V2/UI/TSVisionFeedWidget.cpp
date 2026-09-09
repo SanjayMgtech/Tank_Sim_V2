@@ -7,22 +7,12 @@
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
 #include "Tank/TSTankControllerBase.h"
+#include "UI/TSWidgetPaintUtils.h"
+
+using namespace TSWidgetPaint;
 
 namespace
 {
-	void DrawText(FSlateWindowElementList& OutDrawElements, int32 Layer, const FGeometry& Geometry,
-		const FString& Text, const FVector2D& TopLeft, const FSlateFontInfo& Font, const FLinearColor& Colour)
-	{
-		FVector2D Size(Text.Len() * Font.Size * 0.6f, Font.Size * 1.2f);
-		if (FSlateApplication::IsInitialized())
-		{
-			Size = FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Text, Font);
-		}
-
-		FSlateDrawElement::MakeText(OutDrawElements, Layer,
-			Geometry.ToPaintGeometry(FVector2f(Size), FSlateLayoutTransform(FVector2f(TopLeft))),
-			Text, Font, ESlateDrawEffect::None, Colour);
-	}
 
 	FString VisionModeLabel(ETSVisionMode Mode)
 	{
@@ -157,9 +147,9 @@ int32 UTSVisionFeedWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 				*UTSTypeUtils::CrewRoleToString(CrewRole));
 		}
 
-		DrawText(OutDrawElements, Layer + 1, AllottedGeometry, TEXT("NO FEED"),
+		DrawTextAt(OutDrawElements, Layer + 1, AllottedGeometry, TEXT("NO FEED"),
 			FVector2D(12.f, Size.Y * 0.5f - 18.f), SmallFont, FLinearColor(1.f, 0.4f, 0.2f));
-		DrawText(OutDrawElements, Layer + 1, AllottedGeometry, Reason,
+		DrawTextAt(OutDrawElements, Layer + 1, AllottedGeometry, Reason,
 			FVector2D(12.f, Size.Y * 0.5f), TinyFont, FLinearColor(0.7f, 0.7f, 0.7f));
 	}
 	Layer += 2;
@@ -192,8 +182,8 @@ int32 UTSVisionFeedWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 		Mode == ETSVisionMode::NightVision ? FLinearColor(0.3f, 1.f, 0.4f) :
 		Mode == ETSVisionMode::Thermal ? FLinearColor(1.f, 0.95f, 0.9f) : FrameColor;
 
-	DrawText(OutDrawElements, Layer, AllottedGeometry, VisionModeLabel(Mode), FVector2D(10.f, 8.f), SmallFont, ModeColour);
-	DrawText(OutDrawElements, Layer, AllottedGeometry, TEXT("click / TSVision to switch"),
+	DrawTextAt(OutDrawElements, Layer, AllottedGeometry, VisionModeLabel(Mode), FVector2D(10.f, 8.f), SmallFont, ModeColour);
+	DrawTextAt(OutDrawElements, Layer, AllottedGeometry, TEXT("click / TSVision to switch"),
 		FVector2D(10.f, Size.Y - 18.f), TinyFont, FrameColor * 0.6f);
 	++Layer;
 

@@ -5,40 +5,10 @@
 #include "GameFramework/Pawn.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
+#include "UI/TSWidgetPaintUtils.h"
 
-namespace
-{
-	// 0 degrees is straight up the scope and angles run clockwise, which is how a bearing reads.
-	// Slate Y grows downward, hence the negated cosine.
-	FVector2D PolarToLocal(const FVector2D& Centre, float AngleDeg, float Radius)
-	{
-		const float Rad = FMath::DegreesToRadians(AngleDeg);
-		return Centre + FVector2D(FMath::Sin(Rad) * Radius, -FMath::Cos(Rad) * Radius);
-	}
+using namespace TSWidgetPaint;
 
-	void AppendCircle(TArray<FVector2D>& OutPoints, const FVector2D& Centre, float Radius, int32 Segments)
-	{
-		OutPoints.Reset(Segments + 1);
-		for (int32 i = 0; i <= Segments; ++i)
-		{
-			OutPoints.Add(PolarToLocal(Centre, (360.f * i) / Segments, Radius));
-		}
-	}
-
-	void DrawCentredText(FSlateWindowElementList& OutDrawElements, int32 Layer, const FGeometry& Geometry,
-		const FString& Text, const FVector2D& Centre, const FSlateFontInfo& Font, const FLinearColor& Colour)
-	{
-		FVector2D Size(Text.Len() * Font.Size * 0.55f, Font.Size * 1.2f);
-		if (FSlateApplication::IsInitialized())
-		{
-			Size = FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Text, Font);
-		}
-
-		FSlateDrawElement::MakeText(OutDrawElements, Layer,
-			Geometry.ToPaintGeometry(FVector2f(Size), FSlateLayoutTransform(FVector2f(Centre - Size * 0.5f))),
-			Text, Font, ESlateDrawEffect::None, Colour);
-	}
-}
 
 UTSRadarWidget::UTSRadarWidget()
 {

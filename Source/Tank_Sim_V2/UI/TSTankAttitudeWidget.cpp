@@ -6,15 +6,12 @@
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
 #include "Tank/TSTankControllerBase.h"
+#include "UI/TSWidgetPaintUtils.h"
+
+using namespace TSWidgetPaint;
 
 namespace
 {
-	FVector2D PolarToLocal(const FVector2D& Centre, float AngleDeg, float Radius)
-	{
-		const float Rad = FMath::DegreesToRadians(AngleDeg);
-		return Centre + FVector2D(FMath::Sin(Rad) * Radius, -FMath::Cos(Rad) * Radius);
-	}
-
 	// Shortest-way-round interpolation. FInterpTo on raw degrees would take the long way round every
 	// time the value crosses +/-180 and the dial would spin backwards through a full turn.
 	float InterpAngleDegrees(float Current, float Target, float DeltaTime, float Speed)
@@ -27,19 +24,6 @@ namespace
 		return Current + Delta * FMath::Clamp(DeltaTime * Speed, 0.f, 1.f);
 	}
 
-	void DrawCentredText(FSlateWindowElementList& OutDrawElements, int32 Layer, const FGeometry& Geometry,
-		const FString& Text, const FVector2D& Centre, const FSlateFontInfo& Font, const FLinearColor& Colour)
-	{
-		FVector2D Size(Text.Len() * Font.Size * 0.55f, Font.Size * 1.2f);
-		if (FSlateApplication::IsInitialized())
-		{
-			Size = FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Text, Font);
-		}
-
-		FSlateDrawElement::MakeText(OutDrawElements, Layer,
-			Geometry.ToPaintGeometry(FVector2f(Size), FSlateLayoutTransform(FVector2f(Centre - Size * 0.5f))),
-			Text, Font, ESlateDrawEffect::None, Colour);
-	}
 
 	// Centred, rotated about its own middle. Angle in degrees, clockwise, 0 = as authored.
 	void DrawRotatedSprite(FSlateWindowElementList& OutDrawElements, int32 Layer, const FGeometry& Geometry,

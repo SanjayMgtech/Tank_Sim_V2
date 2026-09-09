@@ -3018,6 +3018,26 @@ so in a headset the Commander has no screen rather than a broken one.
 (`C4458: declaration of 'Slot' hides class member`, `UWidget::Slot`). Use `BoxSlot`. Add `Slot` to
 the list of short obvious names already taken - alongside `Role`, `Mesh` and `PI`.
 
+### WARNING: an anonymous-namespace helper is NOT file-local in a unity build
+Two widgets each defined `PolarToLocal` and `DrawCentredText` in an anonymous namespace - normally
+the correct way to keep a helper private to one `.cpp`. This module builds as a UNITY build, so
+those files become ONE translation unit and the two anonymous namespaces are the same namespace:
+```
+error C2084: function 'PolarToLocal' already has a body
+```
+**The trap is that it builds fine at first.** UBT's *adaptive* unity excludes recently-changed files
+from the blob, so the duplication compiles cleanly while you are working on those files and breaks
+on the next build, once they stop being "recently changed" - the failure lands nowhere near the
+edit that caused it, and the first line of the log names the innocent file.
+
+Fix: one definition in a NAMED namespace. `UI/TSWidgetPaintUtils.h` now holds the shared Slate
+painting helpers. The invariant to check is a grep, not a build: each helper must be defined exactly
+once across `Source/`.
+
+Related: **never name a helper `DrawText`.** `<windows.h>` defines it as a macro, so in a unity blob
+that pulls Windows headers in, every call site is silently rewritten to `DrawTextW`. The shared one
+is `DrawTextAt`.
+
 ### WARNING: `FSlateColorBrush` cannot be a UCLASS member
 It has no default constructor and UHT generates one for the vtable helper:
 `error C2512: 'FSlateColorBrush': no appropriate default constructor available`, raised from the
