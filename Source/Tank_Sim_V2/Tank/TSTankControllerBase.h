@@ -578,6 +578,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Networking")
 	bool IsLocalGunnerOfThisTank() const;
 
+	// Which crew seat on THIS tank a player sitting at THIS machine holds, or None.
+	//
+	// The general form of IsLocalGunnerOfThisTank, which now defers to it. Everything that has to
+	// ask "is the person in front of this screen crewing this particular tank, and in what seat"
+	// wants this: turret simulation, and which periscope is worth rendering.
+	//
+	// Returns None on a dedicated server and on every remote copy of a tank, which is exactly the
+	// answer those machines need.
+	UFUNCTION(BlueprintPure, Category = "Networking")
+	ETSCrewRole GetLocalCrewRoleOnThisTank() const;
+
 	// Written on the SERVER by ServerSetAimPoint. Not replicated: clients never need
 	// it, they receive the finished TurretsRot/GunsRot.
 	UPROPERTY(BlueprintReadWrite, Category = "Networking")
@@ -609,6 +620,13 @@ public:
 	bool bSimulateVehicleOnAuthorityOnly = true;
 
 	virtual void BeginPlay() override;
+
+	// Exists for the crew station views, and the ordering is the whole point - see
+	// UpdateCrewViewCapture. Super::Tick runs the Blueprint's Event Tick, so the turret has already
+	// been rotated for this frame by the time the sight is captured.
+	// InDeltaSeconds, not DeltaSeconds: this class has a ported Blueprint member of that name and
+	// UHT builds with -WarningsAsErrors, so the shadow is a hard error (CLAUDE.md).
+	virtual void Tick(float InDeltaSeconds) override;
 
 	// Server simulates, clients replicate. See bSimulateVehicleOnAuthorityOnly.
 	void ApplyVehicleSimulationAuthorityPolicy();
@@ -738,6 +756,75 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Turret")
 	FVector GetTurretPivotLocation() const;
 
+	// =====================================================================
+	// Crew station views - the periscope / sight render targets.
+	//
+	// Each station has a SceneCaptureComponent2D on the tank Blueprint drawing into a render target
+	// that a screen mesh inside the crew compartment displays. A scene capture is close to a whole
+	// extra render of the world, so the cost of getting this wrong is not subtle: shipped as
+	// authored, EVERY capture on EVERY tank ran with bCaptureEveryFrame on EVERY machine - the
+	// server and every remote copy included - so a two-tank match rendered the world four extra
+	// times a frame for views nobody was looking through.
+	//
+	// The rule here is that a capture runs ONLY for the seat the player at this machine is actually
+	// sitting in, and only on their own tank. One capture, one machine, ever.
+	//
+	// That is not only about frame time. The render targets are shared ASSETS: two tanks capturing
+	// into RT_Gunner would take turns overwriting each other and both sights would show the wrong
+	// tank's view. Gating to the local crew member's own tank is what makes a single shared asset
+	// per station correct.
+	//
+	// Placement, render targets and materials stay Blueprint data (RULE 8). C++ owns only WHICH
+	// capture runs, HOW OFTEN, and the settings that exist purely to make it affordable.
+	// =====================================================================
+
+	// Capture component name per crew seat, looked up on this tank by name. Adding the Commander's
+	// view is filling in a row here plus authoring the component - no code change.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View")
+	TMap<ETSCrewRole, FName> CrewViewCaptureComponents;
+
+	// How often the active station's view is re-rendered, in captures per second. 0 means every
+	// frame.
+	//
+	// This is the main cost dial and it trades directly against latency: at 30 the image can be up
+	// to 33ms behind the world, which is fine through a periscope and starts to be noticeable when
+	// traversing a sight quickly. Raise it if the sight feels detached, lower it if the frame rate
+	// suffers - but resize the render target first, that is the bigger lever by far.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View", meta = (ClampMin = "0.0", ClampMax = "240.0"))
+	float CrewViewCaptureHz = 30.f;
+
+	// Strip the effects a periscope image does not need. Off renders the station view with the same
+	// settings as the main view, which looks marginally better and costs a great deal more.
+	//
+	// Eye adaptation is in the list for a second reason beyond cost: with it on, the sight
+	// re-exposes as the gun traverses across bright and dark parts of the world, so the image
+	// visibly pumps while the player is trying to aim through it.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View")
+	bool bApplyCrewViewPerformanceDefaults = true;
+
+	// Draw distance for station views, in cm. -1 uses the world's. A periscope looking at nearby
+	// terrain does not need the far LODs the main view draws.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View")
+	float CrewViewMaxDrawDistance = -1.f;
+
+	// How often the local crew role is re-checked. Crew assignments change on the order of seconds,
+	// so polling this every frame on every tank would cost more than it is worth.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View", meta = (ClampMin = "0.05"))
+	float CrewViewRoleRefreshSeconds = 0.25f;
+
+	// Silences every station capture on this tank. Called once, on every machine, so that a view
+	// only ever renders because the code below deliberately turned it on.
+	void InitialiseCrewViewCaptures();
+
+	// Picks the capture matching the local crew seat and drives it. Runs from Tick, AFTER the
+	// Blueprint's Event Tick has written TurretsRot - so a sight riding the turret captures this
+	// frame's gun angle rather than last frame's, the same ordering SyncInteriorMeshTickToPawn
+	// fixes for the interior mesh.
+	void UpdateCrewViewCapture(float InDeltaSeconds);
+
+	// Applied once, when a capture is first switched on for a station.
+	void ConfigureCrewViewCapture(class USceneCaptureComponent2D* Capture) const;
+
 	// One trigger pull: how long StartShooting stays held for a main-cannon shot.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Weapons", meta = (ClampMin = "0.01"))
 	float MainCannonTriggerHoldSeconds = 0.15f;
@@ -753,6 +840,22 @@ private:
 	FTimerHandle WeaponStopTimerHandle;
 	bool bWeaponFiring = false;
 	void ReleaseWeaponTrigger();
+
+	// Resolved once at BeginPlay from CrewViewCaptureComponents - the name lookup is not worth
+	// repeating every frame.
+	UPROPERTY(Transient)
+	TMap<ETSCrewRole, TObjectPtr<class USceneCaptureComponent2D>> ResolvedCrewViewCaptures;
+
+	// The one capture currently allowed to render, and the seat it belongs to. Null and None on a
+	// dedicated server, on every remote copy of this tank, and on a machine whose player is crewing
+	// a different tank - which is most of them.
+	UPROPERTY(Transient)
+	TObjectPtr<class USceneCaptureComponent2D> ActiveCrewViewCapture;
+
+	ETSCrewRole ActiveCrewViewRole = ETSCrewRole::None;
+
+	float CrewViewCaptureAccumulator = 0.f;
+	float CrewViewRoleRefreshAccumulator = 0.f;
 
 public:
 	virtual void BP_UpdateCommanderIntel_Implementation(const FTSCommanderIntel& Intel) override;

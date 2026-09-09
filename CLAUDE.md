@@ -163,7 +163,10 @@ at the tank's origin and it reads as "seating is broken" rather than "nobody pla
 ```
 error C4458: declaration of 'Role' hides class member
 ```
-This has now bitten twice — `ATSGameMode::TryAssignRole` (named `RequestedRole`) and
+This has now bitten three times — `ATSGameMode::TryAssignRole` (named `RequestedRole`),
+`ATSTankControllerBase::Tick` (named `InDeltaSeconds`, because Phase 7 moved a Blueprint variable
+called `DeltaSeconds` onto this very class — so even an engine override's standard parameter name
+is not safe here) and
 `ATSVRPawn::GetSeatComponentNameForRole` (named `InRole`). Use `InRole`, `CrewRole` or
 `RequestedRole`, never bare `Role`, for parameters AND locals on any `AActor` subclass.
 
@@ -1688,6 +1691,42 @@ problem. `SyncInteriorMeshTickToPawn()` calls `AddTickPrerequisiteActor(this)` o
 skeletal mesh. The root is deliberately skipped — it carries the vehicle physics.
 
 Logs prove ordering, never smoothness. **Whether the lag is visually gone still needs a human.**
+
+## 📺 Crew station views (periscope render targets) — the cost contract
+
+Each station has a `SceneCaptureComponent2D` drawing into a render target that a screen mesh in the
+crew compartment displays. **A scene capture is close to a whole extra render of the world**, so the
+default settings are a trap: as authored, every capture on every tank ran with `bCaptureEveryFrame`
+on **every machine** — server and remote copies included — so a two-tank match rendered the world
+four extra times a frame for views nobody was looking through. `RT_Gunner` was also **2000x2000**,
+i.e. twice the pixel count of a 1080p main view, per capture, per frame.
+
+`ATSTankControllerBase` now owns the policy (`CrewViewCaptureComponents` and friends):
+- Every capture is silenced at BeginPlay; one is switched back on only for the seat the local player
+  actually holds, and only on their own tank. `GetLocalCrewRoleOnThisTank()` answers that, and
+  `IsLocalGunnerOfThisTank()` is now a thin wrapper over it.
+- `CaptureScene()` is driven manually at `CrewViewCaptureHz` (30 by default) instead of every frame.
+- Called from `Tick` **after** `Super::Tick`, so the Blueprint's Event Tick has already written
+  `TurretsRot` — a sight riding the turret captures this frame's gun angle, not last frame's.
+
+**The gating is correctness, not just frame time.** The render targets are shared assets: two tanks
+capturing into `RT_Gunner` would overwrite each other and both sights would show the wrong tank's
+view. One capture per station per machine is what makes a single shared asset safe. If two tanks
+ever need to capture at once, the render targets have to become per-instance.
+
+⚠ **A capture with no `TextureTarget` still renders.** `GunnerSceneCaptureComponent` shipped with
+none assigned, so it did the full scene render every frame and discarded it — invisible in a profile
+unless you know to look, and the gunner screen was black the whole time. Check `TextureTarget` on
+every capture before blaming the material.
+
+Levers, in descending order of effect: render target resolution, then how many captures are live,
+then `CrewViewCaptureHz`, then the show flags (`bApplyCrewViewPerformanceDefaults`). Not touched:
+`PrimitiveRenderMode` is still `PRM_LegacySceneCapture` on these components — `PRM_RenderScenePrimitives`
+is generally the faster UE5 path and is worth measuring.
+
+A capture can be made to ride the turret with no code at all: add its component name to
+`TurretMountedSeatComponents`, which attaches any named scene component to the turret socket at
+BeginPlay. As it stands both captures sit on the hull, so the Gunner's sight does not traverse.
 
 ## 🎯 Team spawn points
 

@@ -2,6 +2,7 @@
 
 #include "ChaosVehicleMovementComponent.h"
 
+#include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Kismet/GameplayStatics.h"
@@ -35,6 +36,13 @@ ATSTankControllerBase::ATSTankControllerBase()
 	// exactly like their non-replicated counterparts above.
 	TurretsRot.Init(FRotator::ZeroRotator, 10);
 	GunsRot.Init(FRotator::ZeroRotator, 10);
+
+	// Crew station views: seat -> capture component NAME. Names only, so this creates no components
+	// and loads no assets - RULE 1 and RULE 2 both still hold. A tank that has not authored a
+	// station simply fails the lookup and says so at BeginPlay.
+	CrewViewCaptureComponents.Add(ETSCrewRole::Driver, TEXT("DriverSceneCaptureComponent"));
+	CrewViewCaptureComponents.Add(ETSCrewRole::Gunner, TEXT("GunnerSceneCaptureComponent"));
+	CrewViewCaptureComponents.Add(ETSCrewRole::Commander, TEXT("CommanderSceneCaptureComponent"));
 
 	// Otherwise deliberately empty.
 	//
@@ -190,16 +198,17 @@ void ATSTankControllerBase::RecalculateGunAndTurretRotation()
 	}
 }
 
-bool ATSTankControllerBase::IsLocalGunnerOfThisTank() const
+ETSCrewRole ATSTankControllerBase::GetLocalCrewRoleOnThisTank() const
 {
 	const UWorld* World = GetWorld();
 	if (!World)
 	{
-		return false;
+		return ETSCrewRole::None;
 	}
 
-	// Only local controllers matter - we are asking "does THIS machine drive this turret", and a
-	// listen server holds PlayerControllers for remote clients too.
+	// Only local controllers matter - we are asking "is the person in front of THIS screen crewing
+	// THIS tank", and a listen server holds PlayerControllers for remote clients too. A dedicated
+	// server has no local controllers at all, so it falls through to None.
 	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
 	{
 		const APlayerController* PC = It->Get();
@@ -209,14 +218,18 @@ bool ATSTankControllerBase::IsLocalGunnerOfThisTank() const
 		}
 
 		const ATSTankPlayerState* PS = PC->GetPlayerState<ATSTankPlayerState>();
-		if (PS && PS->GetCrewRole() == ETSCrewRole::Gunner
-			&& PS->GetAssignedTank() == static_cast<const APawn*>(this))
+		if (PS && PS->GetAssignedTank() == static_cast<const APawn*>(this))
 		{
-			return true;
+			return PS->GetCrewRole();
 		}
 	}
 
-	return false;
+	return ETSCrewRole::None;
+}
+
+bool ATSTankControllerBase::IsLocalGunnerOfThisTank() const
+{
+	return GetLocalCrewRoleOnThisTank() == ETSCrewRole::Gunner;
 }
 
 bool ATSTankControllerBase::IsTurretSimulatedLocally() const
@@ -302,6 +315,154 @@ void ATSTankControllerBase::BeginPlay()
 	ApplyVehicleSimulationAuthorityPolicy();
 	AttachTurretCrewSeats();
 	SyncInteriorMeshTickToPawn();
+	InitialiseCrewViewCaptures();
+}
+
+void ATSTankControllerBase::Tick(float InDeltaSeconds)
+{
+	// Super FIRST, deliberately. AActor::Tick is what dispatches the Blueprint's Event Tick, and
+	// that is where TurretsAndGunsRotCalculation writes this frame's turret angle. Capturing before
+	// it would put a sight riding the turret one frame behind the barrel it is bolted to.
+	Super::Tick(InDeltaSeconds);
+
+	UpdateCrewViewCapture(InDeltaSeconds);
+}
+
+void ATSTankControllerBase::InitialiseCrewViewCaptures()
+{
+	TArray<USceneCaptureComponent2D*> Captures;
+	GetComponents<USceneCaptureComponent2D>(Captures);
+
+	// Silence every one of them, on every machine, before resolving anything. The Blueprint ships
+	// them with bCaptureEveryFrame and bCaptureOnMovement on, which is what made a tank nobody was
+	// looking out of still render the world twice a frame. From here a view renders only because
+	// UpdateCrewViewCapture asked it to.
+	for (USceneCaptureComponent2D* Capture : Captures)
+	{
+		if (!Capture)
+		{
+			continue;
+		}
+
+		Capture->bCaptureEveryFrame = false;
+		Capture->bCaptureOnMovement = false;
+		Capture->SetComponentTickEnabled(false);
+	}
+
+	// Resolve the per-seat names once. C++ only looks these up; where the camera sits, what render
+	// target it draws into and how the screen displays it are all Blueprint data.
+	for (const TPair<ETSCrewRole, FName>& Entry : CrewViewCaptureComponents)
+	{
+		if (Entry.Key == ETSCrewRole::None || Entry.Value.IsNone())
+		{
+			continue;
+		}
+
+		USceneCaptureComponent2D** Found = Captures.FindByPredicate(
+			[&Entry](const USceneCaptureComponent2D* Capture) { return Capture && Capture->GetFName() == Entry.Value; });
+
+		if (Found && *Found)
+		{
+			ResolvedCrewViewCaptures.Add(Entry.Key, *Found);
+			continue;
+		}
+
+		// Loud, not silent. A missing capture presents as "the periscope is black", which is easy to
+		// mistake for a broken material or an unassigned render target.
+		UE_LOG(LogTankSim, Warning,
+			TEXT("[Tank] %s: no SceneCaptureComponent2D named '%s' for crew role %d - that station's ")
+			TEXT("view will never render. Add the component to the tank Blueprint, or clear the row ")
+			TEXT("in CrewViewCaptureComponents."),
+			*GetName(), *Entry.Value.ToString(), static_cast<int32>(Entry.Key));
+	}
+}
+
+void ATSTankControllerBase::ConfigureCrewViewCapture(USceneCaptureComponent2D* Capture) const
+{
+	if (!Capture || !bApplyCrewViewPerformanceDefaults)
+	{
+		return;
+	}
+
+	// Kept ON because the capture is intermittent: without persisted state the renderer throws away
+	// the temporal history between captures, so anti-aliasing never converges and the image crawls.
+	// Only one capture is ever live, so the history buffer it costs is paid once.
+	Capture->bAlwaysPersistRenderingState = true;
+
+	Capture->MaxViewDistanceOverride = CrewViewMaxDrawDistance;
+
+	// Effects a periscope does not need, in rough order of what they cost.
+	Capture->ShowFlags.SetMotionBlur(false);
+	Capture->ShowFlags.SetScreenSpaceReflections(false);
+	Capture->ShowFlags.SetAmbientOcclusion(false);
+	Capture->ShowFlags.SetBloom(false);
+	Capture->ShowFlags.SetLensFlares(false);
+
+	// See the header: this one is as much about the image pumping as about frame time.
+	Capture->ShowFlags.SetEyeAdaptation(false);
+}
+
+void ATSTankControllerBase::UpdateCrewViewCapture(float InDeltaSeconds)
+{
+	// A dedicated server draws nothing for anybody. Checked explicitly rather than left to fall out
+	// of "no local crew role", so the per-tank work really is zero there.
+	if (GetNetMode() == NM_DedicatedServer || ResolvedCrewViewCaptures.Num() == 0)
+	{
+		return;
+	}
+
+	// Re-check which seat the local player holds only occasionally. Crew assignments change on the
+	// order of seconds; walking the PlayerController list every frame for every tank in the level
+	// would cost more than the answer is worth.
+	CrewViewRoleRefreshAccumulator += InDeltaSeconds;
+	if (CrewViewRoleRefreshAccumulator >= CrewViewRoleRefreshSeconds)
+	{
+		CrewViewRoleRefreshAccumulator = 0.f;
+
+		const ETSCrewRole LocalRole = GetLocalCrewRoleOnThisTank();
+		if (LocalRole != ActiveCrewViewRole)
+		{
+			ActiveCrewViewRole = LocalRole;
+
+			// The outgoing station keeps whatever it last drew. Clearing it would flash the screen
+			// black on every seat change for no gain - the player is not looking at it any more.
+			TObjectPtr<USceneCaptureComponent2D>* Found = ResolvedCrewViewCaptures.Find(LocalRole);
+			ActiveCrewViewCapture = Found ? *Found : nullptr;
+
+			if (ActiveCrewViewCapture)
+			{
+				ConfigureCrewViewCapture(ActiveCrewViewCapture);
+
+				// Draw one immediately rather than waiting out the interval, so sitting down does
+				// not start with a stale or empty screen.
+				CrewViewCaptureAccumulator = 0.f;
+				ActiveCrewViewCapture->CaptureScene();
+			}
+		}
+	}
+
+	if (!ActiveCrewViewCapture)
+	{
+		return;
+	}
+
+	// 0 Hz means every frame - the lowest latency and the highest cost.
+	if (CrewViewCaptureHz <= 0.f)
+	{
+		ActiveCrewViewCapture->CaptureScene();
+		return;
+	}
+
+	CrewViewCaptureAccumulator += InDeltaSeconds;
+
+	const float CaptureInterval = 1.f / CrewViewCaptureHz;
+	if (CrewViewCaptureAccumulator >= CaptureInterval)
+	{
+		// Subtract rather than zero, so the capture rate does not drift below the requested one on
+		// frames that overshoot the interval.
+		CrewViewCaptureAccumulator = FMath::Fmod(CrewViewCaptureAccumulator, CaptureInterval);
+		ActiveCrewViewCapture->CaptureScene();
+	}
 }
 
 void ATSTankControllerBase::SyncInteriorMeshTickToPawn()
