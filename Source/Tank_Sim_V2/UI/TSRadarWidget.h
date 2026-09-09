@@ -23,7 +23,10 @@ class UTSRadarWidget : public UTSCommanderHUDWidget
 public:
 	UTSRadarWidget();
 
-	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	// Driven by UTSCommanderScreenWidget, NOT by NativeTick. A child UUserWidget inside another
+	// widget's tree is not reliably ticked (measured: the display values never moved off zero even
+	// with interpolation disabled), so the one widget that IS in the viewport drives all three.
+	void RefreshInstrument(float InDeltaTime);
 
 	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
 		const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId,

@@ -23,7 +23,8 @@ class UTSVisionFeedWidget : public UTSHUDWidgetBase
 	GENERATED_BODY()
 
 public:
-	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	// Driven by UTSCommanderScreenWidget - see UTSRadarWidget::RefreshInstrument for why.
+	void RefreshInstrument(float InDeltaTime);
 
 	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
 		const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId,

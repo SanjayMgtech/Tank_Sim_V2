@@ -16,10 +16,8 @@ UTSRadarWidget::UTSRadarWidget()
 	SolidBrush.TintColor = FSlateColor(FLinearColor::White);
 }
 
-void UTSRadarWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+void UTSRadarWidget::RefreshInstrument(float InDeltaTime)
 {
-	Super::NativeTick(MyGeometry, InDeltaTime);
-
 	if (SweepDegreesPerSecond > 0.f)
 	{
 		SweepAngleDeg = FMath::Fmod(SweepAngleDeg + SweepDegreesPerSecond * InDeltaTime, 360.f);

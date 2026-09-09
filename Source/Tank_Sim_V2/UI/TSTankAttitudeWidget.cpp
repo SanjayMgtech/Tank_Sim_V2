@@ -47,10 +47,8 @@ namespace
 	}
 }
 
-void UTSTankAttitudeWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+void UTSTankAttitudeWidget::RefreshInstrument(float InDeltaTime)
 {
-	Super::NativeTick(MyGeometry, InDeltaTime);
-
 	ApplyTextureToBrush(CompassBrush, CompassTexture);
 	ApplyTextureToBrush(HullBrush, HullTexture);
 	ApplyTextureToBrush(LauncherBrush, LauncherTexture);

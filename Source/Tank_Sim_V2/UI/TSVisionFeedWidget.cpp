@@ -25,10 +25,8 @@ namespace
 	}
 }
 
-void UTSVisionFeedWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+void UTSVisionFeedWidget::RefreshInstrument(float InDeltaTime)
 {
-	Super::NativeTick(MyGeometry, InDeltaTime);
-
 	if (SolidBrush.DrawAs != ESlateBrushDrawType::Image)
 	{
 		SolidBrush.DrawAs = ESlateBrushDrawType::Image;

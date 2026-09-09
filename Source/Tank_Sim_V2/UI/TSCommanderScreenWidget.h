@@ -27,6 +27,18 @@ class UTSCommanderScreenWidget : public UTSCommanderHUDWidget
 public:
 	UTSCommanderScreenWidget();
 
+	// The panels do NOT tick themselves. A child UUserWidget living inside another widget's tree is
+	// not reliably ticked by Slate - measured, not assumed: with interpolation disabled the attitude
+	// dial's values never left zero while the tank was demonstrably assigned and moving. This widget
+	// is the one actually added to the viewport, so it drives all three from here. One clock, one
+	// ordering, and it works the same whether the layout was generated or hand-authored.
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+
+	// Frames this screen has ticked. Exists because "the instruments read zero" has two very
+	// different causes - no data, or no tick - and they are indistinguishable from the outside.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Commander Screen")
+	int32 GetTickCount() const { return TickCount; }
+
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Commander Screen")
 	UTSRadarWidget* GetRadarWidget() const { return RadarWidget; }
 
@@ -77,6 +89,8 @@ protected:
 	TObjectPtr<UTSVisionFeedWidget> VisionFeedWidget;
 
 private:
+	int32 TickCount = 0;
+
 	// Only runs when the widget tree is empty - i.e. this class used directly, with no WBP.
 	void BuildDefaultLayout();
 

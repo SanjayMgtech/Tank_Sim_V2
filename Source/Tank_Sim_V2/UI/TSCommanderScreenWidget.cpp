@@ -30,6 +30,28 @@ TSharedRef<SWidget> UTSCommanderScreenWidget::RebuildWidget()
 	return Super::RebuildWidget();
 }
 
+void UTSCommanderScreenWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	++TickCount;
+
+	// Order matters only in that the feed is refreshed last: it reads the render target the tank's
+	// capture wrote, and nothing here changes that. The other two are independent.
+	if (RadarWidget)
+	{
+		RadarWidget->RefreshInstrument(InDeltaTime);
+	}
+	if (AttitudeWidget)
+	{
+		AttitudeWidget->RefreshInstrument(InDeltaTime);
+	}
+	if (VisionFeedWidget)
+	{
+		VisionFeedWidget->RefreshInstrument(InDeltaTime);
+	}
+}
+
 void UTSCommanderScreenWidget::BuildDefaultLayout()
 {
 	UHorizontalBox* Root = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("CommanderSplit"));
