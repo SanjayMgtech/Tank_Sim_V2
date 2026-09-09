@@ -20,6 +20,14 @@ class UTSVRModeLibrary : public UBlueprintFunctionLibrary
 	GENERATED_BODY()
 
 public:
+	// True when the engine actually has an XR stereo device to talk to. Distinct from
+	// IsHMDAvailable: an XR runtime (Oculus, SteamVR) can be installed and initialised - the log
+	// says "Initialized OpenXR on Oculus runtime" - with NO headset plugged into it. Asking that
+	// half-present stack to start stereo is what hung the GPU (DXGI_ERROR_DEVICE_HUNG), so both
+	// questions have to be answered before stereo is switched on.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|VR")
+	static bool IsStereoDeviceUsable();
+
 	// True when a headset is connected AND the stereo device is usable. This is the "is a headset
 	// plugged in" question only - it says nothing about whether we have switched stereo on, and it
 	// is false in a plain editor PIE session with no HMD, which is exactly what makes the automatic

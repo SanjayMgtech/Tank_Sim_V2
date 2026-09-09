@@ -39,6 +39,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	ETSPlayMode GetPlayMode() const { return PlayMode; }
 
+	// Whether THIS player's machine currently has a headset plugged in. HMD presence is a client-local
+	// fact the server cannot see for itself, so the client reports it (ServerReportHeadsetConnected)
+	// and this is the server's replicated copy. It is what lets the lobby grey out a VR button nobody
+	// could use, and what lets the server refuse VR before it swaps anybody's pawn.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
+	bool HasHeadsetConnected() const { return bHeadsetConnected; }
+
 	// True for the player who created the session (the session host / match admin). A host is not a
 	// participant: it never holds a TeamId, a CrewRole or a tank seat, and possesses a free-roam
 	// camera instead of the VR crew pawn. It exists purely to assign the other players' teams/roles.
@@ -51,6 +58,7 @@ public:
 	void SetAssignedTank(APawn* NewTank);
 	void SetIsHost(bool bNewIsHost);
 	void SetPlayMode(ETSPlayMode NewPlayMode);
+	void SetHeadsetConnected(bool bConnected);
 
 	ETSDriveControlMode GetDriveControlMode() const { return DriveControlMode; }
 	void SetDriveControlMode(ETSDriveControlMode NewMode);
@@ -83,6 +91,11 @@ protected:
 	// interior. Defaulting to Manual would leave a desktop driver with nothing to drive with.
 	UPROPERTY(ReplicatedUsing = OnRep_Assignment, BlueprintReadOnly, Category = "Tank Simulation")
 	ETSDriveControlMode DriveControlMode = ETSDriveControlMode::Analog;
+
+	// False until the owning client says otherwise, which is the safe default: a player nobody has
+	// heard from yet cannot be put into VR.
+	UPROPERTY(ReplicatedUsing = OnRep_Assignment, BlueprintReadOnly, Category = "Tank Simulation")
+	bool bHeadsetConnected = false;
 
 	UFUNCTION()
 	void OnRep_Assignment();

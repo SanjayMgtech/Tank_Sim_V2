@@ -68,7 +68,9 @@ public:
 	// possession and whenever the crew binding is refreshed; exposed so a Blueprint or a console
 	// command can re-run the decision (a headset plugged in late, a mode reassigned mid-match).
 	//
-	// The work is DEFERRED BY ONE TICK, and that is not cosmetic - see the implementation.
+	// The work is DEFERRED BY ONE TICK, and that is not cosmetic - see the implementation. Repeat
+	// calls before that tick COALESCE into one: possession, OnRep_PlayerState and the assignment
+	// delegate all land in the same frame, and each used to queue its own viewport-mode application.
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|VR")
 	void ApplyDisplayMode();
 
@@ -326,6 +328,17 @@ protected:
 	// clean seat-forward camera. ATSVRPawn overrides it to switch stereo ON when the player has
 	// actually been assigned VR and a headset is connected, and calls back here when they have not.
 	virtual void ApplyDisplayModeDeferred();
+
+private:
+	// Non-virtual timer target. Clears the coalescing flag, then runs the virtual body - so the flag
+	// is reset exactly once however a subclass chooses to chain (ATSVRPawn calls Super only on the
+	// flat-screen fallback path).
+	void HandleApplyDisplayModeDeferred();
+
+	// True while a deferred display-mode application is already queued for the next tick.
+	bool bDisplayModeUpdateQueued = false;
+
+protected:
 
 	// The play mode this pawn's OWNER has been assigned, which is not necessarily the mode this pawn
 	// class serves - during a switch the two disagree for a tick, and a single Blueprint configured

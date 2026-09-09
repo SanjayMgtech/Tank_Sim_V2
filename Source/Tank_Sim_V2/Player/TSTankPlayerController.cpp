@@ -11,6 +11,7 @@
 #include "Net/UnrealNetwork.h"
 #include "Networking/TSSessionSubsystem.h"
 #include "Player/TSCrewPawn.h"
+#include "Player/TSVRModeLibrary.h"
 #include "Player/TSTankPlayerState.h"
 #include "Tank_Sim_V2.h"
 #include "TimerManager.h"
@@ -37,6 +38,8 @@ ATSTankPlayerController::ATSTankPlayerController()
 
 void ATSTankPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	GetWorldTimerManager().ClearTimer(HeadsetPollTimerHandle);
+
 	ShowRoleDebugWidget(false);
 
 	Super::EndPlay(EndPlayReason);
@@ -161,9 +164,85 @@ ETSPlayMode ATSTankPlayerController::GetPlayMode() const
 	return PS ? PS->GetPlayMode() : ETSPlayMode::Desktop;
 }
 
+bool ATSTankPlayerController::CanUseVRMode() const
+{
+	// On the machine that owns this controller, ask the hardware directly - it is the only place
+	// that can answer, and it is fresher than the replicated flag.
+	if (IsLocalController())
+	{
+		return UTSVRModeLibrary::IsHMDAvailable();
+	}
+
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	return PS && PS->HasHeadsetConnected();
+}
+
+void ATSTankPlayerController::ReportLocalHeadsetState()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	const bool bConnected = UTSVRModeLibrary::IsHMDAvailable();
+	if (LastReportedHeadsetState.IsSet() && LastReportedHeadsetState.GetValue() == bConnected)
+	{
+		return;
+	}
+
+	LastReportedHeadsetState = bConnected;
+	UE_LOG(LogTankSim, Log, TEXT("Headset state -> server: %s"), bConnected ? TEXT("connected") : TEXT("none"));
+	ServerReportHeadsetConnected(bConnected);
+}
+
+void ATSTankPlayerController::ServerReportHeadsetConnected_Implementation(bool bConnected)
+{
+	if (ATSTankPlayerState* PS = GetTankPlayerState())
+	{
+		PS->SetHeadsetConnected(bConnected);
+	}
+
+	// A headset unplugged mid-match must not leave the player stranded in a VR pawn it can no longer
+	// render. Put them back on the flat screen rather than waiting for them to notice.
+	if (!bConnected && GetPlayMode() == ETSPlayMode::VR)
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("ServerReportHeadsetConnected: '%s' lost their headset while in VR - returning them to Desktop."),
+			*GetNameSafe(PlayerState));
+		if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
+		{
+			GM->TrySetPlayMode(this, ETSPlayMode::Desktop);
+		}
+	}
+}
+
+bool ATSTankPlayerController::ServerReportHeadsetConnected_Validate(bool bConnected)
+{
+	return true;
+}
+
+void ATSTankPlayerController::ClientPlayModeRequestResult_Implementation(ETSPlayMode RequestedMode, bool bAccepted, ETSPlayModeDenial Reason)
+{
+	if (!bAccepted)
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("Play mode request refused: %s - %s"),
+			*UTSTypeUtils::PlayModeToString(RequestedMode), *UTSTypeUtils::PlayModeDenialToString(Reason));
+	}
+
+	OnPlayModeRequestResult.Broadcast(RequestedMode, bAccepted, Reason);
+}
+
 void ATSTankPlayerController::TogglePlayMode()
 {
 	const ETSPlayMode Target = (GetPlayMode() == ETSPlayMode::VR) ? ETSPlayMode::Desktop : ETSPlayMode::VR;
+
+	// Dropped locally rather than sent and refused. F2 is easy to hit by accident, and the client
+	// already knows the answer - there is no reason to make a round trip to be told no.
+	if (Target == ETSPlayMode::VR && !CanUseVRMode())
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TogglePlayMode: no headset connected - staying on Desktop."));
+		OnPlayModeRequestResult.Broadcast(Target, false, ETSPlayModeDenial::NoHeadset);
+		return;
+	}
 
 	UE_LOG(LogTankSim, Log, TEXT("TogglePlayMode: requesting %s"), *UTSTypeUtils::PlayModeToString(Target));
 	ServerSetPlayMode(Target);
@@ -419,6 +498,12 @@ void ATSTankPlayerController::TSPlayMode(const FString& Mode)
 		return;
 	}
 
+	if (Parsed == ETSPlayMode::VR && !CanUseVRMode())
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSPlayMode: no headset connected - refusing VR."));
+		return;
+	}
+
 	UE_LOG(LogTankSim, Log, TEXT("TSPlayMode: requesting %s"), *UTSTypeUtils::PlayModeToString(Parsed));
 	ServerSetPlayMode(Parsed);
 #endif
@@ -651,6 +736,14 @@ void ATSTankPlayerController::BeginPlay()
 	if (IsLocalController())
 	{
 		GetWorldTimerManager().SetTimerForNextTick(this, &ATSTankPlayerController::ApplyLocalUIForCurrentMap);
+
+		// Tell the server whether this machine has a headset, then keep checking slowly so one
+		// plugged in mid-session enables VR without a reconnect. Only the owning client can answer
+		// this, and until it does the server treats the player as headset-less and refuses VR.
+		ReportLocalHeadsetState();
+		GetWorldTimerManager().SetTimer(HeadsetPollTimerHandle, this,
+			&ATSTankPlayerController::ReportLocalHeadsetState,
+			FMath::Max(1.f, HeadsetPollIntervalSeconds), true);
 
 #if !UE_BUILD_SHIPPING
 		// TSAuto* URL options, for unattended listen-server testing. 1.5s, repeating: on a client the

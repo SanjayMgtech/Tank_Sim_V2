@@ -527,6 +527,44 @@ bool ATSGameMode::TrySetDriveControlMode(APlayerController* Player, ETSDriveCont
 	return true;
 }
 
+ETSPlayModeDenial ATSGameMode::GetPlayModeDenialReason(const APlayerController* Player, ETSPlayMode Mode) const
+{
+	const ATSTankPlayerState* PS = Player ? Player->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	if (!PS)
+	{
+		return ETSPlayModeDenial::HostCannotPlay;
+	}
+
+	// The host runs the match on a flat screen and possesses the free-roam camera, so a play mode
+	// would have nothing to act on.
+	if (PS->IsHost())
+	{
+		return ETSPlayModeDenial::HostCannotPlay;
+	}
+
+	// THE GUARD THIS WHOLE SECTION EXISTS FOR.
+	//
+	// A misclick on "Play in VR" with no headset attached used to be accepted: the server swapped the
+	// player into ATSVRPawn, and the client then tried to bring stereo up against an XR runtime that
+	// was initialised but headless. That took the GPU with it -
+	// "GPU crash detected: Device 0 Removed: DXGI_ERROR_DEVICE_HUNG".
+	//
+	// So the request is refused HERE, before a pawn is spawned, possessed or even recorded. Nothing
+	// about the player's state changes and the misclick costs them nothing.
+	if (Mode == ETSPlayMode::VR && !PS->HasHeadsetConnected())
+	{
+		return ETSPlayModeDenial::NoHeadset;
+	}
+
+	const TSubclassOf<APawn> PawnClass = GetCrewPawnClassForMode(Mode);
+	if (!PawnClass || !PawnClass->IsChildOf(ATSCrewPawn::StaticClass()))
+	{
+		return ETSPlayModeDenial::NoPawnClass;
+	}
+
+	return ETSPlayModeDenial::None;
+}
+
 bool ATSGameMode::TrySetPlayMode(APlayerController* Player, ETSPlayMode NewMode)
 {
 	ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(Player);
@@ -536,15 +574,33 @@ bool ATSGameMode::TrySetPlayMode(APlayerController* Player, ETSPlayMode NewMode)
 		return false;
 	}
 
-	// The host runs the match on a flat screen and possesses the free-roam camera, so a play mode
-	// would have nothing to act on. Refused here rather than silently accepted and ignored.
-	if (PS->IsHost())
+	const ETSPlayModeDenial Denial = GetPlayModeDenialReason(PC, NewMode);
+	if (Denial != ETSPlayModeDenial::None)
 	{
+		UE_LOG(LogTankSim, Warning, TEXT("ATSGameMode: refused %s for '%s' - %s."),
+			*UTSTypeUtils::PlayModeToString(NewMode), *PS->GetPlayerName(),
+			*UTSTypeUtils::PlayModeDenialToString(Denial));
+
+		// Tell the asking client, so the UI can say why instead of appearing to ignore the click.
+		PC->ClientPlayModeRequestResult(NewMode, false, Denial);
 		return false;
 	}
 
 	PS->SetPlayMode(NewMode);
+
+	// Manual controls ARE the VR hands (see TrySetDriveControlMode, which refuses Manual for a
+	// desktop player). Leaving VR while set to Manual would strand the player with levers they can no
+	// longer reach and no stick either, so the drive scheme comes back with them.
+	if (NewMode != ETSPlayMode::VR && PS->GetDriveControlMode() == ETSDriveControlMode::Manual)
+	{
+		UE_LOG(LogTankSim, Log,
+			TEXT("ATSGameMode: '%s' left VR while on manual controls - returning them to the analog stick."),
+			*PS->GetPlayerName());
+		PS->SetDriveControlMode(ETSDriveControlMode::Analog);
+	}
+
 	EnsureCrewPawnsFor(PC);
+	PC->ClientPlayModeRequestResult(NewMode, true, ETSPlayModeDenial::None);
 	return true;
 }
 
