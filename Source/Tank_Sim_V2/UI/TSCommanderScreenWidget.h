@@ -27,11 +27,17 @@ class UTSCommanderScreenWidget : public UTSCommanderHUDWidget
 public:
 	UTSCommanderScreenWidget();
 
-	// The panels do NOT tick themselves. A child UUserWidget living inside another widget's tree is
-	// not reliably ticked by Slate - measured, not assumed: with interpolation disabled the attitude
-	// dial's values never left zero while the tank was demonstrably assigned and moving. This widget
-	// is the one actually added to the viewport, so it drives all three from here. One clock, one
-	// ordering, and it works the same whether the layout was generated or hand-authored.
+	// The panels do NOT tick themselves - this widget drives all three. One clock, one ordering, and
+	// it behaves the same whether the layout was generated here or hand-authored in a WBP.
+	//
+	// HONEST NOTE ON WHY: an earlier version of this comment claimed child UUserWidgets are not
+	// reliably ticked by Slate, and said that was measured. It was not. What was measured is that in
+	// an MCP-driven editor PIE session NOTHING in this hierarchy runs - THIS widget's NativeTick and
+	// NativePaint never fire either, ~450 frames after its NativeConstruct logs with all three panels
+	// bound. So the child-tick theory is unproven and the restructure below is not a fix for it.
+	//
+	// It is kept because it is the better structure regardless, but the real symptom is still open:
+	// see the "Still owed a test" note in CLAUDE.md. Do not read this design as having resolved it.
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 	// Frames this screen has ticked. Exists because "the instruments read zero" has two very

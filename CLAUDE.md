@@ -3045,10 +3045,48 @@ generated `.gen.cpp` rather than from your own file. Use a plain `FSlateBrush` w
 `DrawAs = ESlateBrushDrawType::Image` and no resource - it draws solid white, which every call then
 tints.
 
-### Still owed a test
-Nothing here has run in PIE. The game target builds clean, which proves the code and the reflection,
-but this adds four new `UCLASS`es so **Live Coding cannot carry it** - the editor target must be
-rebuilt before any of it exists in the editor. What to check once it is:
+### What IS verified, and the one thing that is NOT
+Verified in the editor, PIE on WarZone, `ok:true` with 0 errors / 0 warnings / 0 `Accessed None`
+across several runs:
+```
+[CmdScreen] NativeConstruct - radar=yes attitude=yes vision=yes    <- layout built, panels bound by class
+P1 panels radar=Radar attitude=Attitude vision=VisionFeed          <- the generated tree, found by class
+LIVE team=TEAM_A role=COMMANDER  screenVisible=True                <- RefreshCommanderScreen raised it
+                                                                      from the role assignment alone
+P7 intel contacts=1 placements=1                                   <- the server auto-refresh timer runs
+P2 cycle1=NIGHT_VISION cycle2=THERMAL cycle3=NORMAL                <- vision modes cycle on the live tank
+```
+The contact count of 1 is the player's own tank, which the radar deliberately draws at the centre
+rather than as a blip - so `radar contacts=0` is correct here, not a failure.
+
+### ⚠ NOT verified: the instruments never TICKED or PAINTED in an editor-driven session
+`GetTickCount()` stayed at **0** for the whole session, and the one-shot `first NativeTick` /
+`first NativePaint` log lines never appeared - while `NativeConstruct` did, and the editor's frame
+counter advanced ~450 frames past it. `IsInViewport()` was true throughout.
+
+So the dial readouts sitting at `hull=0.000 traverse=0.000` are **not** a data problem: the widget
+resolves its PlayerState and its assigned tank correctly in the same probe. Nothing is updating them.
+
+**A wrong turn worth recording.** This was first diagnosed as "child UUserWidgets are not reliably
+ticked inside a parent's tree", and the panels were restructured to be driven from the screen's own
+`NativeTick`. That restructure is kept (one clock, explicit ordering, works for a hand-authored WBP
+too) but it FIXED NOTHING - the screen does not tick either. The tell was there and was misread:
+the first diagnosis only checked the children.
+
+Two red herrings ruled out along the way, so nobody re-checks them:
+- `GetDesiredSize()` is `(0,0)` on every panel. **Expected** - these are paint-only widgets with no
+  child content. `AddToViewport` anchors to `(0,0,1,1)`, so the slot stretches them regardless.
+- Editor background throttling. The frame counter advanced normally; this is not a slow tick.
+
+**What is left to try**, cheapest first:
+1. Press Play by hand with the editor focused and look. If the panels animate, the whole thing is an
+   artefact of driving PIE over MCP from an unfocused editor, and only the harness note needs adding.
+2. If they do not animate, compare `GetCachedGeometry().to_tuple()` on the commander screen against
+   `UTSRoleDebugWidget`, which reaches the viewport through the identical `AddToViewport` path in the
+   same session. Cached geometry is written during paint, so a non-zero one there and a zero one here
+   localises the fault to this widget rather than the environment.
+
+The rest still owed:
 - a Commander sees the split panel; a Driver and a Gunner do not
 - the sweep animates; hostile blips are red and bracketed, friendlies green
 - driving turns the compass while the tank stays put; traversing swings the launcher
