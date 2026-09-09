@@ -2,8 +2,8 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
-#include "Components/HorizontalBox.h"
-#include "Components/HorizontalBoxSlot.h"
+#include "Components/WrapBox.h"
+#include "Components/WrapBoxSlot.h"
 #include "Components/TextBlock.h"
 #include "Core/TSGameState.h"
 #include "GameFramework/PlayerState.h"
@@ -74,7 +74,12 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 {
 	if (WidgetTree && !WidgetTree->RootWidget)
 	{
-		UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("TSDebugRow"));
+		// A WRAP box, not a horizontal one. The fixed minimum widths here total ~730px (name 150 +
+		// status 190 + four team + three role + two mode + clear), which cannot fit the panel once it
+		// is capped to a fraction of a small window - the buttons simply ran off the right edge and
+		// C/D and the role buttons were unreachable. A wrap box moves the overflow onto the next line
+		// instead, so every button stays clickable at any width.
+		UWrapBox* Row = WidgetTree->ConstructWidget<UWrapBox>(UWrapBox::StaticClass(), TEXT("TSDebugRow"));
 		WidgetTree->RootWidget = Row;
 
 		NameText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
@@ -84,8 +89,10 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 			Font.Size = FontSize;
 			NameText->SetFont(Font);
 		}
-		NameText->SetMinDesiredWidth(150.f);
-		if (UHorizontalBoxSlot* NameSlot = Row->AddChildToHorizontalBox(NameText))
+		// Reserve less, and ellipsize: a long machine name used to widen the whole row.
+		NameText->SetMinDesiredWidth(110.f);
+		NameText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+		if (UWrapBoxSlot* NameSlot = Row->AddChildToWrapBox(NameText))
 		{
 			NameSlot->SetVerticalAlignment(VAlign_Center);
 			NameSlot->SetPadding(FMargin(0.f, 0.f, 8.f, 0.f));
@@ -98,8 +105,8 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 			Font.Size = FontSize;
 			StatusText->SetFont(Font);
 		}
-		StatusText->SetMinDesiredWidth(190.f);
-		if (UHorizontalBoxSlot* StatusSlot = Row->AddChildToHorizontalBox(StatusText))
+		StatusText->SetMinDesiredWidth(150.f);
+		if (UWrapBoxSlot* StatusSlot = Row->AddChildToWrapBox(StatusText))
 		{
 			StatusSlot->SetVerticalAlignment(VAlign_Center);
 			StatusSlot->SetPadding(FMargin(0.f, 0.f, 10.f, 0.f));
@@ -120,7 +127,7 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 			}
 			TeamButtons.Add(Button);
 
-			if (UHorizontalBoxSlot* ButtonSlot = Row->AddChildToHorizontalBox(Button))
+			if (UWrapBoxSlot* ButtonSlot = Row->AddChildToWrapBox(Button))
 			{
 				ButtonSlot->SetPadding(FMargin(2.f, 1.f));
 				ButtonSlot->SetVerticalAlignment(VAlign_Center);
@@ -129,7 +136,7 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 
 		UTextBlock* Divider = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 		Divider->SetText(FText::FromString(TEXT("  ")));
-		Row->AddChildToHorizontalBox(Divider);
+		Row->AddChildToWrapBox(Divider);
 
 		static const TCHAR* RoleLabels[] = { TEXT("Driver"), TEXT("Gunner"), TEXT("Cmdr") };
 		for (int32 Index = 0; Index < RowRoles.Num(); ++Index)
@@ -143,7 +150,7 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 			}
 			RoleButtons.Add(Button);
 
-			if (UHorizontalBoxSlot* ButtonSlot = Row->AddChildToHorizontalBox(Button))
+			if (UWrapBoxSlot* ButtonSlot = Row->AddChildToWrapBox(Button))
 			{
 				ButtonSlot->SetPadding(FMargin(2.f, 1.f));
 				ButtonSlot->SetVerticalAlignment(VAlign_Center);
@@ -152,7 +159,7 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 
 		UTextBlock* ModeDivider = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 		ModeDivider->SetText(FText::FromString(TEXT("  ")));
-		Row->AddChildToHorizontalBox(ModeDivider);
+		Row->AddChildToWrapBox(ModeDivider);
 
 		static const TCHAR* PlayModeLabels[] = { TEXT("Desktop"), TEXT("VR") };
 		for (int32 Index = 0; Index < RowPlayModes.Num(); ++Index)
@@ -165,7 +172,7 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 			}
 			PlayModeButtons.Add(Button);
 
-			if (UHorizontalBoxSlot* ButtonSlot = Row->AddChildToHorizontalBox(Button))
+			if (UWrapBoxSlot* ButtonSlot = Row->AddChildToWrapBox(Button))
 			{
 				ButtonSlot->SetPadding(FMargin(2.f, 1.f));
 				ButtonSlot->SetVerticalAlignment(VAlign_Center);
@@ -174,7 +181,7 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 
 		ClearButton = MakeButton(TEXT("Clear"), 42.f);
 		ClearButton->OnClicked.AddDynamic(this, &UTSRoleDebugRowWidget::OnClearClicked);
-		if (UHorizontalBoxSlot* ClearSlot = Row->AddChildToHorizontalBox(ClearButton))
+		if (UWrapBoxSlot* ClearSlot = Row->AddChildToWrapBox(ClearButton))
 		{
 			ClearSlot->SetPadding(FMargin(10.f, 1.f, 0.f, 1.f));
 			ClearSlot->SetVerticalAlignment(VAlign_Center);
