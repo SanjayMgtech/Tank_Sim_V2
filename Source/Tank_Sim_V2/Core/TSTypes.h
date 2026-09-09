@@ -54,6 +54,7 @@ enum class ETSDriveControlMode : uint8
 
 	// The VR driver physically works the levers and pedals; the controls produce the input.
 	Manual	UMETA(DisplayName = "Manual controls (VR hands)")
+};
 
 // Why a play-mode request was refused. Returned by ATSGameMode::GetPlayModeDenialReason and sent
 // back to the asking client, because "the VR button did nothing" is otherwise indistinguishable

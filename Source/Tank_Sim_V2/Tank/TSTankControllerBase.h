@@ -712,10 +712,8 @@ public:
 	// its tick against the pawn is not worth the risk to fix a problem it does not have.
 	void SyncInteriorMeshTickToPawn();
 
-	virtual void Tick(float DeltaTime) override;
-
 	// Smoothed toward CurrentDriveInput every frame; read by the interior AnimBP through the
-	// GetInterior*Alpha accessors above.
+	// GetInterior*Alpha accessors above. Driven from Tick, which is declared once, above.
 	void UpdateInteriorControlState(float DeltaTime);
 
 	// --- Interior turret bone ---------------------------------------------------------------------

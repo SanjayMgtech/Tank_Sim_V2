@@ -326,6 +326,10 @@ void ATSTankControllerBase::Tick(float InDeltaSeconds)
 	// it would put a sight riding the turret one frame behind the barrel it is bolted to.
 	Super::Tick(InDeltaSeconds);
 
+	// Levers before the capture, for the same reason the capture goes after Super: whatever a crew
+	// view renders should show this frame's state, not last frame's.
+	UpdateInteriorControlState(InDeltaSeconds);
+
 	UpdateCrewViewCapture(InDeltaSeconds);
 }
 
@@ -618,12 +622,6 @@ FRotator ATSTankControllerBase::GetInteriorTurretRotation() const
 
 	// Yaw only. Pitch would tilt the whole crew compartment with the gun.
 	return FRotator(0.0, Yaw, 0.0);
-}
-
-void ATSTankControllerBase::Tick(float DeltaTime)
-{
-	Super::Tick(DeltaTime);
-	UpdateInteriorControlState(DeltaTime);
 }
 
 void ATSTankControllerBase::UpdateInteriorControlState(float DeltaTime)
