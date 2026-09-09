@@ -11,6 +11,7 @@ void ATSTankPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(ATSTankPlayerState, AssignedTank);
 	DOREPLIFETIME(ATSTankPlayerState, bIsHost);
 	DOREPLIFETIME(ATSTankPlayerState, PlayMode);
+	DOREPLIFETIME(ATSTankPlayerState, DriveControlMode);
 }
 
 void ATSTankPlayerState::CopyProperties(APlayerState* PlayerState)
@@ -99,6 +100,16 @@ void ATSTankPlayerState::SetPlayMode(ETSPlayMode NewPlayMode)
 		return;
 	}
 	PlayMode = NewPlayMode;
+	OnRep_Assignment();
+}
+
+void ATSTankPlayerState::SetDriveControlMode(ETSDriveControlMode NewMode)
+{
+	if (!HasAuthority() || DriveControlMode == NewMode)
+	{
+		return;
+	}
+	DriveControlMode = NewMode;
 	OnRep_Assignment();
 }
 

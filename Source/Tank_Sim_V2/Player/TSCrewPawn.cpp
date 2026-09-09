@@ -139,6 +139,16 @@ void ATSCrewPawn::ApplyRoleMappingContext_FromPlayerState()
 	// leave the sight lock switched off for the rest of the session.
 	bGunnerAimSynced = false;
 	UpdateAimTickEnabled();
+
+	// ...and the PLAY MODE arrives through this same signal, so stereo has to be re-evaluated here
+	// too. On a client the controller and the PlayerState replicate in either order: when PlayMode
+	// lands AFTER possession, ApplyDisplayMode has already run and decided Desktop, and without this
+	// call nothing ever asks again - the player is recorded as "Play in VR" on both machines while
+	// their headset stays black. That was the whole of "I chose VR and it is still dark".
+	//
+	// Safe to call on every assignment change: it defers a tick and SetVRModeEnabled early-outs when
+	// the mode already matches, so a role-only change costs nothing.
+	ApplyDisplayMode();
 }
 
 bool ATSCrewPawn::IsSeatedInTank() const
@@ -504,8 +514,25 @@ void ATSCrewPawn::Input_Menu(const FInputActionValue& Value)
 	OnMenuPressed();
 }
 
+ETSDriveControlMode ATSCrewPawn::GetDriveControlMode() const
+{
+	const ATSTankPlayerState* PS = GetController() ? GetController()->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	return PS ? PS->GetDriveControlMode() : ETSDriveControlMode::Analog;
+}
+
 void ATSCrewPawn::Input_Drive(const FInputActionValue& Value)
 {
+	// In Manual mode the LEVERS are the input: a VR hand pulls them and that produces the drive
+	// command. Letting the stick through as well would give the tank two masters, and the stick would
+	// win every frame it was touched - the levers would appear to do nothing.
+	//
+	// The release path is deliberately NOT gated (see Input_DriveReleased): switching mode mid-hold
+	// must still be able to stop the tank.
+	if (GetDriveControlMode() == ETSDriveControlMode::Manual)
+	{
+		return;
+	}
+
 	const FVector2D Axis = Value.Get<FVector2D>();
 	ATSTankPlayerController* PC = GetTankController();
 
@@ -535,6 +562,34 @@ void ATSCrewPawn::Input_DriveReleased(const FInputActionValue& Value)
 	{
 		PC->ServerSetDriveInput(0.f, 0.f);
 	}
+}
+
+bool ATSCrewPawn::ApplyVRStickSlew(const FVector2D& StickAxis)
+{
+	// Desktop keeps the seat-rotation behaviour; only claim the input when the headset is actually
+	// driving the camera.
+	if (!UTSVRModeLibrary::IsHeadTrackingActive())
+	{
+		return false;
+	}
+
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return true;
+	}
+
+	// A held stick fires this every frame, so the deflection is a RATE, not a delta. Scaling by
+	// DeltaSeconds keeps the slew speed equal on a 72Hz standalone headset and a 120Hz tethered one;
+	// without it the gun traverses nearly twice as fast on the faster device.
+	const float DeltaSeconds = World->GetDeltaSeconds();
+
+	VRSlewYaw = FMath::Clamp(VRSlewYaw + StickAxis.X * VRStickSlewSpeed * DeltaSeconds,
+		-VRStickSlewYawLimit, VRStickSlewYawLimit);
+	VRSlewPitch = FMath::Clamp(VRSlewPitch + StickAxis.Y * VRStickSlewSpeed * DeltaSeconds,
+		-VRStickSlewPitchLimit, VRStickSlewPitchLimit);
+
+	return true;
 }
 
 void ATSCrewPawn::ApplySeatViewDelta(const FVector2D& LookDelta)
@@ -691,7 +746,14 @@ void ATSCrewPawn::Input_AimTurret(const FInputActionValue& Value)
 	// FVector(Axis.X, Axis.Y, 0) - a 2D stick axis packed into a vector - which could never work:
 	// the tank's turret consumes a world-space point, so a stick reading of (0.4, 0.1) asked the gun
 	// to aim at a spot half a centimetre from the world origin.
-	ApplySeatViewDelta(Value.Get<FVector2D>());
+	const FVector2D Axis = Value.Get<FVector2D>();
+
+	// VR takes the slew path, desktop the seat-rotation path. ApplyVRStickSlew reports which one
+	// applies, so exactly one place knows the difference.
+	if (!ApplyVRStickSlew(Axis))
+	{
+		ApplySeatViewDelta(Axis);
+	}
 	UpdateGunnerAim();
 }
 
@@ -722,9 +784,19 @@ void ATSCrewPawn::UpdateGunnerAim()
 	// command from the pivot the tank measures at makes the angle it resolves equal the angle asked
 	// for, so the sight and the barrel cannot separate.
 	const FVector Start = bLocked ? Tank->GetTurretPivotLocation() : Camera->GetComponentLocation();
-	const FVector Direction = bLocked
+	// The stick slew applies ONLY to the head-aim branch. With the sight locked the direction is the
+	// gun's own command, which the stick already steers through ApplySeatViewDelta - adding the
+	// offset there would apply the same deflection twice.
+	FVector Direction = bLocked
 		? GetGunnerAimWorldRotation().Vector()
 		: Camera->GetForwardVector();
+	if (!bLocked && (!FMath::IsNearlyZero(VRSlewYaw) || !FMath::IsNearlyZero(VRSlewPitch)))
+	{
+		// Yaw about WORLD up, not the camera's: tilting your head must not roll the slew direction.
+		Direction = Direction.RotateAngleAxis(VRSlewPitch, Camera->GetRightVector());
+		Direction = Direction.RotateAngleAxis(VRSlewYaw, FVector::UpVector);
+		Direction = Direction.GetSafeNormal();
+	}
 	const FVector End = Start + Direction * AimTraceDistance;
 
 	// Ignore ourselves and our own tank, or the trace hits the hull we are sitting inside and the

@@ -52,6 +52,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
 	bool TrySetPlayMode(APlayerController* Player, ETSPlayMode NewMode);
 
+	// Manual controls need a rigged interior AND VR hands, so this refuses Manual for a player who is
+	// not in VR rather than leaving them with a stick that no longer works and levers they cannot
+	// reach. Returns false when refused.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Lobby")
+	bool TrySetDriveControlMode(APlayerController* Player, ETSDriveControlMode NewMode);
+
 	// Server only. Makes sure this player owns a crew pawn for BOTH modes, adopting whatever
 	// RestartPlayer already handed them, then possesses the one their assigned mode calls for and
 	// parks the other. Safe to call repeatedly - it spawns only what is missing.
@@ -199,6 +205,20 @@ protected:
 	// Fallback spacing along X between team tanks when the level has no TSTeamSpawn_* tagged actor.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	float FallbackTeamSpawnSpacing = 2000.f;
+
+	// Per-team spawn transforms held as GameMode DATA rather than as actors in the level.
+	//
+	// Why this exists: WarZone.umap is 167MB, over GitHub's hard 100MB per-file limit, so the map
+	// cannot be committed and .gitignore excludes /Content/TankSimulation/Maps entirely. Spawn
+	// points placed as actors in that map therefore do NOT survive a fresh clone - the tanks fall
+	// in at a world-origin offset on a slope, which reads as "driving is broken" because
+	// ThrottleControl correctly applies full brake to a tank sliding backwards.
+	//
+	// Consulted AFTER the tagged actor and PlayerStart lookups, so a level that DOES have spawn
+	// actors still wins and level designers keep control. This is only the safety net that makes a
+	// clean checkout playable.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
+	TMap<ETSTeamId, FTransform> FallbackTeamSpawnTransforms;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tank Simulation|Lobby")
 	FName GameplayMapName = TEXT("Controller_Demo_T90");

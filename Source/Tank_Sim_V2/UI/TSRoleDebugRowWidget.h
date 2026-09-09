@@ -73,6 +73,9 @@ protected:
 	TArray<TObjectPtr<UButton>> PlayModeButtons;
 
 	UPROPERTY(Transient)
+	TArray<TObjectPtr<UButton>> DriveModeButtons;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UButton> ClearButton;
 
 private:
@@ -85,6 +88,8 @@ private:
 	UFUNCTION() void OnCommanderClicked();
 	UFUNCTION() void OnDesktopClicked();
 	UFUNCTION() void OnVRClicked();
+	UFUNCTION() void OnAnalogClicked();
+	UFUNCTION() void OnManualClicked();
 	UFUNCTION() void OnClearClicked();
 
 	void AssignTeam(ETSTeamId Team);
@@ -94,6 +99,7 @@ private:
 	// player is always allowed to move their own body between the headset and the keyboard - so this
 	// picks the host RPC or the self-serve one from who is clicking, and the server re-checks both.
 	void AssignPlayMode(ETSPlayMode PlayMode);
+	void AssignDriveControlMode(ETSDriveControlMode Mode);
 
 	UButton* MakeButton(const FString& Label, float MinWidth);
 	class ATSTankPlayerController* GetOwningTankController() const;

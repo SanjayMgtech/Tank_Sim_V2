@@ -70,3 +70,12 @@ FString UTSTypeUtils::PlayModeToString(ETSPlayMode PlayMode)
 {
 	return EnumDisplayName(PlayMode);
 }
+
+FString UTSTypeUtils::DriveControlModeToString(ETSDriveControlMode Mode)
+{
+	switch (Mode)
+	{
+	case ETSDriveControlMode::Manual:	return TEXT("Manual controls");
+	default:							return TEXT("Analog");
+	}
+}

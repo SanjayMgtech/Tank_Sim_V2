@@ -491,6 +491,42 @@ void ATSGameMode::EnsureCrewPawnsFor(APlayerController* Player)
 		*PS->GetPlayerName(), *UTSTypeUtils::PlayModeToString(PS->GetPlayMode()), *Desired->GetName());
 }
 
+bool ATSGameMode::TrySetDriveControlMode(APlayerController* Player, ETSDriveControlMode NewMode)
+{
+	ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(Player);
+	ATSTankPlayerState* PS = PC ? PC->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	if (!PC || !PS)
+	{
+		return false;
+	}
+
+	// The host holds no crew pawn, so it has nothing to drive with either way.
+	if (PS->IsHost())
+	{
+		UE_LOG(LogTankSim, Warning,
+			TEXT("TrySetDriveControlMode: refused - '%s' is the match host and crews no tank."),
+			*PS->GetPlayerName());
+		return false;
+	}
+
+	// Manual means the levers ARE the input. Without VR hands there is nothing to work them with, and
+	// switching a desktop player to Manual would silently take their stick away and give them
+	// nothing - a dead control scheme that looks like broken input.
+	if (NewMode == ETSDriveControlMode::Manual && PS->GetPlayMode() != ETSPlayMode::VR)
+	{
+		UE_LOG(LogTankSim, Warning,
+			TEXT("TrySetDriveControlMode: refused Manual for '%s' - manual controls need VR hands, and ")
+			TEXT("this player is in Desktop mode. Put them in VR first."),
+			*PS->GetPlayerName());
+		return false;
+	}
+
+	PS->SetDriveControlMode(NewMode);
+	UE_LOG(LogTankSim, Log, TEXT("Drive control mode: '%s' -> %s"),
+		*PS->GetPlayerName(), *UTSTypeUtils::DriveControlModeToString(NewMode));
+	return true;
+}
+
 bool ATSGameMode::TrySetPlayMode(APlayerController* Player, ETSPlayMode NewMode)
 {
 	ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(Player);
@@ -804,9 +840,20 @@ FTransform ATSGameMode::GetSpawnTransformForTeam(ETSTeamId TeamId) const
 		}
 	}
 
+	// Level had no spawn actor. Before dropping the tank at the world origin, use the transform
+	// held as GameMode data - see FallbackTeamSpawnTransforms for why that is not just belt and
+	// braces: the 167MB WarZone map cannot be committed, so its spawn actors do not reach a clone.
+	if (const FTransform* Configured = FallbackTeamSpawnTransforms.Find(TeamId))
+	{
+		UE_LOG(LogTankSim, Log,
+			TEXT("ATSGameMode: no actor tagged '%s' in the level - using the configured fallback transform for %s."),
+			*Tag.ToString(), *UTSTypeUtils::TeamIdToString(TeamId));
+		return *Configured;
+	}
+
 	const int32 TeamIndex = AllTeams.IndexOfByKey(TeamId);
 	const float Offset = TeamIndex >= 0 ? static_cast<float>(TeamIndex) : 0.f;
-	UE_LOG(LogTankSim, Warning, TEXT("ATSGameMode: no actor tagged '%s' in the level - falling back to a world-origin offset. Tag a spawn point for deterministic placement."), *Tag.ToString());
+	UE_LOG(LogTankSim, Warning, TEXT("ATSGameMode: no actor tagged '%s' in the level AND no FallbackTeamSpawnTransforms entry - dropping at a world-origin offset. Expect a bad landing on sloped ground."), *Tag.ToString());
 	return FTransform(FVector(Offset * FallbackTeamSpawnSpacing, 0.f, 200.f));
 }
 

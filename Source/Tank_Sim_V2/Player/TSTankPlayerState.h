@@ -52,6 +52,9 @@ public:
 	void SetIsHost(bool bNewIsHost);
 	void SetPlayMode(ETSPlayMode NewPlayMode);
 
+	ETSDriveControlMode GetDriveControlMode() const { return DriveControlMode; }
+	void SetDriveControlMode(ETSDriveControlMode NewMode);
+
 	// Broadcast on both server and clients whenever TeamId, CrewRole or AssignedTank changes, so UI
 	// (Section 11 widgets) can refresh without polling.
 	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation")
@@ -75,6 +78,11 @@ protected:
 	// stereo before the host had said a word about it.
 	UPROPERTY(ReplicatedUsing = OnRep_Assignment, BlueprintReadOnly, Category = "Tank Simulation")
 	ETSPlayMode PlayMode = ETSPlayMode::Desktop;
+
+	// Analog by default: a stick works on every device, manual controls need VR hands and a rigged
+	// interior. Defaulting to Manual would leave a desktop driver with nothing to drive with.
+	UPROPERTY(ReplicatedUsing = OnRep_Assignment, BlueprintReadOnly, Category = "Tank Simulation")
+	ETSDriveControlMode DriveControlMode = ETSDriveControlMode::Analog;
 
 	UFUNCTION()
 	void OnRep_Assignment();

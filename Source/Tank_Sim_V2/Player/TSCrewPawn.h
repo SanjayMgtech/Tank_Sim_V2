@@ -114,6 +114,22 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0", ClampMax = "89.0"))
 	float MaxAimPitch = 25.f;
 
+	// --- Gunner stick slew (VR) -----------------------------------------------------------------
+	// In VR the head aims and ApplySeatViewDelta deliberately does nothing, so a thumbstick would be
+	// inert. Rather than rotate the camera - which fights the tracked pose and is a reliable way to
+	// make people sick - the stick accumulates an OFFSET added to the head's forward vector when the
+	// aim ray is built. The gunner still looks where they like; the stick slews the gun.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0"))
+	float VRStickSlewSpeed = 60.f;
+
+	// Clamps for that offset, in degrees, relative to where the gunner is looking - bounded so the
+	// gun can never end up somewhere the gunner has no way to see.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float VRStickSlewYawLimit = 180.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0", ClampMax = "89.0"))
+	float VRStickSlewPitchLimit = 30.f;
+
 	// --- Gunner: the mouse drives the GUN, never the view ---------------------------------------
 	// The Gunner's station rides the turret basket (GunnerScene on b_Upper), so the ATTACHMENT
 	// already carries the traverse, exactly once. Nothing here may rotate the player on top of that:
@@ -335,6 +351,14 @@ protected:
 	float SeatViewYaw = 0.f;
 	float SeatViewPitch = 0.f;
 
+	// VR only: stick-driven slew added to the head's aim direction. See VRStickSlewSpeed.
+	float VRSlewYaw = 0.f;
+	float VRSlewPitch = 0.f;
+
+	// Applies a stick deflection as a slew RATE. Returns true when it consumed the input, i.e. when
+	// the headset drives the camera and ApplySeatViewDelta would have been a no-op.
+	bool ApplyVRStickSlew(const FVector2D& StickAxis);
+
 	// Ticking exists solely for the Gunner's aim, so it is switched on and off with the role rather
 	// than left running on every crew pawn in the level. Never on for a parked (inactive) pawn.
 	void UpdateAimTickEnabled();
@@ -352,6 +376,11 @@ private:
 	// so letting go of the stick or the keys produces no event at all - without this the last
 	// non-zero throttle stays latched on the server and the tank drives on for ever.
 	void Input_DriveReleased(const FInputActionValue& Value);
+	// Analog when there is no PlayerState yet - a pawn with no assignment must still be drivable by
+	// the stick, or a mid-join player is stuck with nothing.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Control")
+	ETSDriveControlMode GetDriveControlMode() const;
+
 	void Input_AimTurret(const FInputActionValue& Value);
 	void Input_FireMainCannon(const FInputActionValue& Value);
 	void Input_FireMachineGun(const FInputActionValue& Value);

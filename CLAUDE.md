@@ -1780,6 +1780,11 @@ never completed and span every tick on every server tank after the first shot. N
 `ReloadWeaponUI` must not be guarded — that warning was about the *function's* two exec outputs;
 this event's only consumer is its own retry loop.
 
+> ⚠ **TWO COMPETING VR APPROACHES EXISTED.** The section immediately below is the one that is
+> LIVE. A second, parallel approach - crew behaviour extracted into `UTSCrewStationComponent` with
+> the template's `BP_XRPawn` as the crew pawn - is parked on the branch
+> `crew-station-component-approach` and is documented after it. Do not follow both.
+
 ## ✅ VR mode — headset when present, flat when not (2026-09-07)
 
 Feature work, like the multiplayer fixes: own commits, own manual test. One build runs both ways;
@@ -2073,6 +2078,52 @@ cannot carry them — the editor target must be rebuilt.
 
 ---
 
+### The parked alternative: BP_XRPawn + UTSCrewStationComponent
+
+NOT ACTIVE. Branch `crew-station-component-approach`. Kept because it answers a question this
+approach does not: how to use the stock VR template pawn without reimplementing it.
+
+## 🥽 VR phase — BP_XRPawn is the crew pawn (2026-09-08)
+
+### Crew behaviour is a COMPONENT, not a pawn class
+`UTSCrewStationComponent` carries the role Input Mapping Contexts, the seat names, and the routing
+of local input into `ATSTankPlayerController`'s Server RPCs. Add it to a pawn and that pawn can
+crew a tank.
+
+**Do NOT reparent `BP_XRPawn` onto `ATSVRPawn`.** Both declare `VROrigin` and `Camera`, so
+reparenting collides name-for-name and leaves a dead native camera plus duplicate motion
+controllers — RULE 1's exact failure mode. The component exists precisely so the template pawn can
+stay untouched.
+
+Two things make it host-agnostic:
+- it finds the viewpoint **by name** (`ViewCameraComponent`, default `Camera`), and both
+  `ATSVRPawn` and `BP_XRPawn` call theirs `Camera`;
+- it self-wires from `APawn::ReceiveRestartedDelegate` / `ReceiveControllerChangedDelegate`, so a
+  Blueprint host needs **no graph nodes** — just the component and its data. Input binds on pawn
+  restart, because the InputComponent does not exist before possession.
+
+Both GameModes spawn `BP_XRPawn`. `ATSVRPawn` still compiles but is no longer used; it is the
+non-VR fallback until someone deletes it.
+
+### ⚠ IMC_Default bundles locomotion WITH grab and the menu
+The template's `IMC_Default` holds `IA_Move` and `IA_Turn` **and** `IA_Grab_*` **and**
+`IA_Menu_Toggle_*`. Removing the context to stop a seated crew member teleporting would also kill
+grabbing and the menu in the cockpit. So the four locomotion exec paths are gated instead —
+`IA_Move` Triggered/Started/Completed and `IA_Turn` Triggered, each through
+`Branch(CrewStation->IsSeatedInTank())` with the ORIGINAL chain on the **False** pin.
+
+Verified both directions, which matters — a gate that always blocks looks identical to a working
+one until someone leaves the tank:
+```
+seated   + IA_Move/IA_Turn injected 200 frames -> moved 0.2uu (tank settling only)
+unseated + IA_Turn                             -> yaw 0 -> 45, snap turn still works
+```
+
+### The VR template content is ~57MB and was untracked
+`Content/VRTemplate`, `XRFramework`, `XRMannequins`, `VRSpectator`, `Weapons`,
+`LevelPrototyping` — 187 files. Committed because both GameModes now reference `BP_XRPawn_C`, so
+without it a fresh clone has a broken DefaultPawnClass.
+
 ## 6. Test Procedure (run after every phase)
 
 1. Close editor fully. Rebuild C++ (Rule 5). Relaunch.
@@ -2118,3 +2169,584 @@ targeted signal instead. Do not report a pass or a regression off mismatched har
 - Inputs: `/Game/YI_TankCollection/Inputs/`
 - Attempt-1 reference (do not build): `CPP_Port_WIP_DO_NOT_USE_YET/Attempt1_Reference/`
 - Pre-reparent BP backups: `CPP_Port_WIP_DO_NOT_USE_YET/PreReparentBackup/`
+
+---
+
+## 🥽 VR INPUT — an Axis2D action MUST bind a 2D XR key (root cause, 2026-09-08)
+
+**Symptom:** "VR inputs aint working." Driving and gunner stick aim did nothing in the headset.
+Everything looked correct: valid `FKey` names, mappings in the live `DefaultKeyMappings` array,
+modifiers outered to the asset, all five IMCs listed in `DefaultMappingContexts`. Nothing logged a
+warning. **This was self-inflicted** — a previous session had it working and this session broke it
+by "improving" the bindings into separate `_X` / `_Y` keys.
+
+### The rule
+**The XR key's component type must match the Input Action's `ValueType`.** An `Axis2D` action can
+only bind a `*_2D` key. Binding it to a 1D key (`..._Thumbstick_X`, `..._Thumbstick_Y`) leaves the
+action **silently unbound in VR**.
+
+What was authored, and why each layer accepted it anyway:
+
+| Layer | Behaviour on `IA_Drive` (Axis2D) + `OculusTouch_Left_Thumbstick_Y` |
+|---|---|
+| `FKey` validity | fine — `_X`/`_Y` genuinely exist in `InputCoreTypes.h` |
+| Enhanced Input | fine — happily stores it, and it would work on a desktop |
+| `OpenXRInput.cpp` | builds ONE OpenXR action per Input Action, typed from `ValueType`: `ToActionType(Mapping.Action->ValueType)` -> `XR_ACTION_TYPE_VECTOR2F_INPUT` |
+| `SuggestBindingForKey` | component `y` -> suggests the **float** path `/user/hand/left/input/thumbstick/y`; component `2d` is special-cased to append **nothing**, giving `/user/hand/left/input/thumbstick` |
+| OpenXR runtime | a Vector2f action's binding path "must refer to the parent of input values ... that parent path must contain subpaths `/x` and `/y`". Otherwise "the runtime **may** provide an alternate binding for the action or **it will be unbound**" |
+
+So the action ends up **unbound and inactive**, and `isActive = XR_FALSE` produces no log line
+anywhere. `_2D` is not merely the tidier option — it is the only legal one for an Axis2D action.
+
+**Scope, stated honestly:** this explains the two Axis2D actions (`IA_Drive`, `IA_AimTurret`) going
+dead. Boolean actions on `*_Trigger_Click` were correctly typed and unaffected. Whether a runtime
+*also* rejects the whole `xrSuggestInteractionProfileBindings` array (called once per interaction
+profile with every binding at once, `OpenXRInput.cpp` ~line 566) is runtime-dependent and was NOT
+confirmed here — do not assume one bad key kills every VR input.
+
+### Getting a per-stick layout without 1D keys
+The ask was left stick = throttle, right stick = steering — two different sticks feeding one Axis2D
+action. The instinct is to bind `Left_Thumbstick_Y` and `Right_Thumbstick_X`. That is the trap above.
+
+Bind **both 2D keys** and mask each with a `Scalar` modifier so they occupy disjoint axes:
+
+| Key | Scalar | Contributes |
+|---|---|---|
+| `<Profile>_Left_Thumbstick_2D` | `(0,1,0)` | Y only -> Throttle |
+| `<Profile>_Right_Thumbstick_2D` | `(1,0,0)` | X only -> Steering |
+
+Enhanced Input combines both mappings for the action, so the result is `(rightX, leftY)` — exactly
+the requested layout, with every suggested path XR-legal. Identical masks give the Gunner right
+stick = traverse, left stick = elevation on `IA_AimTurret`.
+
+Applied to `IMC_Driver` and `IMC_Gunner` for all three profiles (`OculusTouch`, `ValveIndex`,
+`Vive` — note Vive's input is `Trackpad`, not `Thumbstick`).
+
+### ⚠ Related traps confirmed here
+- **`GetMappings()` is NOT the deprecated array.** It returns `DefaultKeyMappings.Mappings`, the
+  same live data `ForEachKeyMapping` walks. An earlier reading of the deprecation note above led to
+  a theory that OpenXR reads the dead `Mappings` array — it does not. Checked, disproven, recorded
+  so nobody re-derives it.
+- **A 4-token key name is mandatory.** `SuggestBindingForKey` bails when
+  `ParseIntoArray("_") != NUM_XR_KEY_TOKENS` (4). Shape is `Profile_Hand_Input_Component`.
+- **Modifiers must be outered to the IMC** and verified across a package reload, or they come back
+  null. Still true; all 12 new Scalar modifiers survived `reload_packages` with 0 nulls.
+
+### ⚠ A stick cannot aim the gun in VR by rotating the camera
+`ApplySeatViewDelta` deliberately early-returns while `IsHeadTrackingActive()` — writing a relative
+camera rotation fights the tracked pose, and rotating a VR player's view from a stick is a reliable
+way to make them sick. So even with the bindings fixed, gunner stick input would still have been
+inert.
+
+`ApplyVRStickSlew` handles it instead: the stick accumulates a yaw/pitch **offset applied to the
+head's forward vector** when the aim ray is built in `UpdateGunnerAim`. The head still aims, the
+camera never moves, and the stick slews the gun on top of it. Two details that matter:
+- **The deflection is a RATE, scaled by `DeltaSeconds`.** A held stick fires `Input_AimTurret` every
+  frame; without the scale the gun traverses ~1.7x faster on a 120Hz tethered headset than on a
+  72Hz standalone one.
+- **Slew yaw rotates about `FVector::UpVector`, not the camera's up.** Tilting your head must not
+  roll the direction the gun slews.
+
+This does not replace the head-aim design recorded above — it is additive, and head aim remains the
+primary mechanism, with `UpdateGunnerAim` still driven from Tick in VR.
+
+### VR UI removed from the headset (2026-09-08)
+`CrewUIPanel.PanelWidgetClass` is set to **None** on both `BP_TSVRPawn` and `BP_XRPawn` — the panel
+sat in the player's face and was not wanted. The component and all of `UTSVRUIPanelComponent` /
+`UTSVRPointerComponent` remain, so re-enabling is one property, not a re-port. A panel with no
+widget class never becomes visible and its collision stays off (`ShouldPanelBeVisible` returns false
+on a null class), so the pointer has nothing to hit and the whole path is inert.
+
+### ✅ Test cases — run these on any change to a VR binding or an Input Action's ValueType
+
+**T1 — Every XR key matches its action's ValueType.** Static, cheap, needs no headset, and is the
+one test that would have caught this bug. Run it before any VR session.
+```python
+import unreal
+V2 = unreal.InputActionValueType.AXIS2D
+BAD = 0
+for p in ['IMC_Shared','IMC_Driver','IMC_Gunner','IMC_Commander','IMC_VR_Widget']:
+    imc = unreal.load_asset('/Game/TankSimulation/Input/Contexts/' + p)
+    for m in imc.get_editor_property('default_key_mappings').get_editor_property('mappings'):
+        kn = str(m.get_editor_property('key').get_editor_property('key_name'))
+        act = m.get_editor_property('action')
+        toks = kn.split('_')
+        if len(toks) != 4 or toks[0] not in ('OculusTouch','ValveIndex','Vive'):
+            continue                      # not an XR key; SuggestBindingForKey ignores it too
+        is2d = toks[3] == '2D'
+        wants2d = act.get_editor_property('value_type') == V2
+        if is2d != wants2d:
+            BAD += 1
+            unreal.log_error('%s: %s vs action valuetype %s' % (p, kn, act.get_editor_property('value_type')))
+unreal.log('XR key/ValueType mismatches: %d' % BAD)     # MUST be 0
+```
+**Expected `0`.** Non-zero means those actions will be silently unbound in the headset.
+
+**T2 — Modifiers survive serialisation.** After ANY scripted IMC edit:
+```python
+pkgs = [unreal.load_package('/Game/TankSimulation/Input/Contexts/IMC_Driver')]
+unreal.EditorLoadingAndSavingUtils.reload_packages(pkgs)
+# re-read every mapping's modifiers; expect zero None entries
+```
+**Expected 0 null modifiers.** A null means the modifier was outered to `/Engine/Transient` and the
+axis mask is gone — the binding still exists and silently does the wrong thing.
+
+**T3 — The 4-token parse.** Every XR key name must split into exactly 4 `_`-separated tokens. This
+is covered by T1's skip clause, with a twist: **if a key you expect T1 to test is being SKIPPED,
+that is itself the failure** — OpenXR is ignoring it for the same reason.
+
+**T4 — Axis masks produce the intended layout (desktop).** Inject the action, read what the pawn got:
+```
+pie_inject_input_action  IA_Drive  (0.0, 1.0)   -> throttle 1.0, steering 0.0
+pie_inject_input_action  IA_Drive  (1.0, 0.0)   -> throttle 0.0, steering 1.0
+```
+**Caveat, already recorded above:** injecting an ACTION skips the key layer entirely, so this
+validates the pawn's consumption of X/Y, *not* the stick bindings. T1 covers the key layer.
+
+**T5 — Human, in the headset.** The only test that proves the whole chain end to end:
+
+| Role | Input | Expected |
+|---|---|---|
+| Driver | left stick fwd/back | drives forward/back, no turn |
+| Driver | right stick left/right | turns, no throttle |
+| Gunner | right stick left/right | turret traverses; **view does not move** |
+| Gunner | left stick up/down | gun elevates; **view does not move** |
+| Gunner | right trigger | main cannon fires |
+| Gunner | left trigger | machine gun fires while held |
+
+Camera movement during either gunner stick test is a regression — it means the slew went back to
+rotating the camera.
+
+**T6 — Regression guard: assert gear and RPM, never speed.** Per the sloped-spawn warning above,
+check the tank leaves gear 0 and the engine rises above its 600 RPM idle. Speed alone cannot
+distinguish driving from rolling downhill.
+
+### ⛔ THE ACTUAL CAUSE of total VR input failure — an EMPTY IMC/Action Description (2026-09-08)
+
+**Correction to the section above.** The Axis2D/`_2D` key mismatch documented above is a real bug and
+the fix stands, but it was **NOT** what made VR input dead. The real fault killed the entire OpenXR
+action system before any binding mattered. Found by grepping the log for `XR_ERROR`, which is the
+first thing to do on any "VR input does nothing" report.
+
+```
+Error: xrCreateActionSet(...)                 failed: XR_ERROR_LOCALIZED_NAME_INVALID   [Line 186]
+Error: xrCreateAction(Set, ...)               failed: XR_ERROR_HANDLE_INVALID           [Line 134]
+Error: xrSuggestInteractionProfileBindings(.) failed: XR_ERROR_HANDLE_INVALID           [Line 566]
+Error: xrAttachSessionActionSets(...)         failed: XR_ERROR_VALIDATION_FAILURE       [Line 601]
+```
+
+One cascade from one cause. `FOpenXRActionSet` passes the IMC's `ContextDescription` as the OpenXR
+`localizedActionSetName`. **Every `IMC_*` in this project had an EMPTY description**, and an empty
+localized name is invalid per the OpenXR spec, so `xrCreateActionSet` fails. The resulting handle is
+garbage, so every `xrCreateAction` against it fails, so no bindings can be suggested, so the session
+attaches nothing. **Result: not one motion-controller input reaches the game — including inputs that
+were bound perfectly correctly.**
+
+Same rule for Input Actions: `ActionDescription` becomes the `localizedActionName`. All 12 `IA_*`
+were empty too.
+
+**The warnings that were being scrolled past were the tell:**
+```
+LogHMD: Warning: Input Mapping Context IMC_Driver has a Description, "", which exactly matches
+the Description already used by Input Mapping Context IMC_Shared.
+```
+UE's own de-duplication substitutes the FName for a *duplicate* description — but it only fixes the
+second and later ones. The **first** context keeps its empty `""`, and empty is what OpenXR rejects.
+So the warning names IMC_Driver while the asset that actually fails is IMC_Shared. Read that warning
+as "somebody has an empty description", not as a localisation nicety.
+
+**Fix:** give every IMC a non-empty, unique `ContextDescription` and every InputAction a non-empty,
+unique `ActionDescription`. They are user-facing localized strings in the OpenXR runtime's binding
+UI, so write them as readable names ("Tank Sim - gunner station"), not identifiers.
+
+### ⚠ `XR_ENSURE` uses `ensure`, so it fires ONCE PER PROCESS
+The second XR session in the same editor run logged **only the warnings, no errors** — which looks
+exactly like a session that succeeded. It did not; `ensure` had already fired for those call sites
+and stays quiet afterwards. **A clean-looking second PIE run proves nothing about XR.** Judge XR
+health from the FIRST XR session after an editor launch, or restart the editor before re-testing.
+
+### ⚠ Do not read "VR Preview" as the client
+The window title records the truth:
+```
+'Yarrawah Tank Collection Preview [NetMode: Standalone 0] ... OpenXR Oculus (1.207.0)'
+```
+`VR Preview` runs a **Standalone** session, and in Standalone `ShouldDesignateAsHost` returns false
+by design, so there is no host, nobody can assign a role, `ApplyRoleMappingContext` logs
+`role=0 context=<none>`, and **no mapping context is applied at all**. That is a second, independent
+way to get "VR inputs do nothing", with a completely different cause from the two above.
+
+Three distinct failures, same symptom. Tell them apart from the log before changing anything:
+
+| Log evidence | Cause | Fix |
+|---|---|---|
+| `XR_ERROR_LOCALIZED_NAME_INVALID` | empty IMC/Action description | fill descriptions (T0) |
+| `role=0 context=<none>` | no team/role assigned | assign from host, or `TSTeam`/`TSRole` |
+| no errors, role applied, one stick dead | key/ValueType mismatch | T1 |
+
+**T0 — no empty or duplicate descriptions.** Run this FIRST on any VR input problem; it is the
+cheapest of the three and the only one that can kill everything at once.
+```python
+import unreal
+bad = 0; seen = {}
+paths = ['/Game/TankSimulation/Input/Contexts/' + n for n in
+         ['IMC_Shared','IMC_Driver','IMC_Gunner','IMC_Commander','IMC_VR_Widget']]
+for p in paths:
+    a = unreal.load_asset(p)
+    d = str(a.get_editor_property('context_description')).strip()
+    if not d or d in seen:
+        bad += 1; unreal.log_error('%s: %r' % (a.get_name(), d))
+    seen[d] = a.get_name()
+ars = unreal.AssetRegistryHelpers.get_asset_registry(); seen2 = {}
+for asset in ars.get_assets_by_path('/Game/TankSimulation/Input/Actions', recursive=True):
+    o = asset.get_asset()
+    if not isinstance(o, unreal.InputAction):
+        continue
+    d = str(o.get_editor_property('action_description')).strip()
+    if not d or d in seen2:
+        bad += 1; unreal.log_error('%s: %r' % (o.get_name(), d))
+    seen2[d] = o.get_name()
+unreal.log('empty-or-duplicate descriptions: %d' % bad)   # MUST be 0
+```
+**Expected `0`.** Currently 0 across 5 contexts and 12 actions.
+
+> ⚠ **This check is INCOMPLETE as written — it misses the length condition.** A description must
+> also be **under 128 chars** (`XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE`). An oversized one produced
+> the identical `XR_ERROR_LOCALIZED_NAME_INVALID` cascade *after* this check reported 0, which read
+> as a regression. Add `or len(d) >= 128` to both conditions above. See the RESOLVED section at the
+> end of this file.
+
+**T0b — the log check, which is faster than any of this.** After the first VR session of an editor
+run: `grep -a "XR_ERROR" Saved/Logs/Tank_Sim_V2.log`. **Expected: no hits.** Any hit means the XR
+action system failed to build and no binding work can possibly help until it is fixed.
+
+### ✅ DESIGN CONFIRMED — the host is NOT crew and NOT VR (2026-09-08)
+Asked and answered by the user directly. The host is an admin/spectator: `TryAssignTeam` and
+`TryAssignRole` refuse `PS->IsHost()`, the host possesses `ATSHostCameraPawn`, and
+`ATSHostCameraPawn::NotifyControllerChanged` forces stereo off and clears `bLockToHmd`. **This is
+intended, not a bug** — do not "fix" it by letting the host take a seat.
+
+Consequence to design around, because it causes real confusion in testing:
+**a VR player must always be a JOINING CLIENT, never the host.**
+
+In PIE this bites immediately: only one instance can own the headset, and UE always gives OpenXR to
+**instance 0** (`[NetMode: Standalone 0] ... OpenXR Oculus` in the window title). Instance 0 is also
+the natural one to host from — so by default the headset lands on the one machine structurally
+barred from playing. **Host from instance 1 and join with instance 0**, or run two `-game` processes
+and pass `-nohmd` to the server and `-vr` to the client.
+
+### ✅ VR movement — everything downstream of the thumbstick is PROVEN (2026-09-08)
+Unattended two-process listen-server run (`-nohmd` both sides, so this tests the game path, not XR):
+```
+before   gear=0 target=0 rpm=600  throttle=0.00 speed=0.0   Y=-999
+during   gear=1 target=1 rpm=1451 throttle=1.00 speed=354.8 Y=-754
+during   gear=2 target=2 rpm=963  throttle=1.00 speed=489.6 Y=-98
+during   gear=2 target=2 rpm=1038 throttle=1.00 speed=681.6 Y=+728
+```
+Gear leaves neutral and RPM rises off its 600 idle - the assertions that actually mean "driving",
+per the sloped-spawn warning. ~1,700 units travelled.
+
+Also confirmed in the same run: `ApplyRoleMappingContext role=1 context=IMC_Driver applied=YES
+shared=YES (client)`, and all 12 `IA_*` properties are set on `BP_TSVRPawn` (each `BindAction` is
+guarded by `if (IA_X)`, so a single null would silently drop that input with no log line - worth
+re-checking whenever an input stops working).
+
+**So the ONLY unproven link in VR movement is physical thumbstick -> `IA_Drive`.** Everything after
+it - role assignment, IMC application, the Server RPC, `BP_SetDriveInput`, the Chaos sim - works.
+Do not re-debug those; reproduce this run first if in doubt.
+
+Command (client side; server is the same without the TSAuto options):
+```
+"127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1?TSAutoDrive=1,0,6" -game -nohmd
+```
+
+Remaining suspects for that last link, in order:
+1. the interaction profile actually bound at runtime. Quest 3 uses Touch Plus
+   (`XR_META_touch_controller_plus` is advertised in the log); UE's `OculusTouch` key prefix
+   suggests `/interaction_profiles/oculus/touch_controller`. Meta's runtime normally accepts that
+   as a fallback, but this has NOT been verified here.
+2. the Scalar-mask two-stick layout - derived from how Enhanced Input combines mappings for one
+   action, not from a documented Epic pattern. Untested in a headset.
+
+---
+
+## ✅ RESOLVED — VR input and VR UI both working (2026-09-09)
+
+**Confirmed working in the headset by the user.** This section supersedes the "Remaining suspects"
+list at the end of the previous VR section — both suspects there were wrong, and are struck below.
+
+Four independent faults produced one symptom ("VR inputs aint working"). Each had to be fixed
+before the next became visible, which is why several rounds of "fixed it / still not working"
+happened. **When VR input is dead, assume more than one cause and work the table in order.**
+
+| # | Fault | Evidence that names it | Fix |
+|---|---|---|---|
+| 1 | Empty `ContextDescription` / `ActionDescription` on every IMC and Input Action | `XR_ERROR_LOCALIZED_NAME_INVALID` on `xrCreateActionSet` | give every one a non-empty, unique string |
+| 2 | `IMC_VR_Widget`'s description was **136 chars**, over the 128 limit | same error, still firing after fix 1 | shorten to under 128 |
+| 3 | Axis2D actions bound to 1D `_X`/`_Y` XR keys | no error at all; action silently unbound | bind `*_2D`, mask axes with `Scalar` |
+| 4 | The flat role debug panel rendered across the headset view | "UI is still in my face" | skip it for a non-host with an HMD |
+
+### The one that hid the longest: a localized name has THREE constraints, not two
+Fix 1 was necessary but incomplete, and the incompleteness looked exactly like a regression - the
+identical four-error cascade came straight back. The missed condition was **length**:
+
+```cpp
+FTCHARToUTF8_Convert::Convert(Info.localizedActionSetName,
+    XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE, *InLocalizedName, InLocalizedName.Len() + 1);
+```
+A 136-char string into a 128-byte buffer is **not politely truncated** - the conversion leaves the
+field malformed and `xrCreateActionSet` returns `XR_ERROR_LOCALIZED_NAME_INVALID`. The handle is
+then garbage, so every `xrCreateAction`, every suggested binding and the session attach all fail on
+it. **One oversized description on one context kills every VR input in the project.**
+
+So the rule is: **non-empty AND unique AND under 128 characters.** Checking only the first two is
+what let this survive a "fix". `T0` in the previous section now checks all three.
+
+Not a risk, checked and cleared: the raw `actionSetName` / `actionName` are sanitised by UE's own
+`FilterActionName`, so the `IMC_*` / `IA_*` FName casing and underscores are fine. Only the
+localized string reaches the runtime's validator.
+
+### What the working input actually looks like in the log
+This is the signature to compare against, and it also proves the Scalar-mask layout works:
+```
+IA_Drive=(-0.000, 0.955)   X=0, Y varies  -> LEFT stick, throttle only
+IA_Drive=( 0.103, 0.000)   Y=0, X varies  -> RIGHT stick, steering only
+IA_Drive=( 1.000, 1.000)   clean +/-1     -> WASD, not a stick
+```
+**Fractional values can only come from an analog stick.** That single observation separates "the
+sticks work" from "only the keyboard works", and it is worth checking before theorising - a run
+that shows only clean ±1.000 values has not actually tested the sticks at all.
+
+### ~~Remaining suspects~~ - both were WRONG, recorded so nobody re-investigates them
+- ~~the Quest 3 interaction profile (`XR_META_touch_controller_plus` vs UE's `oculus/touch_controller`)~~
+  Never a problem. Meta's runtime accepts the base profile, and the analog values above prove the
+  bindings resolved.
+- ~~the Scalar-mask two-stick layout~~ Works exactly as designed - see the axis separation above.
+
+### The diagnostic that ended the guessing loop
+After several asset-level fixes each followed by "still not working", the approach changed from
+fixing to **instrumenting**. Two things, both cheap, both worth keeping:
+
+- **`TSVRDiag`** (console, `!UE_BUILD_SHIPPING`) - one-shot dump of HMD/XR state, pawn and role,
+  which mapping contexts are *actually applied*, live values for the four gameplay actions, every
+  widget in the viewport, and every world-space panel on the pawn.
+- **The `[VRInput]` heartbeat** on `ATSTankPlayerController::PlayerTick` - reads `IA_Drive` and
+  `IA_AimTurret` straight off `UEnhancedPlayerInput`, **independently of any BindAction callback**,
+  and appends the tank's gear / RPM / throttle / speed:
+  ```
+  [VRInput] role=1 vr=on | IA_Drive=(0.000, 0.955) ... | INPUT ARRIVING | gear=1 rpm=1438 speed=350.5
+  ```
+  Rate: 0.5s while deflected, 5s while idle, always on the idle<->moving edge. Silent until a role
+  exists. Disable with `bLogVRInputDiagnostics`.
+
+The heartbeat is the important one. `Input_Drive`'s own log only fires when the binding fires, so
+it cannot distinguish **"no value ever arrived"** from **"a value arrived and we ignored it"** -
+and that was precisely the unknown. Reading the action value directly answers it in one line.
+
+### Method notes worth carrying forward
+- **`grep -a "XR_ERROR" Saved/Logs/Tank_Sim_V2.log` is the FIRST thing to run** on any VR input
+  report. It would have found faults 1 and 2 immediately; instead they were reasoned around for
+  several rounds.
+- **`XR_ENSURE` uses `ensure`, which fires once per process.** A clean-looking second PIE run in the
+  same editor session proves nothing. Judge XR health from the first XR session after a launch.
+- **A `-game` process with `-vr` exercises the real OpenXR path** and can be launched and read
+  without a human in the headset. That is how fix 2 was verified (`XR_ERROR` 4 -> 0, no fallback to
+  legacy actions) rather than handed back untested.
+- **Absence of the fallback warning is the positive signal.** `No mapping context provided in the
+  OpenXR Input project settings` missing from the log proves `BuildEnhancedActions` ran; its
+  presence would mean OpenXR silently used legacy actions and no IMC binding could ever work.
+- **Self-inflicted damage is a real category.** Fault 3 was introduced *by this work* - a previous
+  session had working `*_Thumbstick_2D` bindings and they were "improved" into `_X`/`_Y`. The note
+  already in this file ("a thumbstick needs no swizzle") was the warning, and it was overridden.
+  Read the existing notes as constraints, not as background.
+
+### ⚠ A local or parameter named `PI` will not compile
+`UE` defines `PI` as a math macro, so `const UEnhancedPlayerInput* PI = ...` expands to a constant
+and fails with a bare `error C2059: syntax error: 'constant'` that names nothing useful. Same
+family as the `Role` and `Mesh` shadowing traps already recorded above. Use `PlayerInputPtr`.
+
+Also: the Chaos accessors (`GetThrottleInput`, `GetCurrentGear`, `GetEngineRotationSpeed`) are
+**not const-qualified**, so a `const UChaosWheeledVehicleMovementComponent*` cannot call them.
+
+### VR UI — what was actually in the way
+Not the world-space `CrewUIPanel` (that had already been disabled and was inert). It was the
+**role debug panel**, created by `bShowRoleDebugWidgetOnGameplayMaps`, which defaults to **true**
+and adds a screen-space widget for every local player. Screen-space widgets render plastered across
+the view in a headset. `ATSTankPlayerController` now skips it for any non-host player with an HMD.
+
+The gate tests **HMD availability**, not `IsVRModeActive()`, and that distinction matters:
+`ApplyVRMode` is deferred a tick (it rebuilds the viewport, which is unsafe inside the possession
+call stack), so stereo is still off at the moment this decision is made even for a player who is
+about to be in VR. "Is a headset present and is this player eligible for it" is decidable then;
+"is stereo on" is not.
+
+**Generalise: any screen-space widget added on a gameplay map needs a VR gate.** This one was a
+debug aid; a real HUD would have the same problem and needs the world-space panel path instead.
+
+
+### ⚠ A merge did the header/cpp split AGAIN — and the build still passed (2026-09-09)
+The failure this file already warns about (`36813ab`, a merge that kept a `.h` from one side and the
+`.cpp` from the other) recurred, with a nastier twist: **it compiled and linked clean.**
+
+While resolving a merge, `git checkout --ours Source/Tank_Sim_V2/Player/TSCrewPawn.cpp` was run on a
+file that was **not** conflicted. That silently discarded edits already made to it, leaving
+`ApplyVRStickSlew` **declared in the header, defined nowhere, and called from nowhere**. A
+declared-but-undefined function only fails at link time if something REFERENCES it, so the linker
+never looked and `Result: Succeeded` was reported. The gunner's VR stick slew was simply dead.
+
+Two rules from this:
+- **Never `git checkout --ours/--theirs` a path that is not in the conflict list.** Check
+  `git diff --name-only --diff-filter=U` first; on a non-conflicted path those flags resolve against
+  the index and throw away working-tree work.
+- **A green build does NOT prove a merge kept your code.** Grep for each feature by name afterwards.
+  Counting occurrences across the `.h` and `.cpp` catches the split instantly - a symbol appearing
+  once when it should appear three times (declaration, definition, call site) is the signature.
+
+The merge also moved every crew behaviour from `ATSVRPawn` into a new `ATSCrewPawn`
+(`ATSVRPawn` is now ~47 lines over it, and `ATSDesktopPawn` is its sibling). **Anything previously
+added to `ATSVRPawn` now belongs on `ATSCrewPawn`** - resolving such a conflict "in place" puts the
+code on a class the game no longer uses for that behaviour.
+
+### 🥽 VR is now opt-IN per player — `ETSPlayMode`, and `TSAutoPlayMode` for tests (2026-09-09)
+The Desktop/VR pawn split changed how a player enters VR. Stereo is no longer implied by having a
+headset:
+```cpp
+const bool bWantVR = bAutoEnableVRWhenHMDPresent
+    && GetAssignedPlayMode() == ETSPlayMode::VR    // <- the new requirement
+    && !IsOwnerMatchHost()
+    && UTSVRModeLibrary::IsHMDAvailable();
+```
+`ATSTankPlayerState::PlayMode` defaults to **`ETSPlayMode::Desktop`**, so a joining VR player gets
+`BP_TSDesktopPawn` and its periscope render targets instead of stereo. **Symptom: "everything is
+dark in VR."** That is the desktop periscope view, not a rendering fault.
+
+Set it with the existing `TSPlayMode VR|Desktop` console command (routes through
+`ServerSetPlayMode`), or from the host via `ServerHostAssignPlayerToPlayMode`.
+
+**`TSAutoPlayMode=VR` added** so unattended tests exercise the VR path rather than silently falling
+back to Desktop:
+```
+"127.0.0.1?TSAutoPlayMode=VR?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1?TSAutoDrive=1,0,6" -game -vr
+```
+It runs as **stage 0, before team and role**, because the play mode decides which crew pawn is
+spawned and possessed - setting it later seats the player in one pawn and then swaps it. The
+existing stages shifted down by one; the timer now also starts for `TSAutoPlayMode` alone, so the
+mode can be tested without requesting a team.
+
+Verified: `TSPlayMode: requesting Play in VR` -> `VR mode ON` -> 0 `XR_ERROR` -> gear 0 -> 1 and
+RPM 600 -> 844 under throttle. Note the VR client covers noticeably less ground in the same 6s
+window than the `-nohmd` run (~194uu vs ~1700uu) - stereo rendering costs frames, and `TSDrive`
+holds for wall-clock seconds. **Compare VR drive numbers only against other VR runs**, the same
+rule already recorded for `run_pie_smoke` versus the raw baselines.
+
+## 🕹 Interior DRIVER controls — pedals and steering levers (2026-09-09)
+
+The VK1602 interior skeleton (`Tank_New_Skeleton`) carries driver control bones alongside the
+turret basket:
+```
+b_root > b_Lower > b_Brake > b_Brake_001
+                 > b_Gas
+                 > b_L_Lever
+                 > b_R_Lever
+       > b_Upper > b_UpperSocket        (already driven - see the interior turret section)
+```
+
+### C++ side — DONE, builds clean
+`ATSTankControllerBase` publishes the driver's input for the interior AnimBP, mirroring how
+`GetInteriorTurretRotation` drives `b_Upper`:
+
+| Accessor | Range | Source |
+|---|---|---|
+| `GetInteriorThrottleAlpha()` | 0..1 | `CurrentDriveInput.X` when positive |
+| `GetInteriorBrakeAlpha()` | 0..1 | `CurrentDriveInput.X` when negative |
+| `GetInteriorSteeringAlpha()` | -1..1 | `CurrentDriveInput.Y` |
+| `GetInteriorLeftLeverAlpha()` | 0..1 | steering when negative |
+| `GetInteriorRightLeverAlpha()` | 0..1 | steering when positive |
+| `GetInteriorGasPedalRotation()` | FRotator | alpha x `GasPedalFullTravel` |
+| `GetInteriorBrakePedalRotation()` | FRotator | alpha x `BrakePedalFullTravel` |
+| `GetInteriorLeverRotation(bLeft)` | FRotator | alpha x `LeverFullTravel`, optional right-side mirror |
+
+**It reads the REPLICATED `CurrentDriveInput`**, not local input, so a Gunner or Commander watching
+the driver sees the same lever positions. An animation reconstructed from locally-owned input would
+only ever be right on the driver's own machine.
+
+**Smoothed in `Tick` via `FInterpTo`** (`InteriorControlInterpSpeed`, default 8). Raw input is a
+STEP - a stick or a key goes 0 to 1 in a single frame - and a pedal that teleports reads as broken.
+Set the speed to 0 to disable.
+
+**Stated assumption:** reverse throttle drives the BRAKE pedal. This vehicle has no separate brake
+input (braking is applied through negative throttle), so there is no dedicated channel to read. If a
+real brake input is added, repoint `GetInteriorBrakeAlpha`.
+
+Travel angles are `EditDefaultsOnly` per tank, because each interior is modelled differently - the
+defaults are placeholders, NOT measured values.
+
+### ⬜ HAND-OFF — the AnimGraph wiring is not done
+**Why:** the accessors above are unread until `ABP_VK1602Leopard_Interior` calls them, so nothing
+moves yet.
+
+**Where:** `/Game/YI_TankCollection/Blueprint/WW2_VK1602Leopard/ABP_VK1602Leopard_Interior`,
+AnimGraph, alongside the existing `b_Upper` Transform (Modify) Bone node.
+
+**What:** four more Transform (Modify) Bone nodes chained into the same pose, each fed from the
+pawn (the graph already holds a tank pawn reference for `b_Upper`):
+
+| Bone | Feed from | Notes |
+|---|---|---|
+| `b_Gas` | `GetInteriorGasPedalRotation` | pedal |
+| `b_Brake` | `GetInteriorBrakePedalRotation` | `b_Brake_001` is its child and follows |
+| `b_L_Lever` | `GetInteriorLeverRotation(bLeft=true)` | |
+| `b_R_Lever` | `GetInteriorLeverRotation(bLeft=false)` | set `bMirrorRightLeverTravel` if it bends the wrong way |
+
+Set Rotation Mode to **Additive**, and start in **Component** space - `b_Upper` needed exactly that
+because its local frame is rolled ~90 degrees, and these bones are on the same rig. If a control
+rotates about the wrong axis, that is the travel FRotator's component, not a code change: move the
+angle between Pitch/Yaw/Roll on `GasPedalFullTravel` / `BrakePedalFullTravel` / `LeverFullTravel`.
+
+**How we verify:** drive in PIE and watch the interior - gas pedal down on forward, brake pedal down
+on reverse, left lever back when turning left, right when turning right, all easing rather than
+snapping. Then confirm on a listen-server client watching another player drive, which is the case
+the replicated source exists for.
+
+### ⚠ Monolith could NOT reach these assets (2026-09-09)
+`animation_query get_abp_info`, `blueprint_query get_graph_data` and `get_bone_ref_pose` all
+answered `AnimBlueprint not found` / `Skeleton or SkeletalMesh not found` for paths that
+`unreal.load_asset` resolves fine in the same editor, and an incremental `monolith_reindex` did not
+fix it. Python is also no help for bone transforms here - `SkeletalMeshComponent` exposes no
+`get_bone_location` binding.
+
+So this wiring is an editor hand-off rather than a scripted edit. Per RULE 7, that was the point to
+stop trying near-miss actions.
+
+### ⬜ NEXT — VR hand interaction on these controls
+Requested and deliberately deferred. The animation above is INPUT-DRIVEN: the bones follow
+`CurrentDriveInput`. Grabbing a lever in VR is the opposite direction - the hand moves the bone and
+the bone produces the input - so the two cannot both own the pose. Expect to need an authority
+switch per control (driven-by-input vs driven-by-hand) rather than layering grab on top.
+
+### 🕹 `ETSDriveControlMode` — the host's Stick/Levers switch (2026-09-09)
+Answers the authority conflict flagged above: the interior lever bones can be driven BY the input
+(the stick moves the tank, the levers follow) or they can BE the input (a VR hand pulls a lever,
+which produces the drive command). **Both cannot own the pose**, so this is a switch, not a layer.
+
+Wired exactly like `ETSPlayMode`, because it is the same shape of decision:
+- `ATSTankPlayerState::DriveControlMode`, `ReplicatedUsing = OnRep_Assignment`, **Analog by default**
+  (a stick works on every device; Manual needs VR hands and a rigged interior)
+- `ATSGameMode::TrySetDriveControlMode` holds the rules
+- `ServerSetDriveControlMode` (self-serve) and `ServerHostAssignPlayerToDriveControlMode`
+  (host-gated, re-checked server-side - a Server RPC's `HasAuthority` is trivially true)
+- `TSDriveMode Analog|Manual` console command
+- **Stick / Levers** buttons on each crew-assignment row
+
+**Manual is refused for a non-VR player**, deliberately: switching a desktop driver to Manual would
+take their stick away and give them nothing to work the levers with - a dead control scheme that
+presents as broken input. The row disables the button rather than offering it and having the server
+refuse, because a button that does nothing when clicked reads as a bug.
+
+`ATSCrewPawn::Input_Drive` early-returns in Manual so the stick cannot fight the levers - it would
+win every frame it was touched and the levers would appear dead. **`Input_DriveReleased` is
+deliberately NOT gated**: switching mode mid-hold must still be able to stop the tank.
+
+**What this does NOT do yet:** nothing produces drive input in Manual mode, because the VR hand
+interaction does not exist. Manual currently means "the stick is off". Do not read that as broken -
+it is the switch landing before the mechanism it selects. The next step is grabbable levers writing
+into the same `ServerSetDriveInput` the stick uses today.

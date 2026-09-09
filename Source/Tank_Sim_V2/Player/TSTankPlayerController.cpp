@@ -15,6 +15,14 @@
 #include "Tank_Sim_V2.h"
 #include "TimerManager.h"
 #include "UI/TSRoleDebugWidget.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Components/WidgetComponent.h"
+#include "EnhancedInputSubsystems.h"
+#include "EnhancedPlayerInput.h"
+#include "InputAction.h"
+#include "InputMappingContext.h"
+#include "Player/TSVRModeLibrary.h"
+#include "IXRTrackingSystem.h"
 #include "UI/TSUISubsystem.h"
 #include "Tank/TSTankCommanderComponent.h"
 #include "Tank/TSTankControlComponent.h"
@@ -49,9 +57,23 @@ void ATSTankPlayerController::ApplyLocalUIForCurrentMap()
 		UE_LOG(LogTankSim, Log, TEXT("ATSTankPlayerController: removed %d leftover menu widget(s) after entering the gameplay map."), Removed);
 	}
 
-	if (bShowRoleDebugWidgetOnGameplayMaps)
+	// Screen-space widgets are unreadable in a headset - they render plastered across the view. This
+	// panel is a flat-screen debug aid, so a VR player must never get it.
+	//
+	// The check is HMD AVAILABILITY, not IsVRModeActive(): ApplyVRMode is deferred to the next tick
+	// (it rebuilds the viewport, which is unsafe inside the possession call stack), so stereo is
+	// still off at this point even for a player who is about to be in VR. Asking "is a headset
+	// present and is this player eligible for it" is decidable now; asking "is stereo on" is not.
+	const bool bWillBeVR = UTSVRModeLibrary::IsHMDAvailable() && !IsMatchHost();
+	if (bShowRoleDebugWidgetOnGameplayMaps && !bWillBeVR)
 	{
 		ShowRoleDebugWidget(true);
+	}
+	else if (bShowRoleDebugWidgetOnGameplayMaps)
+	{
+		UE_LOG(LogTankSim, Log,
+			TEXT("ATSTankPlayerController: skipping the flat role debug panel - this player has a "
+				 "headset and is not the host, so it would render across their view."));
 	}
 
 	// The host arrives needing to assign crews; everyone else arrives needing to play.
@@ -165,6 +187,48 @@ bool ATSTankPlayerController::ServerSetPlayMode_Validate(ETSPlayMode NewMode)
 	return true;
 }
 
+void ATSTankPlayerController::ServerSetDriveControlMode_Implementation(ETSDriveControlMode NewMode)
+{
+	// Self-serve like the play mode: choosing whether YOUR hands or YOUR stick drive your own tank
+	// takes nothing from anyone. The GameMode still refuses the host and refuses Manual outside VR.
+	if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
+	{
+		const bool bAccepted = GM->TrySetDriveControlMode(this, NewMode);
+		UE_LOG(LogTankSim, Log, TEXT("ServerSetDriveControlMode: '%s' -> %s (%s)"),
+			*GetNameSafe(PlayerState), *UTSTypeUtils::DriveControlModeToString(NewMode),
+			bAccepted ? TEXT("ok") : TEXT("rejected"));
+	}
+}
+
+bool ATSTankPlayerController::ServerSetDriveControlMode_Validate(ETSDriveControlMode NewMode)
+{
+	return true;
+}
+
+void ATSTankPlayerController::ServerHostAssignPlayerToDriveControlMode_Implementation(APlayerState* TargetPlayerState, ETSDriveControlMode NewMode)
+{
+	// Re-checked server-side: a Server RPC's HasAuthority is trivially true, so without this any
+	// client could switch anyone else's control scheme.
+	if (!IsMatchHost())
+	{
+		return;
+	}
+
+	APlayerController* TargetPC = ResolveControllerForPlayerState(TargetPlayerState);
+	if (ATSGameMode* GM = TargetPC ? GetWorld()->GetAuthGameMode<ATSGameMode>() : nullptr)
+	{
+		const bool bAccepted = GM->TrySetDriveControlMode(TargetPC, NewMode);
+		UE_LOG(LogTankSim, Log, TEXT("Host assign drive control mode: '%s' -> %s (%s)"),
+			*GetNameSafe(TargetPlayerState), *UTSTypeUtils::DriveControlModeToString(NewMode),
+			bAccepted ? TEXT("ok") : TEXT("rejected"));
+	}
+}
+
+bool ATSTankPlayerController::ServerHostAssignPlayerToDriveControlMode_Validate(APlayerState* TargetPlayerState, ETSDriveControlMode NewMode)
+{
+	return true;
+}
+
 void ATSTankPlayerController::ServerHostAssignPlayerToPlayMode_Implementation(APlayerState* TargetPlayerState, ETSPlayMode NewMode)
 {
 	if (!IsMatchHost())
@@ -207,10 +271,21 @@ void ATSTankPlayerController::ApplyInputModeForLocalState()
 		return;
 	}
 
-	const bool bWantCursor = IsOnMenuMap()
+	bool bWantCursor = IsOnMenuMap()
 		|| bLobbyConsoleFocused
 		|| ActiveTeamSelectionWidget != nullptr
 		|| ActiveRoleSelectionWidget != nullptr;
+
+	// Never in VR. There is no OS cursor in a headset, so bShowMouseCursor shows nothing - but
+	// FInputModeGameAndUI still CAPTURES input, which makes this a silent input sink that looks
+	// exactly like "nothing is happening". The UI router owns this decision.
+	if (const UTSUISubsystem* UI = GetUISubsystem())
+	{
+		if (!UI->ShouldUseMouseCursor())
+		{
+			bWantCursor = false;
+		}
+	}
 
 	bShowMouseCursor = bWantCursor;
 
@@ -283,6 +358,15 @@ namespace
 		return false;
 	}
 
+	// Accepts "Analog"/"Stick"/"0" or "Manual"/"Hands"/"1".
+	bool ParseDriveControlMode(const FString& In, ETSDriveControlMode& Out)
+	{
+		const FString S = In.TrimStartAndEnd().ToUpper();
+		if (S.StartsWith(TEXT("A")) || S.StartsWith(TEXT("S")) || S == TEXT("0")) { Out = ETSDriveControlMode::Analog; return true; }
+		if (S.StartsWith(TEXT("M")) || S.StartsWith(TEXT("H")) || S == TEXT("1")) { Out = ETSDriveControlMode::Manual; return true; }
+		return false;
+	}
+
 	// Accepts a name (any unambiguous prefix) or "0".."2".
 	bool ParseCrewRole(const FString& In, ETSCrewRole& Out)
 	{
@@ -337,6 +421,21 @@ void ATSTankPlayerController::TSPlayMode(const FString& Mode)
 
 	UE_LOG(LogTankSim, Log, TEXT("TSPlayMode: requesting %s"), *UTSTypeUtils::PlayModeToString(Parsed));
 	ServerSetPlayMode(Parsed);
+#endif
+}
+
+void ATSTankPlayerController::TSDriveMode(const FString& Mode)
+{
+#if !UE_BUILD_SHIPPING
+	ETSDriveControlMode Parsed = ETSDriveControlMode::Analog;
+	if (!ParseDriveControlMode(Mode, Parsed))
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSDriveMode: could not parse '%s'. Use Analog|Manual or 0-1."), *Mode);
+		return;
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("TSDriveMode: requesting %s"), *UTSTypeUtils::DriveControlModeToString(Parsed));
+	ServerSetDriveControlMode(Parsed);
 #endif
 }
 
@@ -556,7 +655,10 @@ void ATSTankPlayerController::BeginPlay()
 #if !UE_BUILD_SHIPPING
 		// TSAuto* URL options, for unattended listen-server testing. 1.5s, repeating: on a client the
 		// PlayerState and the team's tank each have to replicate in before the next step can succeed.
-		if (GetWorld() && !FString(GetWorld()->URL.GetOption(TEXT("TSAutoTeam="), TEXT(""))).IsEmpty())
+		const bool bAnyAutoOption = GetWorld()
+			&& (!FString(GetWorld()->URL.GetOption(TEXT("TSAutoTeam="), TEXT(""))).IsEmpty()
+				|| !FString(GetWorld()->URL.GetOption(TEXT("TSAutoPlayMode="), TEXT(""))).IsEmpty());
+		if (bAnyAutoOption)
 		{
 			GetWorldTimerManager().SetTimer(AutoAssignTimerHandle, this, &ATSTankPlayerController::TickAutoAssign, 1.5f, true, 1.5f);
 		}
@@ -573,6 +675,7 @@ void ATSTankPlayerController::TickAutoAssign()
 		return;
 	}
 
+	const FString AutoPlayMode = FString(World->URL.GetOption(TEXT("TSAutoPlayMode="), TEXT("")));
 	const FString AutoTeam = FString(World->URL.GetOption(TEXT("TSAutoTeam="), TEXT("")));
 	const FString AutoRole = FString(World->URL.GetOption(TEXT("TSAutoRole="), TEXT("")));
 	const FString AutoStart = FString(World->URL.GetOption(TEXT("TSAutoStart="), TEXT("")));
@@ -583,15 +686,20 @@ void ATSTankPlayerController::TickAutoAssign()
 	switch (AutoAssignStage++)
 	{
 	case 0:
-		if (!AutoTeam.IsEmpty()) { TSTeam(AutoTeam); }
+		// FIRST, before team or role. The play mode decides WHICH crew pawn is spawned and
+		// possessed, so setting it later would seat the player in one pawn and then swap it.
+		if (!AutoPlayMode.IsEmpty()) { TSPlayMode(AutoPlayMode); }
 		break;
 	case 1:
-		if (!AutoRole.IsEmpty()) { TSRole(AutoRole); }
+		if (!AutoTeam.IsEmpty()) { TSTeam(AutoTeam); }
 		break;
 	case 2:
-		if (!AutoStart.IsEmpty() && AutoStart != TEXT("0")) { TSStartMatch(); }
+		if (!AutoRole.IsEmpty()) { TSRole(AutoRole); }
 		break;
 	case 3:
+		if (!AutoStart.IsEmpty() && AutoStart != TEXT("0")) { TSStartMatch(); }
+		break;
+	case 4:
 		// Baseline BEFORE any input: on a sloped map the tank is already rolling, so the after
 		// reading only means something next to this one.
 		UE_LOG(LogTankSim, Log, TEXT("TSAuto: --- before drive ---"));
@@ -606,9 +714,9 @@ void ATSTankPlayerController::TickAutoAssign()
 			TSDrive(Throttle, Steering, Seconds);
 		}
 		break;
-	case 4:
 	case 5:
 	case 6:
+	case 7:
 	{
 		const FString AutoFire = FString(World->URL.GetOption(TEXT("TSAutoFire="), TEXT("")));
 		if (!AutoFire.IsEmpty())
@@ -1098,4 +1206,208 @@ void ATSTankPlayerController::ServerIssueCrewCommand_Implementation(ETSCrewComma
 bool ATSTankPlayerController::ServerIssueCrewCommand_Validate(ETSCrewCommand Command)
 {
 	return Command != ETSCrewCommand::None;
+}
+
+void ATSTankPlayerController::TSVRDiag()
+{
+#if !UE_BUILD_SHIPPING
+	UE_LOG(LogTankSim, Log, TEXT("===== TSVRDiag ====="));
+
+	// --- 1. VR / XR state -----------------------------------------------------------------------
+	UE_LOG(LogTankSim, Log, TEXT("[VR] HMDAvailable=%s VRModeActive=%s HeadTracking=%s"),
+		UTSVRModeLibrary::IsHMDAvailable() ? TEXT("yes") : TEXT("NO"),
+		UTSVRModeLibrary::IsVRModeActive() ? TEXT("yes") : TEXT("NO"),
+		UTSVRModeLibrary::IsHeadTrackingActive() ? TEXT("yes") : TEXT("NO"));
+
+	if (GEngine && GEngine->XRSystem.IsValid())
+	{
+		UE_LOG(LogTankSim, Log, TEXT("[VR] XRSystem='%s' hmdConnected=%s"),
+			*GEngine->XRSystem->GetSystemName().ToString(),
+			GEngine->XRSystem->IsHeadTrackingAllowed() ? TEXT("yes") : TEXT("NO"));
+	}
+	else
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("[VR] no XRSystem - this instance does not own the headset."));
+	}
+
+	// --- 2. Who am I ----------------------------------------------------------------------------
+	const ATSTankPlayerState* PS = GetPlayerState<ATSTankPlayerState>();
+	UE_LOG(LogTankSim, Log, TEXT("[Who] pawn=%s local=%s host=%s team=%d role=%d"),
+		*GetNameSafe(GetPawn()),
+		IsLocalController() ? TEXT("yes") : TEXT("NO"),
+		(PS && PS->IsHost()) ? TEXT("yes") : TEXT("no"),
+		PS ? static_cast<int32>(PS->GetTeamId()) : -1,
+		PS ? static_cast<int32>(PS->GetCrewRole()) : -1);
+
+	// --- 3. Which mapping contexts are ACTUALLY applied ------------------------------------------
+	// The asset can be perfect and still never be added. This distinguishes those two cases.
+	const ULocalPlayer* LP = GetLocalPlayer();
+	UEnhancedInputLocalPlayerSubsystem* EIS =
+		LP ? LP->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>() : nullptr;
+
+	if (!EIS)
+	{
+		UE_LOG(LogTankSim, Error, TEXT("[IMC] no EnhancedInput subsystem - no input can work at all."));
+	}
+	else
+	{
+		static const TCHAR* ContextPaths[] = {
+			TEXT("/Game/TankSimulation/Input/Contexts/IMC_Shared.IMC_Shared"),
+			TEXT("/Game/TankSimulation/Input/Contexts/IMC_Driver.IMC_Driver"),
+			TEXT("/Game/TankSimulation/Input/Contexts/IMC_Gunner.IMC_Gunner"),
+			TEXT("/Game/TankSimulation/Input/Contexts/IMC_Commander.IMC_Commander"),
+			TEXT("/Game/TankSimulation/Input/Contexts/IMC_VR_Widget.IMC_VR_Widget"),
+		};
+		for (const TCHAR* Path : ContextPaths)
+		{
+			const UInputMappingContext* Ctx = LoadObject<UInputMappingContext>(nullptr, Path);
+			UE_LOG(LogTankSim, Log, TEXT("[IMC] %-16s applied=%s"),
+				Ctx ? *Ctx->GetName() : TEXT("<load failed>"),
+				(Ctx && EIS->HasMappingContext(Ctx)) ? TEXT("YES") : TEXT("no"));
+		}
+
+		// --- 4. Live action values ---------------------------------------------------------------
+		// Hold a stick while running this. A non-zero value proves the whole key -> OpenXR ->
+		// Enhanced Input chain works and the fault is downstream; all-zero proves the opposite.
+		// NOT named 'PI': UE defines PI as a math macro, so the declaration expands to a constant and
+		// fails with a bare "syntax error: 'constant'". Same family as the Role / Mesh traps.
+		if (const UEnhancedPlayerInput* PlayerInputPtr = EIS->GetPlayerInput())
+		{
+			static const TCHAR* ActionPaths[] = {
+				TEXT("/Game/TankSimulation/Input/Actions/IA_Drive.IA_Drive"),
+				TEXT("/Game/TankSimulation/Input/Actions/IA_AimTurret.IA_AimTurret"),
+				TEXT("/Game/TankSimulation/Input/Actions/IA_FireMainCannon.IA_FireMainCannon"),
+				TEXT("/Game/TankSimulation/Input/Actions/IA_FireMachineGun.IA_FireMachineGun"),
+			};
+			for (const TCHAR* Path : ActionPaths)
+			{
+				const UInputAction* Action = LoadObject<UInputAction>(nullptr, Path);
+				if (!Action)
+				{
+					continue;
+				}
+				const FVector V = PlayerInputPtr->GetActionValue(Action).Get<FVector>();
+				UE_LOG(LogTankSim, Log, TEXT("[Action] %-18s value=(%.3f, %.3f, %.3f)"),
+					*Action->GetName(), V.X, V.Y, V.Z);
+			}
+		}
+	}
+
+	// --- 5. What is on screen -------------------------------------------------------------------
+	// "The UI is still in my face" needs to name the widget actually in the viewport, rather than
+	// assuming it is the one we already disabled.
+	TArray<UUserWidget*> Widgets;
+	UWidgetBlueprintLibrary::GetAllWidgetsOfClass(this, Widgets, UUserWidget::StaticClass(), false);
+	int32 InViewport = 0;
+	for (const UUserWidget* W : Widgets)
+	{
+		if (W && W->IsInViewport())
+		{
+			++InViewport;
+			UE_LOG(LogTankSim, Log, TEXT("[Widget] IN VIEWPORT: %s (class %s) visibility=%d"),
+				*W->GetName(), *GetNameSafe(W->GetClass()), static_cast<int32>(W->GetVisibility()));
+		}
+	}
+	UE_LOG(LogTankSim, Log, TEXT("[Widget] %d widget(s) in viewport, %d total"), InViewport, Widgets.Num());
+
+	// World-space panels are a separate mechanism and do not appear above.
+	if (const APawn* P = GetPawn())
+	{
+		TArray<UWidgetComponent*> Panels;
+		P->GetComponents<UWidgetComponent>(Panels);
+		for (const UWidgetComponent* Panel : Panels)
+		{
+			UE_LOG(LogTankSim, Log, TEXT("[Panel] %s widgetClass=%s visible=%s hiddenInGame=%s"),
+				*Panel->GetName(), *GetNameSafe(Panel->GetWidgetClass()),
+				Panel->IsVisible() ? TEXT("YES") : TEXT("no"),
+				Panel->bHiddenInGame ? TEXT("yes") : TEXT("no"));
+		}
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("===== end TSVRDiag ====="));
+#endif
+}
+
+void ATSTankPlayerController::PlayerTick(float DeltaTime)
+{
+	Super::PlayerTick(DeltaTime);
+	LogVRInputHeartbeat(DeltaTime);
+}
+
+void ATSTankPlayerController::LogVRInputHeartbeat(float DeltaTime)
+{
+#if !UE_BUILD_SHIPPING
+	if (!bLogVRInputDiagnostics || !IsLocalController())
+	{
+		return;
+	}
+
+	const ATSTankPlayerState* PS = GetPlayerState<ATSTankPlayerState>();
+	if (!PS || PS->GetCrewRole() == ETSCrewRole::None)
+	{
+		// No role means no context is applied by design; logging here would just be noise.
+		return;
+	}
+
+	const ULocalPlayer* LP = GetLocalPlayer();
+	UEnhancedInputLocalPlayerSubsystem* EIS =
+		LP ? LP->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>() : nullptr;
+	const UEnhancedPlayerInput* PlayerInputPtr = EIS ? EIS->GetPlayerInput() : nullptr;
+	if (!PlayerInputPtr)
+	{
+		return;
+	}
+
+	static const UInputAction* DriveAction =
+		LoadObject<UInputAction>(nullptr, TEXT("/Game/TankSimulation/Input/Actions/IA_Drive.IA_Drive"));
+	static const UInputAction* AimAction =
+		LoadObject<UInputAction>(nullptr, TEXT("/Game/TankSimulation/Input/Actions/IA_AimTurret.IA_AimTurret"));
+
+	const FVector Drive = DriveAction ? PlayerInputPtr->GetActionValue(DriveAction).Get<FVector>() : FVector::ZeroVector;
+	const FVector Aim = AimAction ? PlayerInputPtr->GetActionValue(AimAction).Get<FVector>() : FVector::ZeroVector;
+
+	const bool bNonZero = !Drive.IsNearlyZero() || !Aim.IsNearlyZero();
+
+	// Log promptly while a stick is actually deflected, and only occasionally when everything is
+	// idle - so a session that is doing nothing does not bury the moment something arrives.
+	VRInputLogTimer += DeltaTime;
+	const float Interval = bNonZero ? 0.5f : 5.f;
+
+	// An edge (idle -> deflected, or back) is the interesting event, so never let the timer swallow it.
+	if (VRInputLogTimer < Interval && bNonZero == bVRInputWasNonZero)
+	{
+		return;
+	}
+	VRInputLogTimer = 0.f;
+	bVRInputWasNonZero = bNonZero;
+
+	// Report what the TANK is doing on the same line as the input, because "input arrives but the
+	// tank does not move" and "no input arrives" look identical from the player's seat. Gear and RPM
+	// are the assertions that actually distinguish driving from rolling downhill on a slope.
+	FString TankState = TEXT("tank=<none>");
+	if (APawn* Tank = PS->GetAssignedTank())
+	{
+		// Non-const: GetThrottleInput and friends are not const-qualified on the Chaos component.
+		if (UChaosWheeledVehicleMovementComponent* Move =
+				Tank->FindComponentByClass<UChaosWheeledVehicleMovementComponent>())
+		{
+			TankState = FString::Printf(
+				TEXT("gear=%d rpm=%.0f throttle=%.2f speed=%.1f"),
+				Move->GetCurrentGear(), Move->GetEngineRotationSpeed(),
+				Move->GetThrottleInput(), Tank->GetVelocity().Size());
+		}
+		else
+		{
+			TankState = TEXT("tank=<no movement component>");
+		}
+	}
+
+	UE_LOG(LogTankSim, Log,
+		TEXT("[VRInput] role=%d vr=%s | IA_Drive=(%.3f, %.3f) IA_AimTurret=(%.3f, %.3f) | %s | %s"),
+		static_cast<int32>(PS->GetCrewRole()),
+		UTSVRModeLibrary::IsVRModeActive() ? TEXT("on") : TEXT("off"),
+		Drive.X, Drive.Y, Aim.X, Aim.Y,
+		bNonZero ? TEXT("INPUT ARRIVING") : TEXT("nothing arriving"),
+		*TankState);
+#endif
 }

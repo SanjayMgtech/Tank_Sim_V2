@@ -69,11 +69,17 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Crew")
 	void ServerSetPlayMode(ETSPlayMode NewMode);
 
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ServerSetDriveControlMode(ETSDriveControlMode NewMode);
+
 	// Host-driven, alongside the team and seat buttons in the lobby console. Re-checks IsMatchHost()
 	// server-side for the same reason the team/role RPCs do: a Server RPC's HasAuthority() is
 	// trivially true, so without it any client could put anybody into VR.
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
 	void ServerHostAssignPlayerToPlayMode(APlayerState* TargetPlayerState, ETSPlayMode NewMode);
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
+	void ServerHostAssignPlayerToDriveControlMode(APlayerState* TargetPlayerState, ETSDriveControlMode NewMode);
 
 	// TSPlayMode <vr|desktop> (or 0-1). Switches THIS player, through the same self-serve RPC.
 	UFUNCTION(Exec)
@@ -108,6 +114,11 @@ public:
 	// UTSUISubsystem, which owns the menu-vs-gameplay map rule.
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
 	int32 RemoveMenuWidgets();
+
+	// The UI presentation router (flat vs world-space) and the menu-map rules live here. Public so
+	// Blueprints and tests can ask the same question C++ does, rather than re-deriving it.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
+	UTSUISubsystem* GetUISubsystem() const;
 
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Debug")
 	void ShowRoleDebugWidget(bool bShow);
@@ -212,6 +223,31 @@ public:
 	UFUNCTION(Exec)
 	void TSTankStatus();
 
+	// One-shot dump of everything that decides whether VR input and VR UI work. Added because
+	// repeated asset-level fixes kept being followed by "still not working" with no way to tell
+	// WHICH layer was failing. Reports live runtime state, not what the assets claim.
+	UFUNCTION(Exec)
+	void TSDriveMode(const FString& Mode);
+
+	UFUNCTION(Exec)
+	void TSVRDiag();
+
+	// Periodic VR input heartbeat. Reads IA_Drive / IA_AimTurret straight off the player input, so it
+	// reports a value even when the BindAction callback never fires - which is the one distinction
+	// the existing Input_Drive log cannot make ("no value arrived" vs "value arrived, we ignored it").
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
+	bool bLogVRInputDiagnostics = true;
+
+	virtual void PlayerTick(float DeltaTime) override;
+
+private:
+	void LogVRInputHeartbeat(float DeltaTime);
+
+	float VRInputLogTimer = 0.f;
+	bool bVRInputWasNonZero = false;
+
+public:
+
 	// URL options that apply the commands above once this controller is actually ready:
 	//   ...WarZone?listen?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1
 	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoDrive=1,0,8
@@ -303,7 +339,6 @@ protected:
 
 private:
 	ATSTankPlayerState* GetTankPlayerState() const;
-	UTSUISubsystem* GetUISubsystem() const;
 
 	// PlayerState -> owning PlayerController. Prefers GetOwner(), falling back to a controller scan
 	// because a PlayerState's owner can be null for a brief window around (re)connection.
