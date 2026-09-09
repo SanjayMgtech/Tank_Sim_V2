@@ -159,6 +159,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|HUD")
 	bool IsCommanderScreenVisible() const;
 
+	// The live Commander screen, or null when it is not up. Exposed so Blueprint (and a test probe)
+	// can reach the three instrument panels through it rather than rebuilding the lookup.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|HUD")
+	UTSCommanderScreenWidget* GetCommanderScreen() const { return CommanderScreenWidget; }
+
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Debug")
 	bool IsRoleDebugWidgetVisible() const;
 
