@@ -694,6 +694,12 @@ public:
 	// its tick against the pawn is not worth the risk to fix a problem it does not have.
 	void SyncInteriorMeshTickToPawn();
 
+	virtual void Tick(float DeltaTime) override;
+
+	// Smoothed toward CurrentDriveInput every frame; read by the interior AnimBP through the
+	// GetInterior*Alpha accessors above.
+	void UpdateInteriorControlState(float DeltaTime);
+
 	// --- Interior turret bone ---------------------------------------------------------------------
 	// The crew compartment is a SEPARATE skeletal mesh from the hull, with its own skeleton, so the
 	// exterior ABP does not touch it. Its turret basket bone (b_Upper on the VK1602) has to be driven
@@ -714,6 +720,75 @@ public:
 	// Extra yaw applied after the invert, for a basket whose bind pose is not facing forward.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Turret")
 	float InteriorTurretYawOffset = 0.f;
+
+	// --- Interior DRIVER controls -----------------------------------------------------------------
+	// The crew compartment has driver control bones (b_Gas, b_Brake, b_Brake_001, b_L_Lever,
+	// b_R_Lever on the VK1602). They are driven from CurrentDriveInput, which is REPLICATED, so a
+	// remote crew member watching the driver sees the same lever positions - the animation is not a
+	// local guess reconstructed from input this machine happens to own.
+	//
+	// C++ publishes normalised values and leaves the geometry to the AnimBP, which is where the bone
+	// axis and travel actually live. See GetInteriorLeverRotation for why an angle is offered too.
+
+	// 0..1, how far the gas pedal is pressed. Forward throttle only.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	float GetInteriorThrottleAlpha() const { return DisplayThrottle; }
+
+	// 0..1, how far the brake pedal is pressed.
+	//
+	// ASSUMPTION, stated because it is a design decision and not a fact about the tank: reverse
+	// throttle drives the brake pedal. This vehicle has no separate brake input - braking is applied
+	// through negative throttle - so there is no dedicated brake channel to read. If a real brake
+	// input is added later, point this at that instead.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	float GetInteriorBrakeAlpha() const { return DisplayBrake; }
+
+	// -1..1. Negative pulls the LEFT lever, positive the RIGHT - a tracked vehicle steers by braking
+	// the track on the side it turns towards, so the lever that moves is the direction of travel.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	float GetInteriorSteeringAlpha() const { return DisplaySteering; }
+
+	// 0..1 per lever, split out so the AnimBP needs no Select node per side.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	float GetInteriorLeftLeverAlpha() const { return FMath::Max(-DisplaySteering, 0.f); }
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	float GetInteriorRightLeverAlpha() const { return FMath::Max(DisplaySteering, 0.f); }
+
+	// Convenience rotators, so a Transform (Modify) Bone node can be fed directly instead of wiring a
+	// multiply per bone. The ANGLE is Blueprint data (below) because the travel differs per tank;
+	// which AXIS is correct depends on the bone's local frame - b_Upper needed Component space
+	// precisely because its frame is rolled. Expect to try more than one and check against the mesh.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	FRotator GetInteriorGasPedalRotation() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	FRotator GetInteriorBrakePedalRotation() const;
+
+	// bLeft picks the lever. Both use the same travel angle; they differ only in which alpha drives
+	// them and, if the mesh is mirrored, the sign.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	FRotator GetInteriorLeverRotation(bool bLeft) const;
+
+	// Travel at full input, in degrees. Per-tank data - each interior is modelled differently.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior")
+	FRotator GasPedalFullTravel = FRotator(-18.f, 0.f, 0.f);
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior")
+	FRotator BrakePedalFullTravel = FRotator(-18.f, 0.f, 0.f);
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior")
+	FRotator LeverFullTravel = FRotator(-25.f, 0.f, 0.f);
+
+	// Mirrors the right lever's travel. Off by default: whether the two levers need opposite signs
+	// depends on how the interior was modelled, so it is a switch rather than an assumption.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior")
+	bool bMirrorRightLeverTravel = false;
+
+	// How fast the controls chase the input, in units per second. Raw input is a STEP - a stick or a
+	// key goes 0 -> 1 in one frame - and a pedal that teleports reads as broken. 0 disables smoothing.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior", meta = (ClampMin = "0.0"))
+	float InteriorControlInterpSpeed = 8.f;
 
 	// --- Where the gun is ACTUALLY pointing -------------------------------------------------------
 	// Turret traverse and gun elevation as one rotation in the tank's own space: yaw from the turret,
@@ -750,6 +825,11 @@ public:
 	float MachineGunReleaseDelaySeconds = 0.25f;
 
 private:
+	float DisplayThrottle = 0.f;
+	float DisplayBrake = 0.f;
+	float DisplaySteering = 0.f;
+
+
 	FTimerHandle WeaponStopTimerHandle;
 	bool bWeaponFiring = false;
 	void ReleaseWeaponTrigger();

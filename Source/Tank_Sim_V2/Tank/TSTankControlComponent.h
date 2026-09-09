@@ -25,12 +25,19 @@ public:
 	// the Blueprint via ITSTankInterface::BP_SetDriveInput. Returns false if denied.
 	bool TryApplyDriveInput(ATSTankPlayerState* Requester, float Throttle, float Steering);
 
+	// X is throttle, Y is steering. Replicated, so this reads the same on every machine - which is
+	// what lets the interior driver animation match on a remote client instead of only on the
+	// driver's own screen.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Control")
+	FVector2D GetCurrentDriveInput() const { return CurrentDriveInput; }
+
 protected:
 	// X = Throttle, Y = Steering. Replicated (rather than pushed via a per-call multicast) since this
 	// changes at VR-input rate; the tank's NetUpdateFrequency already throttles how often it actually
 	// goes out, matching the doc's Section 10 guidance to reserve multicast for one-shot transients.
 	UPROPERTY(ReplicatedUsing = OnRep_DriveInput, BlueprintReadOnly, Category = "Tank Simulation|Control")
 	FVector2D CurrentDriveInput = FVector2D::ZeroVector;
+
 
 	UFUNCTION()
 	void OnRep_DriveInput();

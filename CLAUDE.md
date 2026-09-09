@@ -2598,3 +2598,88 @@ RPM 600 -> 844 under throttle. Note the VR client covers noticeably less ground 
 window than the `-nohmd` run (~194uu vs ~1700uu) - stereo rendering costs frames, and `TSDrive`
 holds for wall-clock seconds. **Compare VR drive numbers only against other VR runs**, the same
 rule already recorded for `run_pie_smoke` versus the raw baselines.
+
+## 🕹 Interior DRIVER controls — pedals and steering levers (2026-09-09)
+
+The VK1602 interior skeleton (`Tank_New_Skeleton`) carries driver control bones alongside the
+turret basket:
+```
+b_root > b_Lower > b_Brake > b_Brake_001
+                 > b_Gas
+                 > b_L_Lever
+                 > b_R_Lever
+       > b_Upper > b_UpperSocket        (already driven - see the interior turret section)
+```
+
+### C++ side — DONE, builds clean
+`ATSTankControllerBase` publishes the driver's input for the interior AnimBP, mirroring how
+`GetInteriorTurretRotation` drives `b_Upper`:
+
+| Accessor | Range | Source |
+|---|---|---|
+| `GetInteriorThrottleAlpha()` | 0..1 | `CurrentDriveInput.X` when positive |
+| `GetInteriorBrakeAlpha()` | 0..1 | `CurrentDriveInput.X` when negative |
+| `GetInteriorSteeringAlpha()` | -1..1 | `CurrentDriveInput.Y` |
+| `GetInteriorLeftLeverAlpha()` | 0..1 | steering when negative |
+| `GetInteriorRightLeverAlpha()` | 0..1 | steering when positive |
+| `GetInteriorGasPedalRotation()` | FRotator | alpha x `GasPedalFullTravel` |
+| `GetInteriorBrakePedalRotation()` | FRotator | alpha x `BrakePedalFullTravel` |
+| `GetInteriorLeverRotation(bLeft)` | FRotator | alpha x `LeverFullTravel`, optional right-side mirror |
+
+**It reads the REPLICATED `CurrentDriveInput`**, not local input, so a Gunner or Commander watching
+the driver sees the same lever positions. An animation reconstructed from locally-owned input would
+only ever be right on the driver's own machine.
+
+**Smoothed in `Tick` via `FInterpTo`** (`InteriorControlInterpSpeed`, default 8). Raw input is a
+STEP - a stick or a key goes 0 to 1 in a single frame - and a pedal that teleports reads as broken.
+Set the speed to 0 to disable.
+
+**Stated assumption:** reverse throttle drives the BRAKE pedal. This vehicle has no separate brake
+input (braking is applied through negative throttle), so there is no dedicated channel to read. If a
+real brake input is added, repoint `GetInteriorBrakeAlpha`.
+
+Travel angles are `EditDefaultsOnly` per tank, because each interior is modelled differently - the
+defaults are placeholders, NOT measured values.
+
+### ⬜ HAND-OFF — the AnimGraph wiring is not done
+**Why:** the accessors above are unread until `ABP_VK1602Leopard_Interior` calls them, so nothing
+moves yet.
+
+**Where:** `/Game/YI_TankCollection/Blueprint/WW2_VK1602Leopard/ABP_VK1602Leopard_Interior`,
+AnimGraph, alongside the existing `b_Upper` Transform (Modify) Bone node.
+
+**What:** four more Transform (Modify) Bone nodes chained into the same pose, each fed from the
+pawn (the graph already holds a tank pawn reference for `b_Upper`):
+
+| Bone | Feed from | Notes |
+|---|---|---|
+| `b_Gas` | `GetInteriorGasPedalRotation` | pedal |
+| `b_Brake` | `GetInteriorBrakePedalRotation` | `b_Brake_001` is its child and follows |
+| `b_L_Lever` | `GetInteriorLeverRotation(bLeft=true)` | |
+| `b_R_Lever` | `GetInteriorLeverRotation(bLeft=false)` | set `bMirrorRightLeverTravel` if it bends the wrong way |
+
+Set Rotation Mode to **Additive**, and start in **Component** space - `b_Upper` needed exactly that
+because its local frame is rolled ~90 degrees, and these bones are on the same rig. If a control
+rotates about the wrong axis, that is the travel FRotator's component, not a code change: move the
+angle between Pitch/Yaw/Roll on `GasPedalFullTravel` / `BrakePedalFullTravel` / `LeverFullTravel`.
+
+**How we verify:** drive in PIE and watch the interior - gas pedal down on forward, brake pedal down
+on reverse, left lever back when turning left, right when turning right, all easing rather than
+snapping. Then confirm on a listen-server client watching another player drive, which is the case
+the replicated source exists for.
+
+### ⚠ Monolith could NOT reach these assets (2026-09-09)
+`animation_query get_abp_info`, `blueprint_query get_graph_data` and `get_bone_ref_pose` all
+answered `AnimBlueprint not found` / `Skeleton or SkeletalMesh not found` for paths that
+`unreal.load_asset` resolves fine in the same editor, and an incremental `monolith_reindex` did not
+fix it. Python is also no help for bone transforms here - `SkeletalMeshComponent` exposes no
+`get_bone_location` binding.
+
+So this wiring is an editor hand-off rather than a scripted edit. Per RULE 7, that was the point to
+stop trying near-miss actions.
+
+### ⬜ NEXT — VR hand interaction on these controls
+Requested and deliberately deferred. The animation above is INPUT-DRIVEN: the bones follow
+`CurrentDriveInput`. Grabbing a lever in VR is the opposite direction - the hand moves the bone and
+the bone produces the input - so the two cannot both own the pose. Expect to need an authority
+switch per control (driven-by-input vs driven-by-hand) rather than layering grab on top.

@@ -1,4 +1,5 @@
 #include "Tank/TSTankControllerBase.h"
+#include "Tank/TSTankControlComponent.h"
 
 #include "ChaosVehicleMovementComponent.h"
 
@@ -456,6 +457,58 @@ FRotator ATSTankControllerBase::GetInteriorTurretRotation() const
 
 	// Yaw only. Pitch would tilt the whole crew compartment with the gun.
 	return FRotator(0.0, Yaw, 0.0);
+}
+
+void ATSTankControllerBase::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+	UpdateInteriorControlState(DeltaTime);
+}
+
+void ATSTankControllerBase::UpdateInteriorControlState(float DeltaTime)
+{
+	// CurrentDriveInput is REPLICATED, so this runs correctly on every machine - the server, the
+	// driver's client, and a passenger watching from another seat all smooth the same source and
+	// therefore see the same lever positions.
+	FVector2D Input = FVector2D::ZeroVector;
+	if (const UTSTankControlComponent* Control = FindComponentByClass<UTSTankControlComponent>())
+	{
+		Input = Control->GetCurrentDriveInput();
+	}
+
+	// X is throttle, Y is steering - the same convention Input_Drive and BP_SetDriveInput use.
+	const float TargetThrottle = FMath::Max(Input.X, 0.f);
+	const float TargetBrake = FMath::Max(-Input.X, 0.f);
+	const float TargetSteering = FMath::Clamp(Input.Y, -1.f, 1.f);
+
+	if (InteriorControlInterpSpeed <= 0.f)
+	{
+		DisplayThrottle = TargetThrottle;
+		DisplayBrake = TargetBrake;
+		DisplaySteering = TargetSteering;
+		return;
+	}
+
+	DisplayThrottle = FMath::FInterpTo(DisplayThrottle, TargetThrottle, DeltaTime, InteriorControlInterpSpeed);
+	DisplayBrake = FMath::FInterpTo(DisplayBrake, TargetBrake, DeltaTime, InteriorControlInterpSpeed);
+	DisplaySteering = FMath::FInterpTo(DisplaySteering, TargetSteering, DeltaTime, InteriorControlInterpSpeed);
+}
+
+FRotator ATSTankControllerBase::GetInteriorGasPedalRotation() const
+{
+	return GasPedalFullTravel * DisplayThrottle;
+}
+
+FRotator ATSTankControllerBase::GetInteriorBrakePedalRotation() const
+{
+	return BrakePedalFullTravel * DisplayBrake;
+}
+
+FRotator ATSTankControllerBase::GetInteriorLeverRotation(bool bLeft) const
+{
+	const float Alpha = bLeft ? GetInteriorLeftLeverAlpha() : GetInteriorRightLeverAlpha();
+	const float Sign = (!bLeft && bMirrorRightLeverTravel) ? -1.f : 1.f;
+	return LeverFullTravel * (Alpha * Sign);
 }
 
 FRotator ATSTankControllerBase::GetMainGunAimRotation() const
