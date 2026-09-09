@@ -108,8 +108,13 @@ void ATSCrewPawn::RefreshCrewBinding()
 		return;
 	}
 
-	// AddDynamic is AddUnique for dynamic delegates, so re-entry here cannot double-subscribe.
-	PS->OnAssignmentChanged.AddDynamic(this, &ATSCrewPawn::ApplyRoleMappingContext_FromPlayerState);
+	// AddUNIQUEDynamic, and the distinction is not cosmetic. AddDynamic maps to Add(), whose
+	// AddInternal ensures the delegate is not already bound (ScriptDelegates.h, "Verify same function
+	// isn't already bound"); AddUnique is the one that checks first. Re-entry here is NORMAL - both
+	// NotifyControllerChanged and OnRep_PlayerState route here for the same PlayerState, and the
+	// unbind above deliberately skips when the PlayerState has not changed - so AddDynamic fired an
+	// ensure out of Pawn::OnRep_PlayerState on every possession swap.
+	PS->OnAssignmentChanged.AddUniqueDynamic(this, &ATSCrewPawn::ApplyRoleMappingContext_FromPlayerState);
 	BoundPlayerState = PS;
 
 	// The context swap is plain Enhanced Input bookkeeping and is safe during possession, so it
@@ -169,10 +174,26 @@ void ATSCrewPawn::ApplyDisplayMode()
 	//
 	// One tick later the pawn, controller, local player and input component are all fully
 	// built, and flipping stereo touches nothing that is still under construction.
+	// Coalesced. A possession swap lands NotifyControllerChanged, OnRep_PlayerState and the
+	// assignment delegate in one frame, and SetTimerForNextTick does not de-duplicate - so each used
+	// to queue its own application and the log showed three stereo toggles back to back. One
+	// viewport-mode change per frame is the most that can ever be meaningful.
+	if (bDisplayModeUpdateQueued)
+	{
+		return;
+	}
+
 	if (UWorld* World = GetWorld())
 	{
-		World->GetTimerManager().SetTimerForNextTick(this, &ATSCrewPawn::ApplyDisplayModeDeferred);
+		bDisplayModeUpdateQueued = true;
+		World->GetTimerManager().SetTimerForNextTick(this, &ATSCrewPawn::HandleApplyDisplayModeDeferred);
 	}
+}
+
+void ATSCrewPawn::HandleApplyDisplayModeDeferred()
+{
+	bDisplayModeUpdateQueued = false;
+	ApplyDisplayModeDeferred();
 }
 
 void ATSCrewPawn::ApplyDisplayModeDeferred()

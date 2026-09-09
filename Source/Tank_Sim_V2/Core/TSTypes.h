@@ -56,6 +56,25 @@ enum class ETSDriveControlMode : uint8
 	Manual	UMETA(DisplayName = "Manual controls (VR hands)")
 };
 
+// Why a play-mode request was refused. Returned by ATSGameMode::GetPlayModeDenialReason and sent
+// back to the asking client, because "the VR button did nothing" is otherwise indistinguishable
+// from a bug - and the honest answer is usually "you have no headset plugged in".
+UENUM(BlueprintType)
+enum class ETSPlayModeDenial : uint8
+{
+	None			UMETA(DisplayName = "Granted"),
+
+	// The requesting client reported no connected HMD. Enabling stereo without one is what took the
+	// GPU down (DXGI_ERROR_DEVICE_HUNG), so this is refused on the SERVER before any pawn is swapped.
+	NoHeadset		UMETA(DisplayName = "No headset connected"),
+
+	// The session host is a match admin on a flat screen and holds no crew pawn of either kind.
+	HostCannotPlay	UMETA(DisplayName = "Host does not play"),
+
+	// The GameMode has no crew pawn class configured for that mode.
+	NoPawnClass		UMETA(DisplayName = "No crew pawn class configured")
+};
+
 UENUM(BlueprintType)
 enum class ETSMatchState : uint8
 {
@@ -170,4 +189,7 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Types")
 	static FString DriveControlModeToString(ETSDriveControlMode Mode);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
+	static FString PlayModeDenialToString(ETSPlayModeDenial Denial);
 };

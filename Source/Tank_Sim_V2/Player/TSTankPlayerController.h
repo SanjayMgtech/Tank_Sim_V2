@@ -18,6 +18,7 @@ class UTSUISubsystem;
 class UUserWidget;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FTSOnRoleRequestResult, ETSCrewRole, RequestedRole, bool, bAccepted);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FTSOnPlayModeRequestResult, ETSPlayMode, RequestedMode, bool, bAccepted, ETSPlayModeDenial, Reason);
 
 UCLASS()
 class ATSTankPlayerController : public APlayerController
@@ -63,8 +64,34 @@ public:
 
 	// Ask the server to move this player into the other mode. Self-serve: the host assigns modes in
 	// the lobby, but a player may switch their own body at any time (requirement: mid-match switch).
+	// A toggle into VR with no headset attached is dropped locally and logged - see CanUseVRMode.
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
 	void TogglePlayMode();
+
+	// --- Headset reporting ------------------------------------------------------------------------
+	// Whether a headset is plugged into THIS machine is something only this client can see, so it is
+	// measured here and sent up. The server keeps it on the PlayerState and refuses VR without it.
+
+	// True when this local player could actually run stereo right now. Client-side truth; on the
+	// server or a remote copy it falls back to the replicated PlayerState flag.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew")
+	bool CanUseVRMode() const;
+
+	// Re-measures the local headset state and reports it if it has changed. Called on BeginPlay and
+	// on a slow timer, so plugging a headset in mid-session enables VR without a reconnect.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
+	void ReportLocalHeadsetState();
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerReportHeadsetConnected(bool bConnected);
+
+	// Result of a play-mode request, delivered to the asking client so a refusal can be shown rather
+	// than looking like a dead button.
+	UFUNCTION(Client, Reliable)
+	void ClientPlayModeRequestResult(ETSPlayMode RequestedMode, bool bAccepted, ETSPlayModeDenial Reason);
+
+	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Crew")
+	FTSOnPlayModeRequestResult OnPlayModeRequestResult;
 
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Crew")
 	void ServerSetPlayMode(ETSPlayMode NewMode);
@@ -329,6 +356,11 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew")
 	FKey PlayModeToggleKey = EKeys::F2;
 
+	// How often this client re-measures whether a headset is attached, in seconds. Slow on purpose:
+	// it exists so plugging one in mid-session eventually enables VR, not to poll hardware hard.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew", meta = (ClampMin = "1.0"))
+	float HeadsetPollIntervalSeconds = 5.f;
+
 	// Give the host the cursor as soon as it reaches a gameplay map, so crews can be assigned without
 	// hunting for the key first. Clients start unfocused - their console rows are read-only.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Lobby")
@@ -359,6 +391,11 @@ private:
 	void HandleAssignmentChanged();
 
 	bool bLobbyConsoleFocused = false;
+
+	// Last headset state this client told the server about, so the report only goes up on a change.
+	// Starts unset so the first measurement always reports, including the common "false" case.
+	TOptional<bool> LastReportedHeadsetState;
+	FTimerHandle HeadsetPollTimerHandle;
 
 	// TSDrive: repeating timer that re-sends the drive input every tick for the requested duration.
 	FTimerHandle TestDriveTimerHandle;

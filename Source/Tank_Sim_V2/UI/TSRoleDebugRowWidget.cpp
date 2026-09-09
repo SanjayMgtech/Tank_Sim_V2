@@ -354,10 +354,11 @@ void UTSRoleDebugRowWidget::RefreshRow()
 			? FString::Printf(TEXT("%s / %s"),
 				*UTSTypeUtils::TeamIdToString(CurrentTeam),
 				*UTSTypeUtils::CrewRoleToString(CurrentRole))
-			: FString::Printf(TEXT("%s / %s / %s"),
+			: FString::Printf(TEXT("%s / %s / %s%s"),
 				*UTSTypeUtils::TeamIdToString(CurrentTeam),
 				*UTSTypeUtils::CrewRoleToString(CurrentRole),
-				CurrentPlayMode == ETSPlayMode::VR ? TEXT("VR") : TEXT("Desktop"))));
+				CurrentPlayMode == ETSPlayMode::VR ? TEXT("VR") : TEXT("Desktop"),
+				TargetPS->HasHeadsetConnected() ? TEXT("") : TEXT(" (no HMD)"))));
 	}
 
 	// Seat occupancy on this player's team tank, so a seat somebody else already holds reads as
@@ -416,13 +417,26 @@ void UTSRoleDebugRowWidget::RefreshRow()
 		const ETSPlayMode PlayMode = RowPlayModes[Index];
 		const bool bIsMine = PlayMode == CurrentPlayMode;
 
+		// VR needs a headset on THAT player's machine, which their client reports up. Without one the
+		// button is disabled rather than merely refused - a misclick that puts somebody into a stereo
+		// mode they cannot render is what hung the GPU, so the safest place to stop it is before the
+		// click. Shown blocked (red), not hidden, so the host can see why it is unavailable.
+		const bool bNeedsHeadset = (PlayMode == ETSPlayMode::VR) && !TargetPS->HasHeadsetConnected();
+
 		// Clickable by the host for anyone, and by a player for themselves - that second case is the
 		// mid-match switch. The host's own row stays disabled: it holds no crew pawn to switch.
-		Button->SetIsEnabled((bIsHost || bIsLocalPlayer) && !TargetPS->IsHost());
+		Button->SetIsEnabled((bIsHost || bIsLocalPlayer) && !TargetPS->IsHost() && !bNeedsHeadset);
 
 		FButtonStyle Style = Button->GetStyle();
-		Style.Normal.TintColor = FSlateColor(bIsMine ? ButtonCurrent : ButtonIdle);
+		Style.Normal.TintColor = FSlateColor(bIsMine ? ButtonCurrent : (bNeedsHeadset ? ButtonBlocked : ButtonIdle));
 		Button->SetStyle(Style);
+
+		if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent()))
+		{
+			Label->SetToolTipText(FText::FromString(bNeedsHeadset
+				? TEXT("No headset connected on that player's machine.")
+				: TEXT("")));
+		}
 	}
 
 	for (int32 Index = 0; Index < DriveModeButtons.Num(); ++Index)

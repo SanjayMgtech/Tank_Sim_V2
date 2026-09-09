@@ -47,8 +47,8 @@ public:
 	// ---------------------------------------------------------------------------------------------
 
 	// Server only. Records the mode on the PlayerState and possesses the pawn that serves it,
-	// spawning it first if this is the first time the player has asked for that mode. Refuses the
-	// host, which is a flat-screen match admin and holds no crew pawn at all.
+	// spawning it first if this is the first time the player has asked for that mode. Validated by
+	// GetPlayModeDenialReason first - nothing is spawned, possessed or written when it refuses.
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew")
 	bool TrySetPlayMode(APlayerController* Player, ETSPlayMode NewMode);
 
@@ -57,6 +57,16 @@ public:
 	// reach. Returns false when refused.
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Lobby")
 	bool TrySetDriveControlMode(APlayerController* Player, ETSDriveControlMode NewMode);
+
+	// Whether this player may have that mode, and if not, why. ETSPlayModeDenial::None means yes.
+	//
+	// **VR is refused for a player whose client has no headset connected**, and that check has to
+	// live here rather than only on the client: by the time the client discovers it cannot render
+	// stereo, the server has already swapped its pawn, and switching stereo on against a headless
+	// XR runtime is what hung the GPU. HMD presence reaches the server through
+	// ATSTankPlayerState::HasHeadsetConnected, which the owning client reports.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew")
+	ETSPlayModeDenial GetPlayModeDenialReason(const APlayerController* Player, ETSPlayMode Mode) const;
 
 	// Server only. Makes sure this player owns a crew pawn for BOTH modes, adopting whatever
 	// RestartPlayer already handed them, then possesses the one their assigned mode calls for and

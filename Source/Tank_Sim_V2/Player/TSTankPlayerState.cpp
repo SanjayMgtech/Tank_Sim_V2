@@ -12,6 +12,7 @@ void ATSTankPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(ATSTankPlayerState, bIsHost);
 	DOREPLIFETIME(ATSTankPlayerState, PlayMode);
 	DOREPLIFETIME(ATSTankPlayerState, DriveControlMode);
+	DOREPLIFETIME(ATSTankPlayerState, bHeadsetConnected);
 }
 
 void ATSTankPlayerState::CopyProperties(APlayerState* PlayerState)
@@ -33,6 +34,11 @@ void ATSTankPlayerState::CopyProperties(APlayerState* PlayerState)
 		// still be in VR after the match travels to the battle map.
 		NewPlayerState->PlayMode = PlayMode;
 
+		// The same machine is on the other side of the travel, so its headset has not gone anywhere.
+		// Carrying this stops the player being silently demoted out of VR on arrival, before the
+		// client's next report lands.
+		NewPlayerState->bHeadsetConnected = bHeadsetConnected;
+
 		// Deliberately not AssignedTank: that actor belongs to the world being left behind. The
 		// GameMode spawns the team's tank again on the new map and re-seats the crew there.
 		NewPlayerState->AssignedTank = nullptr;
@@ -50,6 +56,7 @@ void ATSTankPlayerState::OverrideWith(APlayerState* PlayerState)
 		AssignedTank = OldPlayerState->AssignedTank;
 		bIsHost = OldPlayerState->bIsHost;
 		PlayMode = OldPlayerState->PlayMode;
+		bHeadsetConnected = OldPlayerState->bHeadsetConnected;
 	}
 }
 
@@ -110,6 +117,16 @@ void ATSTankPlayerState::SetDriveControlMode(ETSDriveControlMode NewMode)
 		return;
 	}
 	DriveControlMode = NewMode;
+	OnRep_Assignment();
+}
+
+void ATSTankPlayerState::SetHeadsetConnected(bool bConnected)
+{
+	if (!HasAuthority() || bHeadsetConnected == bConnected)
+	{
+		return;
+	}
+	bHeadsetConnected = bConnected;
 	OnRep_Assignment();
 }
 

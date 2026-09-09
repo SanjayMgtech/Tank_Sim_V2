@@ -163,7 +163,10 @@ at the tank's origin and it reads as "seating is broken" rather than "nobody pla
 ```
 error C4458: declaration of 'Role' hides class member
 ```
-This has now bitten twice — `ATSGameMode::TryAssignRole` (named `RequestedRole`) and
+This has now bitten three times — `ATSGameMode::TryAssignRole` (named `RequestedRole`),
+`ATSTankControllerBase::Tick` (named `InDeltaSeconds`, because Phase 7 moved a Blueprint variable
+called `DeltaSeconds` onto this very class — so even an engine override's standard parameter name
+is not safe here) and
 `ATSVRPawn::GetSeatComponentNameForRole` (named `InRole`). Use `InRole`, `CrewRole` or
 `RequestedRole`, never bare `Role`, for parameters AND locals on any `AActor` subclass.
 
@@ -1689,6 +1692,42 @@ skeletal mesh. The root is deliberately skipped — it carries the vehicle physi
 
 Logs prove ordering, never smoothness. **Whether the lag is visually gone still needs a human.**
 
+## 📺 Crew station views (periscope render targets) — the cost contract
+
+Each station has a `SceneCaptureComponent2D` drawing into a render target that a screen mesh in the
+crew compartment displays. **A scene capture is close to a whole extra render of the world**, so the
+default settings are a trap: as authored, every capture on every tank ran with `bCaptureEveryFrame`
+on **every machine** — server and remote copies included — so a two-tank match rendered the world
+four extra times a frame for views nobody was looking through. `RT_Gunner` was also **2000x2000**,
+i.e. twice the pixel count of a 1080p main view, per capture, per frame.
+
+`ATSTankControllerBase` now owns the policy (`CrewViewCaptureComponents` and friends):
+- Every capture is silenced at BeginPlay; one is switched back on only for the seat the local player
+  actually holds, and only on their own tank. `GetLocalCrewRoleOnThisTank()` answers that, and
+  `IsLocalGunnerOfThisTank()` is now a thin wrapper over it.
+- `CaptureScene()` is driven manually at `CrewViewCaptureHz` (30 by default) instead of every frame.
+- Called from `Tick` **after** `Super::Tick`, so the Blueprint's Event Tick has already written
+  `TurretsRot` — a sight riding the turret captures this frame's gun angle, not last frame's.
+
+**The gating is correctness, not just frame time.** The render targets are shared assets: two tanks
+capturing into `RT_Gunner` would overwrite each other and both sights would show the wrong tank's
+view. One capture per station per machine is what makes a single shared asset safe. If two tanks
+ever need to capture at once, the render targets have to become per-instance.
+
+⚠ **A capture with no `TextureTarget` still renders.** `GunnerSceneCaptureComponent` shipped with
+none assigned, so it did the full scene render every frame and discarded it — invisible in a profile
+unless you know to look, and the gunner screen was black the whole time. Check `TextureTarget` on
+every capture before blaming the material.
+
+Levers, in descending order of effect: render target resolution, then how many captures are live,
+then `CrewViewCaptureHz`, then the show flags (`bApplyCrewViewPerformanceDefaults`). Not touched:
+`PrimitiveRenderMode` is still `PRM_LegacySceneCapture` on these components — `PRM_RenderScenePrimitives`
+is generally the faster UE5 path and is worth measuring.
+
+A capture can be made to ride the turret with no code at all: add its component name to
+`TurretMountedSeatComponents`, which attaches any named scene component to the turret socket at
+BeginPlay. As it stands both captures sit on the hull, so the Gunner's sight does not traverse.
+
 ## 🎯 Team spawn points
 
 `ATSGameMode::GetSpawnTransformForTeam` takes any actor tagged `TSTeamSpawn_TeamA`..`TeamD`, or a
@@ -2031,7 +2070,76 @@ AFTER-DSK mode=DESKTOP  possessed=BP_TSDesktopPawn_C_0
 mean the swap was really a respawn. That one query for `ATSCrewPawn` returned both is also what
 proves they share a base.
 
+### ⚠ Clicking "Play in VR" with no headset used to take the GPU down (fixed 2026-09-09)
+Reported as "even when I click VR by mistake, the game crashes". The dump is a GPU crash, not a
+script one, which is why nothing in the Blueprint logs pointed at it:
+```
+LogD3D12RHI: Error: GPU crash detected:
+  - Device 0 Removed: DXGI_ERROR_DEVICE_HUNG
+```
+The log going in tells the whole story:
+```
+[932] ATSGameMode: '...' is now in Play in VR (pawn 'BP_TSVRPawn_C_0')
+[933] Ensure condition failed: InvocationList[CurFunctionIndex] != InDelegate
+      Script Stack: /Script/Engine.Pawn.OnRep_PlayerState
+[933] UTSVRModeLibrary: VR mode OFF (requested OFF, HMD connected: no)      x3
+[935] GPU crash detected: DXGI_ERROR_DEVICE_HUNG
+```
+**The XR runtime initialises whether or not a headset is attached.** This machine logs
+`Initialized OpenXR on Oculus runtime version 1.207.0` and `HMD configured for shader platform
+PCD3D_SM5` with nothing plugged in. So "is an XR stack present" is NOT the same question as "can
+this client render stereo", and only the second one is safe to act on. `IsHMDAvailable` now demands
+both (`IsStereoDeviceUsable() && IsHeadMountedDisplayConnected()`).
+
+**HMD presence is a CLIENT fact, so the server cannot validate it by itself.** That is the whole
+reason the old code let the click through: the server accepted, swapped the pawn, and only then did
+the client discover it had nothing to render to. The client now reports its headset state up
+(`ServerReportHeadsetConnected`, at BeginPlay and on a slow poll so plugging one in later still
+counts), the server keeps it on `ATSTankPlayerState::bHeadsetConnected`, and
+`ATSGameMode::GetPlayModeDenialReason` refuses VR without it **before anything is spawned,
+possessed or written**.
+
+Guarded at five layers, and each catches something the others cannot:
+| Layer | Catches |
+|---|---|
+| lobby VR button disabled + shown blocked | the misclick, before it happens |
+| F2 / `TSPlayMode` drop the request locally | a keypress the client already knows the answer to |
+| `GetPlayModeDenialReason` on the server | everything, including a modified client |
+| `SetVRModeEnabled` refuses at the last moment | a headset unplugged between grant and call |
+| unplug mid-match returns the player to Desktop | being stranded in a pawn you cannot render |
+
+### ⚠ `AddDynamic` is NOT `AddUnique` - it ensures on a duplicate
+A comment in `RefreshCrewBinding` claimed it was. It is not, and the ensure above is the proof:
+`AddDynamic` maps to `Add()`, whose `AddInternal` runs "Verify same function isn't already bound"
+(`ScriptDelegates.h:1025`). **`AddUniqueDynamic` is the one that checks first.**
+
+Re-entry there is NORMAL - `NotifyControllerChanged` and `OnRep_PlayerState` both refresh the
+binding for the same PlayerState, and the unbind deliberately skips when it has not changed - so
+every possession swap double-added. Any `AddDynamic` on a path that can legitimately run twice for
+the same object needs to be `AddUniqueDynamic`.
+
+### ⚠ `SetTimerForNextTick` does not de-duplicate
+`ApplyDisplayMode` is reached from possession, `OnRep_PlayerState` and the assignment delegate,
+which all land in the same frame - and a later commit added a fourth caller. Each queued its own
+viewport-mode application, which is the `x3` in the log above. They now coalesce behind a bool onto
+one non-virtual timer target, `HandleApplyDisplayModeDeferred`, so the flag is cleared exactly once
+however a subclass chooses to chain (`ATSVRPawn` calls `Super` only on the flat-screen fallback).
+
+Runtime proof, PIE on WarZone, `ok:true` with **`Ensure condition failed: 0`** and no GPU crash:
+```
+START             mode=DESKTOP  headset=False  possessed=BP_TSDesktopPawn_C_0
+denial for VR     = NO_HEADSET
+denial for DESKTOP= NONE
+TrySetPlayMode(VR) with no headset -> False
+AFTER-VR-ATTEMPT  mode=DESKTOP  possessed=BP_TSDesktopPawn_C_0    <- NOTHING changed
+TrySetPlayMode(DESKTOP)            -> True
+```
+The point of the middle line is that the refusal is total: no pawn swap, no recorded mode, no
+stereo attempt. A misclick costs the player nothing at all.
+
 ### Still owed a human test
+Whether the switch is clean **with a headset actually attached** is untested - none of the above
+can be verified without one, and the guard only proves the headless case is now refused.
 Two-window listen server with a Driver on desktop and a Gunner in a headset, and the switch
 performed mid-match. Logs prove which pawn is possessed; they cannot see whether the viewport
 transition is clean. The pawn changes add `UPROPERTY`s and two new `UCLASS`es, so Live Coding

@@ -79,3 +79,8 @@ FString UTSTypeUtils::DriveControlModeToString(ETSDriveControlMode Mode)
 	default:							return TEXT("Analog");
 	}
 }
+
+FString UTSTypeUtils::PlayModeDenialToString(ETSPlayModeDenial Denial)
+{
+	return EnumDisplayName(Denial);
+}
