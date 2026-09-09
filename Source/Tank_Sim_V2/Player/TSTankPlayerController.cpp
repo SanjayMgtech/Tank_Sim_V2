@@ -589,7 +589,10 @@ void ATSTankPlayerController::BeginPlay()
 #if !UE_BUILD_SHIPPING
 		// TSAuto* URL options, for unattended listen-server testing. 1.5s, repeating: on a client the
 		// PlayerState and the team's tank each have to replicate in before the next step can succeed.
-		if (GetWorld() && !FString(GetWorld()->URL.GetOption(TEXT("TSAutoTeam="), TEXT(""))).IsEmpty())
+		const bool bAnyAutoOption = GetWorld()
+			&& (!FString(GetWorld()->URL.GetOption(TEXT("TSAutoTeam="), TEXT(""))).IsEmpty()
+				|| !FString(GetWorld()->URL.GetOption(TEXT("TSAutoPlayMode="), TEXT(""))).IsEmpty());
+		if (bAnyAutoOption)
 		{
 			GetWorldTimerManager().SetTimer(AutoAssignTimerHandle, this, &ATSTankPlayerController::TickAutoAssign, 1.5f, true, 1.5f);
 		}
@@ -606,6 +609,7 @@ void ATSTankPlayerController::TickAutoAssign()
 		return;
 	}
 
+	const FString AutoPlayMode = FString(World->URL.GetOption(TEXT("TSAutoPlayMode="), TEXT("")));
 	const FString AutoTeam = FString(World->URL.GetOption(TEXT("TSAutoTeam="), TEXT("")));
 	const FString AutoRole = FString(World->URL.GetOption(TEXT("TSAutoRole="), TEXT("")));
 	const FString AutoStart = FString(World->URL.GetOption(TEXT("TSAutoStart="), TEXT("")));
@@ -616,15 +620,20 @@ void ATSTankPlayerController::TickAutoAssign()
 	switch (AutoAssignStage++)
 	{
 	case 0:
-		if (!AutoTeam.IsEmpty()) { TSTeam(AutoTeam); }
+		// FIRST, before team or role. The play mode decides WHICH crew pawn is spawned and
+		// possessed, so setting it later would seat the player in one pawn and then swap it.
+		if (!AutoPlayMode.IsEmpty()) { TSPlayMode(AutoPlayMode); }
 		break;
 	case 1:
-		if (!AutoRole.IsEmpty()) { TSRole(AutoRole); }
+		if (!AutoTeam.IsEmpty()) { TSTeam(AutoTeam); }
 		break;
 	case 2:
-		if (!AutoStart.IsEmpty() && AutoStart != TEXT("0")) { TSStartMatch(); }
+		if (!AutoRole.IsEmpty()) { TSRole(AutoRole); }
 		break;
 	case 3:
+		if (!AutoStart.IsEmpty() && AutoStart != TEXT("0")) { TSStartMatch(); }
+		break;
+	case 4:
 		// Baseline BEFORE any input: on a sloped map the tank is already rolling, so the after
 		// reading only means something next to this one.
 		UE_LOG(LogTankSim, Log, TEXT("TSAuto: --- before drive ---"));
@@ -639,9 +648,9 @@ void ATSTankPlayerController::TickAutoAssign()
 			TSDrive(Throttle, Steering, Seconds);
 		}
 		break;
-	case 4:
 	case 5:
 	case 6:
+	case 7:
 	{
 		const FString AutoFire = FString(World->URL.GetOption(TEXT("TSAutoFire="), TEXT("")));
 		if (!AutoFire.IsEmpty())

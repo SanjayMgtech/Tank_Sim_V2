@@ -2566,3 +2566,35 @@ The merge also moved every crew behaviour from `ATSVRPawn` into a new `ATSCrewPa
 (`ATSVRPawn` is now ~47 lines over it, and `ATSDesktopPawn` is its sibling). **Anything previously
 added to `ATSVRPawn` now belongs on `ATSCrewPawn`** - resolving such a conflict "in place" puts the
 code on a class the game no longer uses for that behaviour.
+
+### 🥽 VR is now opt-IN per player — `ETSPlayMode`, and `TSAutoPlayMode` for tests (2026-09-09)
+The Desktop/VR pawn split changed how a player enters VR. Stereo is no longer implied by having a
+headset:
+```cpp
+const bool bWantVR = bAutoEnableVRWhenHMDPresent
+    && GetAssignedPlayMode() == ETSPlayMode::VR    // <- the new requirement
+    && !IsOwnerMatchHost()
+    && UTSVRModeLibrary::IsHMDAvailable();
+```
+`ATSTankPlayerState::PlayMode` defaults to **`ETSPlayMode::Desktop`**, so a joining VR player gets
+`BP_TSDesktopPawn` and its periscope render targets instead of stereo. **Symptom: "everything is
+dark in VR."** That is the desktop periscope view, not a rendering fault.
+
+Set it with the existing `TSPlayMode VR|Desktop` console command (routes through
+`ServerSetPlayMode`), or from the host via `ServerHostAssignPlayerToPlayMode`.
+
+**`TSAutoPlayMode=VR` added** so unattended tests exercise the VR path rather than silently falling
+back to Desktop:
+```
+"127.0.0.1?TSAutoPlayMode=VR?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1?TSAutoDrive=1,0,6" -game -vr
+```
+It runs as **stage 0, before team and role**, because the play mode decides which crew pawn is
+spawned and possessed - setting it later seats the player in one pawn and then swaps it. The
+existing stages shifted down by one; the timer now also starts for `TSAutoPlayMode` alone, so the
+mode can be tested without requesting a team.
+
+Verified: `TSPlayMode: requesting Play in VR` -> `VR mode ON` -> 0 `XR_ERROR` -> gear 0 -> 1 and
+RPM 600 -> 844 under throttle. Note the VR client covers noticeably less ground in the same 6s
+window than the `-nohmd` run (~194uu vs ~1700uu) - stereo rendering costs frames, and `TSDrive`
+holds for wall-clock seconds. **Compare VR drive numbers only against other VR runs**, the same
+rule already recorded for `run_pie_smoke` versus the raw baselines.
