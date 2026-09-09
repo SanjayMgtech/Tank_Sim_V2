@@ -458,6 +458,28 @@ FRotator ATSTankControllerBase::GetInteriorTurretRotation() const
 	return FRotator(0.0, Yaw, 0.0);
 }
 
+FRotator ATSTankControllerBase::GetMainGunAimRotation() const
+{
+	// Index 0 is the main turret / main gun. Both arrays are pre-sized to 10 in the constructor, but
+	// guard anyway - this is read from another actor's tick, which can run before ours ever has.
+	const double Yaw = TurretsRot.Num() > 0 ? TurretsRot[0].Yaw : 0.0;
+	const double Pitch = GunsRot.Num() > 0 ? GunsRot[0].Pitch : 0.0;
+
+	// No roll: the gun elevates and the turret traverses, neither of them banks.
+	return FRotator(Pitch, Yaw, 0.0);
+}
+
+FVector ATSTankControllerBase::GetTurretPivotLocation() const
+{
+	const USkeletalMeshComponent* MeshComp = GetMesh();
+	if (MeshComp && !TurretSocketName.IsNone() && MeshComp->DoesSocketExist(TurretSocketName))
+	{
+		return MeshComp->GetSocketLocation(TurretSocketName);
+	}
+
+	return GetActorLocation();
+}
+
 void ATSTankControllerBase::ReleaseWeaponTrigger()
 {
 	if (!bWeaponFiring)

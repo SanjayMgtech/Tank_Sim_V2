@@ -8,7 +8,9 @@
 #include "Core/TSTypes.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Net/UnrealNetwork.h"
 #include "Networking/TSSessionSubsystem.h"
+#include "Player/TSCrewPawn.h"
 #include "Player/TSTankPlayerState.h"
 #include "Tank_Sim_V2.h"
 #include "TimerManager.h"
@@ -89,6 +91,125 @@ void ATSTankPlayerController::SetupInputComponent()
 		FInputKeyBinding& Binding = InputComponent->BindKey(LobbyConsoleFocusKey, IE_Pressed, this, &ATSTankPlayerController::ToggleLobbyConsoleFocus);
 		Binding.bConsumeInput = false;
 	}
+
+	if (InputComponent && PlayModeToggleKey.IsValid())
+	{
+		FInputKeyBinding& Binding = InputComponent->BindKey(PlayModeToggleKey, IE_Pressed, this, &ATSTankPlayerController::TogglePlayMode);
+		Binding.bConsumeInput = false;
+	}
+}
+
+void ATSTankPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	// Owner-only: which two bodies a player keeps is their own business, and the pawns themselves
+	// already replicate to everyone who can see them.
+	DOREPLIFETIME_CONDITION(ATSTankPlayerController, DesktopCrewPawn, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(ATSTankPlayerController, VRCrewPawn, COND_OwnerOnly);
+}
+
+ATSCrewPawn* ATSTankPlayerController::GetCrewPawnForMode(ETSPlayMode Mode) const
+{
+	return (Mode == ETSPlayMode::VR) ? VRCrewPawn : DesktopCrewPawn;
+}
+
+void ATSTankPlayerController::SetCrewPawnForMode(ETSPlayMode Mode, ATSCrewPawn* CrewPawn)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (Mode == ETSPlayMode::VR)
+	{
+		VRCrewPawn = CrewPawn;
+	}
+	else
+	{
+		DesktopCrewPawn = CrewPawn;
+	}
+}
+
+void ATSTankPlayerController::DestroyCrewPawns()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	for (TObjectPtr<ATSCrewPawn>* Slot : { &DesktopCrewPawn, &VRCrewPawn })
+	{
+		ATSCrewPawn* CrewPawn = Slot->Get();
+		if (!CrewPawn)
+		{
+			continue;
+		}
+
+		// Clear BOTH slots before destroying: one Blueprint serving both modes means the same pawn
+		// is in each, and the second pass would otherwise be handed a pointer to a dead actor.
+		if (DesktopCrewPawn == CrewPawn) { DesktopCrewPawn = nullptr; }
+		if (VRCrewPawn == CrewPawn) { VRCrewPawn = nullptr; }
+
+		CrewPawn->Destroy();
+	}
+}
+
+ETSPlayMode ATSTankPlayerController::GetPlayMode() const
+{
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	return PS ? PS->GetPlayMode() : ETSPlayMode::Desktop;
+}
+
+void ATSTankPlayerController::TogglePlayMode()
+{
+	const ETSPlayMode Target = (GetPlayMode() == ETSPlayMode::VR) ? ETSPlayMode::Desktop : ETSPlayMode::VR;
+
+	UE_LOG(LogTankSim, Log, TEXT("TogglePlayMode: requesting %s"), *UTSTypeUtils::PlayModeToString(Target));
+	ServerSetPlayMode(Target);
+}
+
+void ATSTankPlayerController::ServerSetPlayMode_Implementation(ETSPlayMode NewMode)
+{
+	// Self-serve, and deliberately not host-gated: a player switching their OWN body between the
+	// headset and the keyboard takes nothing away from anybody. The GameMode still refuses the host.
+	if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
+	{
+		const bool bAccepted = GM->TrySetPlayMode(this, NewMode);
+		UE_LOG(LogTankSim, Log, TEXT("ServerSetPlayMode: '%s' -> %s (%s)"),
+			*GetNameSafe(PlayerState), *UTSTypeUtils::PlayModeToString(NewMode),
+			bAccepted ? TEXT("ok") : TEXT("rejected - the host holds no crew pawn"));
+	}
+}
+
+bool ATSTankPlayerController::ServerSetPlayMode_Validate(ETSPlayMode NewMode)
+{
+	return true;
+}
+
+void ATSTankPlayerController::ServerHostAssignPlayerToPlayMode_Implementation(APlayerState* TargetPlayerState, ETSPlayMode NewMode)
+{
+	if (!IsMatchHost())
+	{
+		return;
+	}
+
+	APlayerController* TargetPC = ResolveControllerForPlayerState(TargetPlayerState);
+	ATSGameMode* GM = TargetPC ? GetWorld()->GetAuthGameMode<ATSGameMode>() : nullptr;
+	if (!GM)
+	{
+		return;
+	}
+
+	const bool bAssigned = GM->TrySetPlayMode(TargetPC, NewMode);
+	UE_LOG(LogTankSim, Log, TEXT("Host assign play mode: '%s' -> %s (%s)"),
+		*TargetPlayerState->GetPlayerName(), *UTSTypeUtils::PlayModeToString(NewMode),
+		bAssigned ? TEXT("ok") : TEXT("rejected - the host itself holds no crew pawn"));
+}
+
+bool ATSTankPlayerController::ServerHostAssignPlayerToPlayMode_Validate(APlayerState* TargetPlayerState, ETSPlayMode NewMode)
+{
+	return true;
 }
 
 bool ATSTankPlayerController::IsOnMenuMap() const
@@ -186,6 +307,15 @@ namespace
 		return false;
 	}
 
+	// Accepts "vr"/"desktop" (any unambiguous prefix, and "d"/"flat") or "0".."1".
+	bool ParsePlayMode(const FString& In, ETSPlayMode& Out)
+	{
+		const FString S = In.TrimStartAndEnd().ToUpper();
+		if (S.StartsWith(TEXT("V")) || S == TEXT("1")) { Out = ETSPlayMode::VR; return true; }
+		if (S.StartsWith(TEXT("D")) || S.StartsWith(TEXT("F")) || S == TEXT("0")) { Out = ETSPlayMode::Desktop; return true; }
+		return false;
+	}
+
 	// Accepts a name (any unambiguous prefix) or "0".."2".
 	bool ParseCrewRole(const FString& In, ETSCrewRole& Out)
 	{
@@ -225,6 +355,21 @@ void ATSTankPlayerController::TSRole(const FString& InRole)
 
 	UE_LOG(LogTankSim, Log, TEXT("TSRole: requesting %d"), static_cast<int32>(Parsed));
 	ServerRequestRoleChange(Parsed);
+#endif
+}
+
+void ATSTankPlayerController::TSPlayMode(const FString& Mode)
+{
+#if !UE_BUILD_SHIPPING
+	ETSPlayMode Parsed = ETSPlayMode::Desktop;
+	if (!ParsePlayMode(Mode, Parsed))
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSPlayMode: could not parse '%s'. Use VR|Desktop or 0-1."), *Mode);
+		return;
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("TSPlayMode: requesting %s"), *UTSTypeUtils::PlayModeToString(Parsed));
+	ServerSetPlayMode(Parsed);
 #endif
 }
 

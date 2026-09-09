@@ -14,7 +14,7 @@ ATSTeamMatchGameMode::ATSTeamMatchGameMode()
 bool ATSTeamMatchGameMode::ShouldDesignateAsHost(const APlayerController* NewPlayer) const
 {
 	// TEMPORARY - VR bring-up. With the test flag on nobody is host, so the single local player
-	// gets ATSVRPawn and a crew seat instead of the admin free-cam.
+	// gets a crew pawn (ATSDesktopPawn or ATSVRPawn) and a seat instead of the admin free-cam.
 	if (bVRTestAutoAssign)
 	{
 		return false;

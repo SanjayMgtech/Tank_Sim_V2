@@ -27,6 +27,19 @@ enum class ETSTeamId : uint8
 	TeamD	UMETA(DisplayName = "Team D")
 };
 
+// How a player is embodied in the match. Assigned by the host alongside team and crew role, and
+// changeable mid-match by the player themselves - it decides WHICH crew pawn the PlayerController
+// possesses (ATSDesktopPawn or ATSVRPawn), not merely whether stereo rendering is on.
+//
+// This is a deliberate assignment rather than pure headset auto-detection: a player with a headset
+// plugged in may still want to sit at the keyboard, and a lobby needs to show who is where.
+UENUM(BlueprintType)
+enum class ETSPlayMode : uint8
+{
+	Desktop	UMETA(DisplayName = "Play in Desktop"),
+	VR		UMETA(DisplayName = "Play in VR")
+};
+
 UENUM(BlueprintType)
 enum class ETSMatchState : uint8
 {
@@ -135,4 +148,7 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
 	static FString MatchStateToString(ETSMatchState State);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
+	static FString PlayModeToString(ETSPlayMode PlayMode);
 };

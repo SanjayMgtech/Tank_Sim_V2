@@ -16,6 +16,7 @@ namespace
 {
 	const TArray<ETSTeamId> RowTeams = { ETSTeamId::TeamA, ETSTeamId::TeamB, ETSTeamId::TeamC, ETSTeamId::TeamD };
 	const TArray<ETSCrewRole> RowRoles = { ETSCrewRole::Driver, ETSCrewRole::Gunner, ETSCrewRole::Commander };
+	const TArray<ETSPlayMode> RowPlayModes = { ETSPlayMode::Desktop, ETSPlayMode::VR };
 
 	const FLinearColor ButtonIdle(0.10f, 0.10f, 0.12f, 0.90f);
 	const FLinearColor ButtonCurrent(0.15f, 0.55f, 0.22f, 0.95f);
@@ -149,6 +150,28 @@ TSharedRef<SWidget> UTSRoleDebugRowWidget::RebuildWidget()
 			}
 		}
 
+		UTextBlock* ModeDivider = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+		ModeDivider->SetText(FText::FromString(TEXT("  ")));
+		Row->AddChildToHorizontalBox(ModeDivider);
+
+		static const TCHAR* PlayModeLabels[] = { TEXT("Desktop"), TEXT("VR") };
+		for (int32 Index = 0; Index < RowPlayModes.Num(); ++Index)
+		{
+			UButton* Button = MakeButton(PlayModeLabels[Index], 52.f);
+			switch (Index)
+			{
+			case 0: Button->OnClicked.AddDynamic(this, &UTSRoleDebugRowWidget::OnDesktopClicked); break;
+			default: Button->OnClicked.AddDynamic(this, &UTSRoleDebugRowWidget::OnVRClicked); break;
+			}
+			PlayModeButtons.Add(Button);
+
+			if (UHorizontalBoxSlot* ButtonSlot = Row->AddChildToHorizontalBox(Button))
+			{
+				ButtonSlot->SetPadding(FMargin(2.f, 1.f));
+				ButtonSlot->SetVerticalAlignment(VAlign_Center);
+			}
+		}
+
 		ClearButton = MakeButton(TEXT("Clear"), 42.f);
 		ClearButton->OnClicked.AddDynamic(this, &UTSRoleDebugRowWidget::OnClearClicked);
 		if (UHorizontalBoxSlot* ClearSlot = Row->AddChildToHorizontalBox(ClearButton))
@@ -207,6 +230,32 @@ void UTSRoleDebugRowWidget::OnDriverClicked() { AssignRole(ETSCrewRole::Driver);
 void UTSRoleDebugRowWidget::OnGunnerClicked() { AssignRole(ETSCrewRole::Gunner); }
 void UTSRoleDebugRowWidget::OnCommanderClicked() { AssignRole(ETSCrewRole::Commander); }
 
+void UTSRoleDebugRowWidget::AssignPlayMode(ETSPlayMode PlayMode)
+{
+	ATSTankPlayerController* PC = GetOwningTankController();
+	APlayerState* Target = TargetPlayerState.Get();
+	if (!PC || !Target)
+	{
+		return;
+	}
+
+	if (PC->IsMatchHost())
+	{
+		PC->ServerHostAssignPlayerToPlayMode(Target, PlayMode);
+		return;
+	}
+
+	// Not the host, so the only row whose buttons are enabled is this player's own (see RefreshRow).
+	// Their own body is theirs to move, and ServerSetPlayMode changes nobody else's.
+	if (PC->PlayerState == Target)
+	{
+		PC->ServerSetPlayMode(PlayMode);
+	}
+}
+
+void UTSRoleDebugRowWidget::OnDesktopClicked() { AssignPlayMode(ETSPlayMode::Desktop); }
+void UTSRoleDebugRowWidget::OnVRClicked() { AssignPlayMode(ETSPlayMode::VR); }
+
 void UTSRoleDebugRowWidget::OnClearClicked()
 {
 	if (ATSTankPlayerController* PC = GetOwningTankController())
@@ -235,6 +284,7 @@ void UTSRoleDebugRowWidget::RefreshRow()
 
 	const ETSTeamId CurrentTeam = TargetPS->GetTeamId();
 	const ETSCrewRole CurrentRole = TargetPS->GetCrewRole();
+	const ETSPlayMode CurrentPlayMode = TargetPS->GetPlayMode();
 
 	if (NameText)
 	{
@@ -244,9 +294,15 @@ void UTSRoleDebugRowWidget::RefreshRow()
 
 	if (StatusText)
 	{
-		StatusText->SetText(FText::FromString(FString::Printf(TEXT("%s / %s"),
-			*UTSTypeUtils::TeamIdToString(CurrentTeam),
-			*UTSTypeUtils::CrewRoleToString(CurrentRole))));
+		// The host has no body of either kind, so showing it a play mode would be a lie.
+		StatusText->SetText(FText::FromString(TargetPS->IsHost()
+			? FString::Printf(TEXT("%s / %s"),
+				*UTSTypeUtils::TeamIdToString(CurrentTeam),
+				*UTSTypeUtils::CrewRoleToString(CurrentRole))
+			: FString::Printf(TEXT("%s / %s / %s"),
+				*UTSTypeUtils::TeamIdToString(CurrentTeam),
+				*UTSTypeUtils::CrewRoleToString(CurrentRole),
+				CurrentPlayMode == ETSPlayMode::VR ? TEXT("VR") : TEXT("Desktop"))));
 	}
 
 	// Seat occupancy on this player's team tank, so a seat somebody else already holds reads as
@@ -291,6 +347,26 @@ void UTSRoleDebugRowWidget::RefreshRow()
 
 		FButtonStyle Style = Button->GetStyle();
 		Style.Normal.TintColor = FSlateColor(bIsMine ? ButtonCurrent : (bTakenByOther ? ButtonBlocked : ButtonIdle));
+		Button->SetStyle(Style);
+	}
+
+	for (int32 Index = 0; Index < PlayModeButtons.Num(); ++Index)
+	{
+		UButton* Button = PlayModeButtons[Index];
+		if (!Button)
+		{
+			continue;
+		}
+
+		const ETSPlayMode PlayMode = RowPlayModes[Index];
+		const bool bIsMine = PlayMode == CurrentPlayMode;
+
+		// Clickable by the host for anyone, and by a player for themselves - that second case is the
+		// mid-match switch. The host's own row stays disabled: it holds no crew pawn to switch.
+		Button->SetIsEnabled((bIsHost || bIsLocalPlayer) && !TargetPS->IsHost());
+
+		FButtonStyle Style = Button->GetStyle();
+		Style.Normal.TintColor = FSlateColor(bIsMine ? ButtonCurrent : ButtonIdle);
 		Button->SetStyle(Style);
 	}
 

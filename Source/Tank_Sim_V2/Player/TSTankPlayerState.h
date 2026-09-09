@@ -33,6 +33,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	APawn* GetAssignedTank() const { return AssignedTank; }
 
+	// Desktop or VR. Assigned by the host alongside team and seat, and changeable by the player
+	// mid-match; ATSGameMode possesses the matching crew pawn when it changes, so this is the single
+	// replicated fact that decides which of a player's two pawns they are currently in.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
+	ETSPlayMode GetPlayMode() const { return PlayMode; }
+
 	// True for the player who created the session (the session host / match admin). A host is not a
 	// participant: it never holds a TeamId, a CrewRole or a tank seat, and possesses a free-roam
 	// camera instead of the VR crew pawn. It exists purely to assign the other players' teams/roles.
@@ -44,6 +50,7 @@ public:
 	void SetCrewRole(ETSCrewRole NewRole);
 	void SetAssignedTank(APawn* NewTank);
 	void SetIsHost(bool bNewIsHost);
+	void SetPlayMode(ETSPlayMode NewPlayMode);
 
 	// Broadcast on both server and clients whenever TeamId, CrewRole or AssignedTank changes, so UI
 	// (Section 11 widgets) can refresh without polling.
@@ -62,6 +69,12 @@ protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_Assignment, BlueprintReadOnly, Category = "Tank Simulation|Host")
 	bool bIsHost = false;
+
+	// Desktop by default, deliberately - a player who has never been given a mode must land on the
+	// flat screen. Defaulting to VR would drop anyone whose headset happens to be plugged in into
+	// stereo before the host had said a word about it.
+	UPROPERTY(ReplicatedUsing = OnRep_Assignment, BlueprintReadOnly, Category = "Tank Simulation")
+	ETSPlayMode PlayMode = ETSPlayMode::Desktop;
 
 	UFUNCTION()
 	void OnRep_Assignment();

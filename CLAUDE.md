@@ -1953,6 +1953,89 @@ diagnostics on the other — all resolved by keeping both. **If a link error nam
 know you wrote, suspect a merge that split a header from its implementation**, and check
 `git show <merge>^1:<file>` against `^2` before assuming the code was deleted deliberately.
 
+---
+
+## 🧑‍🚀 Desktop and VR are two PAWNS, assigned per player (2026-09-08)
+
+Feature work, like the multiplayer and VR sections above: own commits, own test.
+
+The host now picks **Play in Desktop** or **Play in VR** beside a player's team and seat, and that
+choice **possesses a different pawn** rather than only toggling stereo. Each crew member owns BOTH
+bodies for the whole session and can move between them mid-match.
+
+### The class split
+```
+ATSCrewPawn (abstract)          <- everything a crew member DOES
+ |- ATSDesktopPawn              <- flat screen; adds nothing but its identity
+ \- ATSVRPawn                    <- + stereo, tracking origin, the decision to switch them on
+```
+`ATSVRPawn`'s entire former body is now `ATSCrewPawn`: seat attachment, role mapping contexts,
+driving, firing, the Gunner's aim command. The two concrete pawns cannot drift apart in behaviour
+because neither implements any of it.
+
+**The motion controllers and the widget interaction component live on the BASE, which looks wrong
+and is not.** `BP_TSVRPawn` stores overrides for `LeftHand`/`RightHand`, and a property that moves
+down into `ATSVRPawn` would be silently dropped by a desktop Blueprint duplicated from it. They are
+merely inert on a flat screen; a lost override is a RULE 1-class regression. `BP_TSDesktopPawn` was
+made by **duplicate + reparent** for exactly this reason — no value was typed in by hand, and the
+CDO afterwards reports every input asset with `owner_class: TSCrewPawn`, which is the proof it
+rebound rather than orphaned.
+
+### ⚠ A headset no longer puts a player into VR on its own
+This is a deliberate behaviour change and the one thing most likely to read as a regression.
+`ATSVRPawn::ApplyDisplayModeDeferred` requires `GetAssignedPlayMode() == VR` before it enables
+stereo. **Possession is not permission**: with the two class fields unset one Blueprint serves both
+modes, so being in `ATSVRPawn` says nothing about the mode the host picked, and a host handed a crew
+pawn by `bVRTestAutoAssign` must stay flat regardless. Plug a headset in and you now get a flat
+screen until somebody assigns VR (host button, F2, or `TSPlayMode vr`).
+
+### Wiring
+| Piece | Where |
+|---|---|
+| `ETSPlayMode` (Desktop / VR) | `ATSTankPlayerState::PlayMode`, replicated, carried by `CopyProperties` |
+| Both pawns spawned + possession swap | `ATSGameMode::EnsureCrewPawnsFor`, from `HandleStartingNewPlayer` |
+| Policy | `ATSGameMode::TrySetPlayMode` — refuses the host, which holds no crew pawn |
+| Host-driven | `ServerHostAssignPlayerToPlayMode`, re-checked with `IsMatchHost()` server-side |
+| Self-serve | `ServerSetPlayMode` — a player's own body is theirs to move |
+| UI | Desktop/VR buttons in the lobby console row; the host's own row stays disabled |
+| Keyboard / console | **F2** toggles this player's mode; `TSPlayMode <vr\|desktop>` |
+
+`HandleStartingNewPlayer` is the hook, not `PostLogin`: `AGameModeBase::HandleSeamlessTravelPlayer`
+routes through it too, so a travel arrival gets its second pawn without a second code path.
+`GetDefaultPawnClassForController` also reads the assigned mode, so a player who chose VR in the
+lobby never spends a frame in the desktop pawn.
+
+### The parked pawn
+The body you are not in is hidden, non-colliding, unpossessed and never ticks
+(`SetCrewPawnActive`). Two traps live here:
+- **It must stay a real actor.** Destroying and respawning on each switch would orphan the
+  reference the controller replicates and make other machines see an actor appear.
+- **`UnPossess` clears the pawn's Owner**, and an unowned hidden actor drops out of relevancy for
+  that connection — which would leave the client's own reference to its parked body resolving to
+  null. `EnsureCrewPawnsFor` re-owns it after parking.
+
+Seat handling needs no new code: `UnPossess` fires `NotifyControllerChanged`, which detaches the
+outgoing pawn, and `Possess` re-runs `RefreshCrewBinding`, which re-seats the incoming one.
+
+### Runtime proof (PIE, WarZone, `ok:true`, 0 errors / 0 warnings / 0 `Accessed None`)
+```
+crew pawns in world: 2 -> [BP_TSDesktopPawn_C_0, BP_TSVRPawn_C_0]
+START     mode=DESKTOP  possessed=BP_TSDesktopPawn_C_0  desktop=..Desktop..  vr=..VRPawn..
+TrySetPlayMode(VR) -> True
+AFTER-VR  mode=VR       possessed=BP_TSVRPawn_C_0
+crew pawns now: 2                        <- swapped possession, spawned NOTHING
+TrySetPlayMode(DESKTOP) -> True
+AFTER-DSK mode=DESKTOP  possessed=BP_TSDesktopPawn_C_0
+```
+**The count staying at 2 across the switch is the assertion**, not a detail — a rising count would
+mean the swap was really a respawn. That one query for `ATSCrewPawn` returned both is also what
+proves they share a base.
+
+### Still owed a human test
+Two-window listen server with a Driver on desktop and a Gunner in a headset, and the switch
+performed mid-match. Logs prove which pawn is possessed; they cannot see whether the viewport
+transition is clean. The pawn changes add `UPROPERTY`s and two new `UCLASS`es, so Live Coding
+cannot carry them — the editor target must be rebuilt.
 
 ---
 
@@ -2459,3 +2542,27 @@ about to be in VR. "Is a headset present and is this player eligible for it" is 
 
 **Generalise: any screen-space widget added on a gameplay map needs a VR gate.** This one was a
 debug aid; a real HUD would have the same problem and needs the world-space panel path instead.
+
+
+### ⚠ A merge did the header/cpp split AGAIN — and the build still passed (2026-09-09)
+The failure this file already warns about (`36813ab`, a merge that kept a `.h` from one side and the
+`.cpp` from the other) recurred, with a nastier twist: **it compiled and linked clean.**
+
+While resolving a merge, `git checkout --ours Source/Tank_Sim_V2/Player/TSCrewPawn.cpp` was run on a
+file that was **not** conflicted. That silently discarded edits already made to it, leaving
+`ApplyVRStickSlew` **declared in the header, defined nowhere, and called from nowhere**. A
+declared-but-undefined function only fails at link time if something REFERENCES it, so the linker
+never looked and `Result: Succeeded` was reported. The gunner's VR stick slew was simply dead.
+
+Two rules from this:
+- **Never `git checkout --ours/--theirs` a path that is not in the conflict list.** Check
+  `git diff --name-only --diff-filter=U` first; on a non-conflicted path those flags resolve against
+  the index and throw away working-tree work.
+- **A green build does NOT prove a merge kept your code.** Grep for each feature by name afterwards.
+  Counting occurrences across the `.h` and `.cpp` catches the split instantly - a symbol appearing
+  once when it should appear three times (declaration, definition, call site) is the signature.
+
+The merge also moved every crew behaviour from `ATSVRPawn` into a new `ATSCrewPawn`
+(`ATSVRPawn` is now ~47 lines over it, and `ATSDesktopPawn` is its sibling). **Anything previously
+added to `ATSVRPawn` now belongs on `ATSCrewPawn`** - resolving such a conflict "in place" puts the
+code on a class the game no longer uses for that behaviour.

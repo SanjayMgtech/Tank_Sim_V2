@@ -355,10 +355,11 @@ FString UTSRoleDebugWidget::DescribeLocalPlayer() const
 	}
 
 	const APawn* Tank = PS->GetAssignedTank();
-	return FString::Printf(TEXT("Me: %s  |  Team: %s  |  Role: %s  |  Tank: %s"),
+	return FString::Printf(TEXT("Me: %s  |  Team: %s  |  Role: %s  |  Mode: %s  |  Tank: %s"),
 		*PS->GetPlayerName(),
 		*UTSTypeUtils::TeamIdToString(PS->GetTeamId()),
 		*UTSTypeUtils::CrewRoleToString(PS->GetCrewRole()),
+		PS->IsHost() ? TEXT("host (flat)") : (PS->GetPlayMode() == ETSPlayMode::VR ? TEXT("VR") : TEXT("Desktop")),
 		Tank ? *Tank->GetName() : TEXT("none"));
 }
 

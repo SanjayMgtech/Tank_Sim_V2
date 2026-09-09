@@ -10,6 +10,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "Player/TSHostCameraPawn.h"
 #include "Player/TSTankPlayerController.h"
+#include "Player/TSCrewPawn.h"
+#include "Player/TSDesktopPawn.h"
 #include "Player/TSTankPlayerState.h"
 #include "Player/TSVRPawn.h"
 #include "Tank/TSTankCrewComponent.h"
@@ -37,7 +39,9 @@ namespace
 
 ATSGameMode::ATSGameMode()
 {
-	DefaultPawnClass = ATSVRPawn::StaticClass();
+	// The flat screen is the default embodiment: a player who has never been given a play mode must
+	// land there, not in a headset that merely happens to be plugged in.
+	DefaultPawnClass = ATSDesktopPawn::StaticClass();
 	PlayerControllerClass = ATSTankPlayerController::StaticClass();
 	GameStateClass = ATSGameState::StaticClass();
 	PlayerStateClass = ATSTankPlayerState::StaticClass();
@@ -244,6 +248,13 @@ void ATSGameMode::Logout(AController* Exiting)
 		}
 	}
 
+	// The engine tears down the pawn a leaving controller POSSESSES; the parked one it has never
+	// heard of, and it would sit hidden in the level for the rest of the match.
+	if (ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(Exiting))
+	{
+		PC->DestroyCrewPawns();
+	}
+
 	Super::Logout(Exiting);
 }
 
@@ -302,7 +313,203 @@ UClass* ATSGameMode::GetDefaultPawnClassForController_Implementation(AController
 		return HostCameraPawnClass;
 	}
 
+	// Restart the player straight into the pawn their assigned mode calls for, so a player who chose
+	// VR in the lobby never spends a frame in the desktop pawn. EnsureCrewPawnsFor then spawns the
+	// other one behind them.
+	if (PS)
+	{
+		if (const TSubclassOf<APawn> CrewPawnClass = GetCrewPawnClassForMode(PS->GetPlayMode()))
+		{
+			return CrewPawnClass;
+		}
+	}
+
 	return Super::GetDefaultPawnClassForController_Implementation(InController);
+}
+
+TSubclassOf<APawn> ATSGameMode::GetCrewPawnClassForMode(ETSPlayMode Mode) const
+{
+	const TSubclassOf<APawn> Configured = (Mode == ETSPlayMode::VR) ? VRCrewPawnClass : DesktopCrewPawnClass;
+	if (Configured)
+	{
+		return Configured;
+	}
+
+	// Unset. DefaultPawnClass, not the native crew pawn: the Enhanced Input assets are Blueprint
+	// data, so a native pawn here would spawn a crew member who cannot press anything. One Blueprint
+	// then serves both modes, and the pawn switches stereo from the assigned mode rather than from
+	// which class it happens to be.
+	return DefaultPawnClass;
+}
+
+void ATSGameMode::HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer)
+{
+	Super::HandleStartingNewPlayer_Implementation(NewPlayer);
+
+	// After Super, not before: it is what restarts the player into their first pawn, and this adopts
+	// that pawn rather than spawning a third alongside it.
+	EnsureCrewPawnsFor(NewPlayer);
+}
+
+void ATSGameMode::EnsureCrewPawnsFor(APlayerController* Player)
+{
+	ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(Player);
+	ATSTankPlayerState* PS = PC ? PC->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	UWorld* World = GetWorld();
+	if (!PC || !PS || !World)
+	{
+		return;
+	}
+
+	// The host is a match admin, not a participant: no team, no seat, no crew pawn of either kind.
+	if (PS->IsHost())
+	{
+		return;
+	}
+
+	// Same rule the tank spawns follow: nobody is crewing anything on the main menu, and a second
+	// pawn parked behind the menu would ride along through the travel to the gameplay map.
+	if (!CanSpawnTeamTanks())
+	{
+		return;
+	}
+
+	const TSubclassOf<APawn> DesktopClass = GetCrewPawnClassForMode(ETSPlayMode::Desktop);
+	const TSubclassOf<APawn> VRClass = GetCrewPawnClassForMode(ETSPlayMode::VR);
+	const bool bSharedClass = (DesktopClass == VRClass);
+
+	// Adopt the pawn RestartPlayer already gave us instead of spawning another one beside it. The
+	// pawn answers which mode it serves, so a Blueprint of either class lands in the right slot.
+	if (ATSCrewPawn* Current = Cast<ATSCrewPawn>(PC->GetPawn()))
+	{
+		PC->SetCrewPawnForMode(Current->GetSupportedPlayMode(), Current);
+
+		if (bSharedClass)
+		{
+			// One Blueprint configured for both modes. Registering it in both slots is what keeps
+			// this from spawning a redundant twin: there is one pawn, and switching mode re-applies
+			// the display mode on it rather than swapping possession.
+			PC->SetCrewPawnForMode(ETSPlayMode::Desktop, Current);
+			PC->SetCrewPawnForMode(ETSPlayMode::VR, Current);
+		}
+	}
+
+	// Spawn on top of the active pawn so a mid-match switch does not teleport the player. The parked
+	// pawn is re-seated by its own possession anyway, but between spawn and first use it should not
+	// be standing somewhere else in the level.
+	const FTransform SpawnTransform = PC->GetPawn()
+		? PC->GetPawn()->GetActorTransform()
+		: FTransform(PC->GetControlRotation(), PC->GetSpawnLocation());
+
+	for (const ETSPlayMode Mode : { ETSPlayMode::Desktop, ETSPlayMode::VR })
+	{
+		if (PC->GetCrewPawnForMode(Mode))
+		{
+			continue;
+		}
+
+		const TSubclassOf<APawn> PawnClass = GetCrewPawnClassForMode(Mode);
+		if (!PawnClass)
+		{
+			UE_LOG(LogTankSim, Warning,
+				TEXT("ATSGameMode: no crew pawn class for %s - '%s' cannot use that mode. Set the GameMode's ")
+				TEXT("Desktop/VR Crew Pawn Class (or Default Pawn Class) to a crew pawn Blueprint."),
+				*UTSTypeUtils::PlayModeToString(Mode), *PS->GetPlayerName());
+			continue;
+		}
+
+		// A class that is not a crew pawn cannot be seated, aimed or driven, so refuse it here rather
+		// than possess something that will silently do nothing.
+		if (!PawnClass->IsChildOf(ATSCrewPawn::StaticClass()))
+		{
+			UE_LOG(LogTankSim, Warning,
+				TEXT("ATSGameMode: crew pawn class '%s' for %s does not derive from ATSCrewPawn - ignored."),
+				*PawnClass->GetName(), *UTSTypeUtils::PlayModeToString(Mode));
+			continue;
+		}
+
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.Owner = PC;
+		// The seat this pawn will be attached to may already be occupied by its twin, and a player
+		// start can be crowded at match start; neither is a reason to refuse to spawn.
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+		ATSCrewPawn* Spawned = World->SpawnActor<ATSCrewPawn>(PawnClass, SpawnTransform, SpawnParams);
+		if (!Spawned)
+		{
+			continue;
+		}
+
+		// Parked until the player actually switches into it.
+		Spawned->SetCrewPawnActive(false);
+		PC->SetCrewPawnForMode(Mode, Spawned);
+
+		UE_LOG(LogTankSim, Log, TEXT("ATSGameMode: spawned %s crew pawn '%s' for '%s'."),
+			*UTSTypeUtils::PlayModeToString(Mode), *Spawned->GetName(), *PS->GetPlayerName());
+	}
+
+	ATSCrewPawn* Desired = PC->GetCrewPawnForMode(PS->GetPlayMode());
+	if (!Desired)
+	{
+		return;
+	}
+
+	if (PC->GetPawn() == Desired)
+	{
+		// Already in the right pawn. Still re-apply the display mode: with one Blueprint serving both
+		// modes this is the ONLY thing a mode change does, and without it "Play in VR" would record
+		// the choice and change nothing on screen.
+		Desired->SetCrewPawnActive(true);
+		Desired->ApplyDisplayMode();
+		return;
+	}
+
+	if (APawn* Previous = PC->GetPawn())
+	{
+		PC->UnPossess();
+
+		// UnPossess fires NotifyControllerChanged on the old pawn, which detaches it from the crew
+		// seat by itself - parking it here only hides it and stops it ticking.
+		if (ATSCrewPawn* PreviousCrew = Cast<ATSCrewPawn>(Previous))
+		{
+			PreviousCrew->SetCrewPawnActive(false);
+
+			// UnPossess clears the pawn's Owner, and an unowned hidden actor drops out of relevancy
+			// for this connection - which would leave the client's own reference to its parked body
+			// resolving to null. Re-owning it costs nothing and keeps both references honest.
+			PreviousCrew->SetOwner(PC);
+		}
+	}
+
+	// Take the outgoing pawn's transform so the switch happens where the player was standing, not
+	// where this pawn was parked several minutes ago.
+	Desired->SetActorTransform(SpawnTransform);
+	Desired->SetCrewPawnActive(true);
+	PC->Possess(Desired);
+
+	UE_LOG(LogTankSim, Log, TEXT("ATSGameMode: '%s' is now in %s (pawn '%s')."),
+		*PS->GetPlayerName(), *UTSTypeUtils::PlayModeToString(PS->GetPlayMode()), *Desired->GetName());
+}
+
+bool ATSGameMode::TrySetPlayMode(APlayerController* Player, ETSPlayMode NewMode)
+{
+	ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(Player);
+	ATSTankPlayerState* PS = PC ? PC->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	if (!PC || !PS)
+	{
+		return false;
+	}
+
+	// The host runs the match on a flat screen and possesses the free-roam camera, so a play mode
+	// would have nothing to act on. Refused here rather than silently accepted and ignored.
+	if (PS->IsHost())
+	{
+		return false;
+	}
+
+	PS->SetPlayMode(NewMode);
+	EnsureCrewPawnsFor(PC);
+	return true;
 }
 
 AActor* ATSGameMode::ChoosePlayerStart_Implementation(AController* Player)
