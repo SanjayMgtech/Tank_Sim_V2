@@ -2668,15 +2668,26 @@ on reverse, left lever back when turning left, right when turning right, all eas
 snapping. Then confirm on a listen-server client watching another player drive, which is the case
 the replicated source exists for.
 
-### ⚠ Monolith could NOT reach these assets (2026-09-09)
-`animation_query get_abp_info`, `blueprint_query get_graph_data` and `get_bone_ref_pose` all
-answered `AnimBlueprint not found` / `Skeleton or SkeletalMesh not found` for paths that
-`unreal.load_asset` resolves fine in the same editor, and an incremental `monolith_reindex` did not
-fix it. Python is also no help for bone transforms here - `SkeletalMeshComponent` exposes no
-`get_bone_location` binding.
+### ⛔ CORRECTION — Monolith reaches these assets fine; the PARAM NAME was wrong (2026-09-09)
+An earlier version of this section claimed `animation_query` and `blueprint_query` could not reach
+AnimBlueprints, and handed the wiring off to a human on that basis. **That was wrong**, and the
+hand-off was unnecessary.
 
-So this wiring is an editor hand-off rather than a scripted edit. Per RULE 7, that was the point to
-stop trying near-miss actions.
+Every one of those calls passed `blueprint_path` / `anim_blueprint_path`. The actual parameter is
+**`asset_path`** for both namespaces. With the wrong key the action received an empty path, so the
+error read:
+```
+AnimBlueprint not found:          <- note: NOTHING after the colon
+```
+**An empty value after the colon means a bad parameter NAME, not a missing asset.** That is the tell
+to read, and it distinguishes "this tool cannot do it" from "I called it wrong" in one glance.
+
+The lesson is RULE 7's own advice, applied to myself: *check the namespace action list rather than
+assuming*. `describe_query action_schema` with `{namespace, action}` returns the exact parameter
+names and would have settled it in one call, before three rounds of hand-off and a wasted human
+round-trip.
+
+The whole AnimGraph was then built by script - see below.
 
 ### ⬜ NEXT — VR hand interaction on these controls
 Requested and deliberately deferred. The animation above is INPUT-DRIVEN: the bones follow
@@ -2711,3 +2722,48 @@ deliberately NOT gated**: switching mode mid-hold must still be able to stop the
 interaction does not exist. Manual currently means "the stick is off". Do not read that as broken -
 it is the switch landing before the mechanism it selects. The next step is grabbable levers writing
 into the same `ServerSetDriveInput` the stick uses today.
+
+### ✅ The interior control AnimGraph, built by script and verified (2026-09-09)
+`ABP_VK1602Leopard_Interior` originally held only THREE nodes - Output Pose, one
+Transform (Modify) Bone for `b_Upper`, and Component To Local. **Nothing referenced the driver
+control accessors at all**, which is the entire reason nothing moved; the C++ was correct the whole
+time. Confirm with `animation_query get_nodes` before theorising about spaces and modes.
+
+What was added, mirroring the existing `b_Upper` chain exactly:
+
+| Layer | Nodes |
+|---|---|
+| Variables | `GasRotation`, `GasLocation`, `BrakeRotation`, `LeftLeverRotation`, `RightLeverRotation` |
+| EventGraph | five accessor calls off the existing `Cast To TSTankControllerBase`, chained after `Set TurretRotation` |
+| AnimGraph | four `ModifyBone` nodes chained `b_Upper -> b_Gas -> b_Brake -> b_L_Lever -> b_R_Lever -> Component To Local` |
+
+**Mode and space differ from `b_Upper` on purpose.** `b_Upper` is Additive in Component space
+because it applies a turret DELTA. These four carry ABSOLUTE local transforms measured off the
+bone, so they are **Replace Existing in Parent Bone Space** - Replace is safe here precisely because
+the authored value already contains the bind orientation.
+
+`b_Gas` also needs **TranslationMode = Replace**: its rotation is identical in both measured poses,
+so it is pure translation and a rotation-only hookup leaves it dead regardless of the values.
+
+Verified live in PIE - the AnimBP variables receive the C++ values and match the measured rest
+poses to three decimals:
+```
+GasRotation        P -82.781  Y  76.475  R -104.123
+BrakeRotation      P -85.945  Y -33.591  R   90.409
+LeftLeverRotation  P -89.677  Y 100.339  R -104.800
+RightLeverRotation P -87.328  Y -63.008  R   58.656
+GasLocation        (1.52548, -0.05801, -0.34803)
+```
+Compile `UpToDate`, 0 errors, 0 warnings, no bone-not-found messages.
+
+**Useful for any future ABP work:** `animation_query sample_pie_anim_instance` and, as used here,
+reading the anim instance straight off the component in a `run_pie_smoke` probe
+(`comp.get_anim_instance()` then `get_editor_property`) proves the EventGraph half without a headset
+and without a human watching the mesh.
+
+### ⚠ Do not inject state with `set_editor_property` on a PIE component
+`set_editor_property('CurrentDriveInput', ...)` reported success and read back `(1.000, 0.000)`
+while the C++ getter returned `(0.000, 0.000)` **at the same instant**. Reflection and the member
+disagreed, so the injection proved nothing and nearly produced a false bug report against working
+code. Drive the real entry point instead - here, a `-game` client with `TSAutoDrive`, which showed
+`input=(1.00, -1.00) -> thr=1.000 steer=-1.000` immediately.
