@@ -1161,11 +1161,33 @@ void ATSTankPlayerController::LogVRInputHeartbeat(float DeltaTime)
 	VRInputLogTimer = 0.f;
 	bVRInputWasNonZero = bNonZero;
 
+	// Report what the TANK is doing on the same line as the input, because "input arrives but the
+	// tank does not move" and "no input arrives" look identical from the player's seat. Gear and RPM
+	// are the assertions that actually distinguish driving from rolling downhill on a slope.
+	FString TankState = TEXT("tank=<none>");
+	if (APawn* Tank = PS->GetAssignedTank())
+	{
+		// Non-const: GetThrottleInput and friends are not const-qualified on the Chaos component.
+		if (UChaosWheeledVehicleMovementComponent* Move =
+				Tank->FindComponentByClass<UChaosWheeledVehicleMovementComponent>())
+		{
+			TankState = FString::Printf(
+				TEXT("gear=%d rpm=%.0f throttle=%.2f speed=%.1f"),
+				Move->GetCurrentGear(), Move->GetEngineRotationSpeed(),
+				Move->GetThrottleInput(), Tank->GetVelocity().Size());
+		}
+		else
+		{
+			TankState = TEXT("tank=<no movement component>");
+		}
+	}
+
 	UE_LOG(LogTankSim, Log,
-		TEXT("[VRInput] role=%d vr=%s | IA_Drive=(%.3f, %.3f) IA_AimTurret=(%.3f, %.3f) | %s"),
+		TEXT("[VRInput] role=%d vr=%s | IA_Drive=(%.3f, %.3f) IA_AimTurret=(%.3f, %.3f) | %s | %s"),
 		static_cast<int32>(PS->GetCrewRole()),
 		UTSVRModeLibrary::IsVRModeActive() ? TEXT("on") : TEXT("off"),
 		Drive.X, Drive.Y, Aim.X, Aim.Y,
-		bNonZero ? TEXT("INPUT ARRIVING") : TEXT("nothing arriving"));
+		bNonZero ? TEXT("INPUT ARRIVING") : TEXT("nothing arriving"),
+		*TankState);
 #endif
 }
