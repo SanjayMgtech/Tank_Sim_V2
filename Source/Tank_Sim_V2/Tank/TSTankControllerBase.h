@@ -786,25 +786,94 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
 	FRotator GetInteriorLeverRotation(bool bLeft) const;
 
-	// Travel at full input, in degrees. Per-tank data - each interior is modelled differently.
-	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior")
-	FRotator GasPedalFullTravel = FRotator(-18.f, 0.f, 0.f);
+	// --- Authored control POSES ------------------------------------------------------------------
+	// Two measured rotations per control - where it sits released, and where it sits fully worked -
+	// and the accessors above SLERP between them by alpha. This replaced an additive "full travel"
+	// angle, which was a guess about both the axis and the amount; a pose pair is read straight off
+	// the bone in the skeleton tree, so it cannot be wrong about either.
+	//
+	// These are the bone's LOCAL rotation, exactly as the Details panel shows it, so the matching
+	// AnimGraph node is Transform (Modify) Bone in **Parent Bone Space** with Rotation Mode
+	// **Replace Existing**. Replace is correct here precisely because the authored value already
+	// contains the bind orientation - the opposite of the b_Upper case, where Replace in BONE space
+	// wiped it.
+	//
+	// NOTE the Details panel lists rotation as X/Y/Z = Roll/Pitch/Yaw. Typing into these properties
+	// in the editor uses that same order, so values can be copied across as-is; only C++ constructors
+	// take (Pitch, Yaw, Roll). That mismatch has already put a tank upside down once.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FRotator GasPedalRestRotation = FRotator::ZeroRotator;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior")
-	FRotator BrakePedalFullTravel = FRotator(-18.f, 0.f, 0.f);
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FRotator GasPedalPressedRotation = FRotator::ZeroRotator;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior")
-	FRotator LeverFullTravel = FRotator(-25.f, 0.f, 0.f);
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FRotator BrakePedalRestRotation = FRotator::ZeroRotator;
 
-	// Mirrors the right lever's travel. Off by default: whether the two levers need opposite signs
-	// depends on how the interior was modelled, so it is a switch rather than an assumption.
-	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior")
-	bool bMirrorRightLeverTravel = false;
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FRotator BrakePedalPressedRotation = FRotator::ZeroRotator;
+
+	// Levers get their own pair each: they are mirrored geometry, so one pose pair mirrored in code
+	// would only be right if the rigger mirrored them exactly. Measuring both removes the guess.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FRotator LeftLeverRestRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FRotator LeftLeverPulledRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FRotator RightLeverRestRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FRotator RightLeverPulledRotation = FRotator::ZeroRotator;
+
+	// The controls TRANSLATE as well as rotate - the VK1602's gas pedal moves about 0.035 on X and
+	// 0.073 on Y between rest and pressed, which a rotation-only version silently dropped. Left at
+	// zero these are ignored, so a control that only pivots needs nothing set here.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FVector GasPedalRestLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FVector GasPedalPressedLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FVector BrakePedalRestLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FVector BrakePedalPressedLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FVector LeftLeverRestLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FVector LeftLeverPulledLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FVector RightLeverRestLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
+	FVector RightLeverPulledLocation = FVector::ZeroVector;
+
+	// Paired with the rotation accessors; feed these into the same Transform (Modify) Bone node's
+	// Translation pin, also in Parent Bone Space with Translation Mode Replace Existing.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	FVector GetInteriorGasPedalLocation() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	FVector GetInteriorBrakePedalLocation() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
+	FVector GetInteriorLeverLocation(bool bLeft) const;
 
 	// How fast the controls chase the input, in units per second. Raw input is a STEP - a stick or a
 	// key goes 0 -> 1 in one frame - and a pedal that teleports reads as broken. 0 disables smoothing.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior", meta = (ClampMin = "0.0"))
 	float InteriorControlInterpSpeed = 8.f;
+
+	// Logs what UpdateInteriorControlState actually sees, once a second. On by default while the
+	// interior controls are being brought up.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior")
+	bool bLogInteriorControlState = true;
 
 	// --- Where the gun is ACTUALLY pointing -------------------------------------------------------
 	// Turret traverse and gun elevation as one rotation in the tank's own space: yaw from the turret,
@@ -960,6 +1029,7 @@ public:
 	float MachineGunReleaseDelaySeconds = 0.25f;
 
 private:
+	double LastInteriorLogTime = 0.0;
 	float DisplayThrottle = 0.f;
 	float DisplayBrake = 0.f;
 	float DisplaySteering = 0.f;

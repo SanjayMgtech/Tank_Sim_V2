@@ -121,9 +121,11 @@ void UTSTankControlComponent::OnRep_DriveInput()
 		// Whether the Blueprint's ThrottleControl actually reached the vehicle. Read the throttle
 		// Chaos consumes, NOT the tank's speed: the test map is sloped, so an unpowered tank rolls
 		// at ~100 cm/s on its own and speed alone cannot tell "driving" from "sliding downhill".
+		// Static, so it survives PIE teardown while world time restarts at 0 - without the
+		// "Now < LastLogTime" escape below the log goes silent for the rest of the editor session.
 		static double LastLogTime = 0.0;
 		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-		if (Now - LastLogTime > 1.0)
+		if (Now - LastLogTime > 1.0 || Now < LastLogTime)
 		{
 			LastLogTime = Now;
 			// Non-const: UChaosVehicleMovementComponent::GetThrottleInput() is not a const member.

@@ -747,9 +747,29 @@ void ATSTankControllerBase::UpdateInteriorControlState(float DeltaTime)
 	// driver's client, and a passenger watching from another seat all smooth the same source and
 	// therefore see the same lever positions.
 	FVector2D Input = FVector2D::ZeroVector;
-	if (const UTSTankControlComponent* Control = FindComponentByClass<UTSTankControlComponent>())
+	const UTSTankControlComponent* Control = FindComponentByClass<UTSTankControlComponent>();
+	if (Control)
 	{
 		Input = Control->GetCurrentDriveInput();
+	}
+
+	// Rate-limited diagnostic: this is the one place that can silently leave every interior control
+	// at its rest pose, and a missing component looks identical to zero input from outside.
+	if (bLogInteriorControlState)
+	{
+		// A MEMBER, not a static local. A static is shared by every tank AND survives PIE teardown,
+		// so world time - which restarts at 0 each session - never exceeds the value left over from
+		// the last run and the log goes silent for the rest of the editor's life. That is exactly
+		// what happened here, and it made a working diagnostic look like dead code.
+		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		if (Now - LastInteriorLogTime > 1.0 || Now < LastInteriorLogTime)
+		{
+			LastInteriorLogTime = Now;
+			UE_LOG(LogTankSim, Log,
+				TEXT("[InteriorCtl] %s ctrl=%s input=(%.2f, %.2f) -> thr=%.3f brk=%.3f steer=%.3f"),
+				*GetName(), Control ? TEXT("YES") : TEXT("*** NULL ***"),
+				Input.X, Input.Y, DisplayThrottle, DisplayBrake, DisplaySteering);
+		}
 	}
 
 	// X is throttle, Y is steering - the same convention Input_Drive and BP_SetDriveInput use.
@@ -770,21 +790,50 @@ void ATSTankControllerBase::UpdateInteriorControlState(float DeltaTime)
 	DisplaySteering = FMath::FInterpTo(DisplaySteering, TargetSteering, DeltaTime, InteriorControlInterpSpeed);
 }
 
+namespace
+{
+	// SLERP, not a per-component Lerp. These are measured bone rotations and can carry large values
+	// on all three axes (the VK1602's gas pedal rests near roll -104, pitch -83, yaw 76); lerping
+	// Euler components independently takes the long way round on at least one axis and the control
+	// visibly swings through the geometry. Quaternions take the short arc by construction.
+	FRotator SlerpPose(const FRotator& Rest, const FRotator& Worked, float Alpha)
+	{
+		return FQuat::Slerp(Rest.Quaternion(), Worked.Quaternion(), FMath::Clamp(Alpha, 0.f, 1.f)).Rotator();
+	}
+}
+
 FRotator ATSTankControllerBase::GetInteriorGasPedalRotation() const
 {
-	return GasPedalFullTravel * DisplayThrottle;
+	return SlerpPose(GasPedalRestRotation, GasPedalPressedRotation, DisplayThrottle);
 }
 
 FRotator ATSTankControllerBase::GetInteriorBrakePedalRotation() const
 {
-	return BrakePedalFullTravel * DisplayBrake;
+	return SlerpPose(BrakePedalRestRotation, BrakePedalPressedRotation, DisplayBrake);
 }
 
 FRotator ATSTankControllerBase::GetInteriorLeverRotation(bool bLeft) const
 {
-	const float Alpha = bLeft ? GetInteriorLeftLeverAlpha() : GetInteriorRightLeverAlpha();
-	const float Sign = (!bLeft && bMirrorRightLeverTravel) ? -1.f : 1.f;
-	return LeverFullTravel * (Alpha * Sign);
+	return bLeft
+		? SlerpPose(LeftLeverRestRotation, LeftLeverPulledRotation, GetInteriorLeftLeverAlpha())
+		: SlerpPose(RightLeverRestRotation, RightLeverPulledRotation, GetInteriorRightLeverAlpha());
+}
+
+FVector ATSTankControllerBase::GetInteriorGasPedalLocation() const
+{
+	return FMath::Lerp(GasPedalRestLocation, GasPedalPressedLocation, FMath::Clamp(DisplayThrottle, 0.f, 1.f));
+}
+
+FVector ATSTankControllerBase::GetInteriorBrakePedalLocation() const
+{
+	return FMath::Lerp(BrakePedalRestLocation, BrakePedalPressedLocation, FMath::Clamp(DisplayBrake, 0.f, 1.f));
+}
+
+FVector ATSTankControllerBase::GetInteriorLeverLocation(bool bLeft) const
+{
+	return bLeft
+		? FMath::Lerp(LeftLeverRestLocation, LeftLeverPulledLocation, GetInteriorLeftLeverAlpha())
+		: FMath::Lerp(RightLeverRestLocation, RightLeverPulledLocation, GetInteriorRightLeverAlpha());
 }
 
 FRotator ATSTankControllerBase::GetMainGunAimRotation() const
