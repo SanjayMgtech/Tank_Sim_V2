@@ -142,6 +142,55 @@ struct FTSTeamTankEntry
 	TObjectPtr<APawn> AssignedTank = nullptr;
 };
 
+// What a crew station's periscope is rendering through. Purely a viewing filter: it changes the
+// post processing on that station's SceneCaptureComponent2D and nothing about the world, so it is a
+// LOCAL, per-viewer setting and is deliberately not replicated.
+UENUM(BlueprintType)
+enum class ETSVisionMode : uint8
+{
+	// The capture's authored settings, whatever the tank Blueprint ships.
+	Normal			UMETA(DisplayName = "Day / Normal"),
+
+	// Light-amplified: monochrome green, heavily over-exposed, bloomed and vignetted.
+	NightVision		UMETA(DisplayName = "Night Vision"),
+
+	// White-hot thermal: luminance only, crushed to high contrast.
+	Thermal			UMETA(DisplayName = "Thermal")
+};
+
+// One blip on the Commander's radar. Server-built (see UTSTankCommanderComponent), so a client
+// cannot manufacture contacts it was not told about.
+USTRUCT(BlueprintType)
+struct FTSRadarContact
+{
+	GENERATED_BODY()
+
+	// Stable for the life of the contact's tank actor, which is what lets the radar widget
+	// interpolate a blip between two intel updates instead of teleporting it. Array position is NOT
+	// stable across refreshes, so it cannot be used for this.
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Commander")
+	int32 ContactId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Commander")
+	FVector_NetQuantize Location = FVector::ZeroVector;
+
+	// World yaw in degrees - which way the contact's hull is facing, so a blip can be drawn as a
+	// pointed icon rather than a dot.
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Commander")
+	float Heading = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Commander")
+	ETSTeamId TeamId = ETSTeamId::None;
+
+	// True when the contact belongs to a team other than the viewer's.
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Commander")
+	bool bHostile = false;
+
+	// True for the viewer's own tank, which the radar draws at the centre rather than as a contact.
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Commander")
+	bool bIsSelf = false;
+};
+
 // Commander intel payload, replicated from UTSTankCommanderComponent and pushed to Blueprint via
 // ITSTankInterface::BP_UpdateCommanderIntel.
 USTRUCT(BlueprintType)
@@ -157,6 +206,11 @@ struct FTSCommanderIntel
 
 	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Commander")
 	FString IntelSummary;
+
+	// The radar's actual data source. A superset of the two position arrays above, which are kept
+	// because existing Blueprint graphs read them; new work should use this.
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Commander")
+	TArray<FTSRadarContact> Contacts;
 };
 
 // Single source of truth for the Section 8 permission matrix. Every server-side validation path

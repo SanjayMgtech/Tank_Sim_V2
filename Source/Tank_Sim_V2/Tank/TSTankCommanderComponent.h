@@ -19,6 +19,8 @@ class UTSTankCommanderComponent : public UActorComponent
 public:
 	UTSTankCommanderComponent();
 
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	// Server only. Commander-only. Recomputes Intel from GameState's team/tank roster; each client's
@@ -38,6 +40,21 @@ public:
 	FTSOnCrewCommandIssued OnCrewCommandIssued;
 
 protected:
+	// A radar is a live instrument, so the server keeps Intel fresh on a timer rather than only when
+	// a Commander explicitly asks. Without this the blips sit wherever they were at the last manual
+	// TryRefreshIntel and the radar reads as broken.
+	//
+	// Off restores the original pull-only behaviour.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander")
+	bool bAutoRefreshIntel = true;
+
+	// Refreshes per second. This is a replicated array of contacts, so it is bandwidth: at 4Hz with
+	// a handful of tanks it is nothing, at 60 it is a per-frame position stream for every tank in
+	// the match. The radar widget interpolates between updates, so raising this buys accuracy, not
+	// smoothness.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander", meta = (ClampMin = "0.5", ClampMax = "30.0"))
+	float IntelRefreshHz = 4.f;
+
 	UPROPERTY(ReplicatedUsing = OnRep_Intel, BlueprintReadOnly, Category = "Tank Simulation|Commander")
 	FTSCommanderIntel Intel;
 
@@ -51,4 +68,12 @@ protected:
 	void OnRep_LastCommand();
 
 	class UTSTankCrewComponent* GetCrewComponent() const;
+
+private:
+	// The actual intel computation, with no permission check - callers are responsible for that.
+	// TryRefreshIntel gates on the requester; the auto-refresh timer is server-side and has no
+	// requester to gate on. Filtering by the VIEWER's role happens later, in GetIntelFor.
+	void RebuildIntel();
+
+	FTimerHandle IntelRefreshTimerHandle;
 };

@@ -13,8 +13,10 @@
 #include "Player/TSCrewPawn.h"
 #include "Player/TSVRModeLibrary.h"
 #include "Player/TSTankPlayerState.h"
+#include "Tank/TSTankControllerBase.h"
 #include "Tank_Sim_V2.h"
 #include "TimerManager.h"
+#include "UI/TSCommanderScreenWidget.h"
 #include "UI/TSRoleDebugWidget.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/WidgetComponent.h"
@@ -41,6 +43,7 @@ void ATSTankPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	GetWorldTimerManager().ClearTimer(HeadsetPollTimerHandle);
 
 	ShowRoleDebugWidget(false);
+	ShowCommanderScreen(false);
 
 	Super::EndPlay(EndPlayReason);
 }
@@ -78,6 +81,8 @@ void ATSTankPlayerController::ApplyLocalUIForCurrentMap()
 			TEXT("ATSTankPlayerController: skipping the flat role debug panel - this player has a "
 				 "headset and is not the host, so it would render across their view."));
 	}
+
+	RefreshCommanderScreen();
 
 	// The host arrives needing to assign crews; everyone else arrives needing to play.
 	SetLobbyConsoleFocused(bFocusLobbyConsoleOnArrivalForHost && IsMatchHost());
@@ -509,6 +514,48 @@ void ATSTankPlayerController::TSPlayMode(const FString& Mode)
 #endif
 }
 
+void ATSTankPlayerController::TSVision(const FString& Mode)
+{
+#if !UE_BUILD_SHIPPING
+	ATSTankControllerBase* Tank = Cast<ATSTankControllerBase>(GetTankPlayerState() ? GetTankPlayerState()->GetAssignedTank() : nullptr);
+	if (!Tank)
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSVision: no tank assigned to this player."));
+		return;
+	}
+
+	const FString Trimmed = Mode.TrimStartAndEnd().ToLower();
+	ETSVisionMode NewMode = ETSVisionMode::Normal;
+
+	if (Trimmed.IsEmpty() || Trimmed == TEXT("cycle"))
+	{
+		NewMode = Tank->CycleCrewViewVisionMode();
+	}
+	else if (Trimmed == TEXT("night") || Trimmed == TEXT("nightvision") || Trimmed == TEXT("nv") || Trimmed == TEXT("1"))
+	{
+		NewMode = ETSVisionMode::NightVision;
+		Tank->SetCrewViewVisionMode(NewMode);
+	}
+	else if (Trimmed == TEXT("thermal") || Trimmed == TEXT("heat") || Trimmed == TEXT("ir") || Trimmed == TEXT("2"))
+	{
+		NewMode = ETSVisionMode::Thermal;
+		Tank->SetCrewViewVisionMode(NewMode);
+	}
+	else if (Trimmed == TEXT("day") || Trimmed == TEXT("normal") || Trimmed == TEXT("off") || Trimmed == TEXT("0"))
+	{
+		NewMode = ETSVisionMode::Normal;
+		Tank->SetCrewViewVisionMode(NewMode);
+	}
+	else
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSVision: could not parse '%s'. Use day|night|thermal|cycle."), *Mode);
+		return;
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("TSVision: %s is now in vision mode %d."), *Tank->GetName(), static_cast<int32>(NewMode));
+#endif
+}
+
 void ATSTankPlayerController::TSDriveMode(const FString& Mode)
 {
 #if !UE_BUILD_SHIPPING
@@ -694,6 +741,91 @@ bool ATSTankPlayerController::IsRoleDebugWidgetVisible() const
 	return RoleDebugWidget && RoleDebugWidget->IsInViewport();
 }
 
+void ATSTankPlayerController::ShowCommanderScreen(bool bShow)
+{
+	if (!bShow)
+	{
+		if (CommanderScreenWidget)
+		{
+			CommanderScreenWidget->RemoveFromParent();
+			CommanderScreenWidget = nullptr;
+		}
+		return;
+	}
+
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	// Same seamless-travel guard as the role debug panel: a reused PlayerController still points at
+	// the widget built for the world we just left.
+	if (CommanderScreenWidget && CommanderScreenWidget->GetWorld() != GetWorld())
+	{
+		CommanderScreenWidget->RemoveFromParent();
+		CommanderScreenWidget = nullptr;
+	}
+
+	if (!CommanderScreenWidget)
+	{
+		TSubclassOf<UTSCommanderScreenWidget> WidgetClass = CommanderScreenWidgetClass;
+		if (!WidgetClass)
+		{
+			WidgetClass = UTSCommanderScreenWidget::StaticClass();
+		}
+
+		CommanderScreenWidget = CreateWidget<UTSCommanderScreenWidget>(this, WidgetClass);
+	}
+
+	if (CommanderScreenWidget && !CommanderScreenWidget->IsInViewport())
+	{
+		CommanderScreenWidget->AddToViewport(CommanderScreenZOrder);
+	}
+}
+
+bool ATSTankPlayerController::IsCommanderScreenVisible() const
+{
+	return CommanderScreenWidget && CommanderScreenWidget->IsInViewport();
+}
+
+void ATSTankPlayerController::RefreshCommanderScreen()
+{
+	if (!IsLocalController() || !bShowCommanderScreenForCommander)
+	{
+		return;
+	}
+
+	const UTSUISubsystem* UI = GetUISubsystem();
+	if (UI && UI->IsCurrentMapMenuMap())
+	{
+		ShowCommanderScreen(false);
+		return;
+	}
+
+	// Screen-space widgets render plastered across a headset view, so a VR player must not get this
+	// one - exactly the fault the role debug panel had. The test is HMD AVAILABILITY rather than
+	// IsVRModeActive(), because ApplyVRMode is deferred a tick and stereo is still off here even for
+	// a player who is about to be in VR.
+	//
+	// The Commander's instruments belong on a world-space panel inside the turret for VR. That does
+	// not exist yet, so in a headset the Commander simply has no screen rather than a broken one.
+	const bool bWillBeVR = UTSVRModeLibrary::IsHMDAvailable() && !IsMatchHost();
+
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	const bool bIsCommander = PS && PS->GetCrewRole() == ETSCrewRole::Commander;
+
+	ShowCommanderScreen(bIsCommander && !bWillBeVR);
+}
+
+void ATSTankPlayerController::TSCommanderScreen()
+{
+#if !UE_BUILD_SHIPPING
+	const bool bNowVisible = !IsCommanderScreenVisible();
+	ShowCommanderScreen(bNowVisible);
+	UE_LOG(LogTankSim, Log, TEXT("TSCommanderScreen: %s"), bNowVisible ? TEXT("shown") : TEXT("hidden"));
+#endif
+}
+
 void ATSTankPlayerController::TSRoleDebug()
 {
 	ShowRoleDebugWidget(!IsRoleDebugWidgetVisible());
@@ -842,6 +974,7 @@ void ATSTankPlayerController::OnRep_PlayerState()
 void ATSTankPlayerController::HandleAssignmentChanged()
 {
 	RefreshSelectionUI();
+	RefreshCommanderScreen();
 }
 
 void ATSTankPlayerController::RefreshSelectionUI()

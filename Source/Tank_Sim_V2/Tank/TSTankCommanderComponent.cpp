@@ -1,6 +1,8 @@
 #include "Tank/TSTankCommanderComponent.h"
 
 #include "Core/TSGameState.h"
+#include "Engine/World.h"
+#include "TimerManager.h"
 #include "Net/UnrealNetwork.h"
 #include "Player/TSTankPlayerState.h"
 #include "Tank/TSTankCrewComponent.h"
@@ -22,6 +24,31 @@ void UTSTankCommanderComponent::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 	DOREPLIFETIME_CONDITION_NOTIFY(UTSTankCommanderComponent, LastIssuedCommand, COND_None, REPNOTIFY_Always);
 }
 
+void UTSTankCommanderComponent::BeginPlay()
+{
+	Super::BeginPlay();
+
+	// Server only. Clients receive Intel by replication and must never compute it themselves - the
+	// whole point of routing the radar through the server is that a client cannot see contacts it
+	// was not sent.
+	if (bAutoRefreshIntel && GetOwner() && GetOwner()->HasAuthority() && IntelRefreshHz > 0.f && GetWorld())
+	{
+		GetWorld()->GetTimerManager().SetTimer(
+			IntelRefreshTimerHandle, this, &UTSTankCommanderComponent::RebuildIntel,
+			1.f / IntelRefreshHz, true, 0.f);
+	}
+}
+
+void UTSTankCommanderComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (GetWorld())
+	{
+		GetWorld()->GetTimerManager().ClearTimer(IntelRefreshTimerHandle);
+	}
+
+	Super::EndPlay(EndPlayReason);
+}
+
 UTSTankCrewComponent* UTSTankCommanderComponent::GetCrewComponent() const
 {
 	return GetOwner() ? GetOwner()->FindComponentByClass<UTSTankCrewComponent>() : nullptr;
@@ -41,30 +68,53 @@ bool UTSTankCommanderComponent::TryRefreshIntel(ATSTankPlayerState* Requester)
 		return false;
 	}
 
-	const ATSGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ATSGameState>() : nullptr;
-	if (!GameState)
+	if (!GetWorld() || !GetWorld()->GetGameState<ATSGameState>())
 	{
 		return false;
 	}
 
+	RebuildIntel();
+	return true;
+}
+
+void UTSTankCommanderComponent::RebuildIntel()
+{
+	const ATSGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ATSGameState>() : nullptr;
+	const UTSTankCrewComponent* Crew = GetCrewComponent();
+	if (!GameState || !Crew)
+	{
+		return;
+	}
+
 	FTSCommanderIntel NewIntel;
 	const ETSTeamId OwnTeam = Crew->GetTeamId();
+	const AActor* OwnTank = GetOwner();
 
 	for (const FTSTeamTankEntry& Entry : GameState->GetTeamTankEntries())
 	{
-		if (Entry.TeamId == OwnTeam || Entry.TeamId == ETSTeamId::None || !Entry.AssignedTank)
+		if (!Entry.AssignedTank)
 		{
 			continue;
 		}
 
-		NewIntel.KnownEnemyPositions.Add(FVector_NetQuantize(Entry.AssignedTank->GetActorLocation()));
-	}
+		const bool bSelf = (Entry.AssignedTank == OwnTank);
+		const bool bHostile = !bSelf && Entry.TeamId != OwnTeam && Entry.TeamId != ETSTeamId::None;
 
-	for (const FTSTeamTankEntry& Entry : GameState->GetTeamTankEntries())
-	{
-		if (Entry.AssignedTank)
+		FTSRadarContact Contact;
+		// GetUniqueID is stable for the actor's lifetime, which is all the widget's interpolation
+		// needs - it only has to recognise the same blip across two consecutive refreshes.
+		Contact.ContactId = static_cast<int32>(Entry.AssignedTank->GetUniqueID());
+		Contact.Location = FVector_NetQuantize(Entry.AssignedTank->GetActorLocation());
+		Contact.Heading = Entry.AssignedTank->GetActorRotation().Yaw;
+		Contact.TeamId = Entry.TeamId;
+		Contact.bHostile = bHostile;
+		Contact.bIsSelf = bSelf;
+		NewIntel.Contacts.Add(Contact);
+
+		NewIntel.TankPlacements.Add(Contact.Location);
+		if (bHostile)
 		{
-			NewIntel.TankPlacements.Add(FVector_NetQuantize(Entry.AssignedTank->GetActorLocation()));
+			NewIntel.KnownEnemyPositions.Add(Contact.Location);
 		}
 	}
 
@@ -72,8 +122,6 @@ bool UTSTankCommanderComponent::TryRefreshIntel(ATSTankPlayerState* Requester)
 
 	Intel = NewIntel;
 	OnRep_Intel();
-
-	return true;
 }
 
 bool UTSTankCommanderComponent::TryIssueCommand(ATSTankPlayerState* Requester, ETSCrewCommand Command)
@@ -106,8 +154,17 @@ FTSCommanderIntel UTSTankCommanderComponent::GetIntelFor(ETSCrewRole RequestingR
 
 	if (Access == ETSAccessLevel::Limited)
 	{
+		// Positions of hostiles and of the viewer's own tank, no summary and no friendly placements -
+		// enough to draw a threat picture, not enough to read the Commander's whole board.
 		FTSCommanderIntel Reduced;
 		Reduced.KnownEnemyPositions = Intel.KnownEnemyPositions;
+		for (const FTSRadarContact& Contact : Intel.Contacts)
+		{
+			if (Contact.bHostile || Contact.bIsSelf)
+			{
+				Reduced.Contacts.Add(Contact);
+			}
+		}
 		return Reduced;
 	}
 

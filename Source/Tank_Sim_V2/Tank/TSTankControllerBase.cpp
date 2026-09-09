@@ -6,6 +6,8 @@
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Net/UnrealNetwork.h"
@@ -369,6 +371,10 @@ void ATSTankControllerBase::InitialiseCrewViewCaptures()
 		if (Found && *Found)
 		{
 			ResolvedCrewViewCaptures.Add(Entry.Key, *Found);
+
+			// Snapshot BEFORE anything touches it, so Normal can restore exactly what the Blueprint
+			// authored rather than an engine default.
+			AuthoredCrewViewPostProcess.Add(Entry.Key, (*Found)->PostProcessSettings);
 			continue;
 		}
 
@@ -407,6 +413,116 @@ void ATSTankControllerBase::ConfigureCrewViewCapture(USceneCaptureComponent2D* C
 	Capture->ShowFlags.SetEyeAdaptation(false);
 }
 
+void ATSTankControllerBase::SetCrewViewVisionMode(ETSVisionMode NewMode)
+{
+	if (CrewViewVisionMode == NewMode)
+	{
+		return;
+	}
+
+	CrewViewVisionMode = NewMode;
+	ApplyVisionModeToActiveCapture();
+}
+
+ETSVisionMode ATSTankControllerBase::CycleCrewViewVisionMode()
+{
+	switch (CrewViewVisionMode)
+	{
+	case ETSVisionMode::Normal:      SetCrewViewVisionMode(ETSVisionMode::NightVision); break;
+	case ETSVisionMode::NightVision: SetCrewViewVisionMode(ETSVisionMode::Thermal);     break;
+	default:                         SetCrewViewVisionMode(ETSVisionMode::Normal);      break;
+	}
+
+	return CrewViewVisionMode;
+}
+
+UTextureRenderTarget2D* ATSTankControllerBase::GetCrewViewRenderTarget(ETSCrewRole InCrewRole) const
+{
+	const TObjectPtr<USceneCaptureComponent2D>* Found = ResolvedCrewViewCaptures.Find(InCrewRole);
+	return (Found && *Found) ? (*Found)->TextureTarget : nullptr;
+}
+
+void ATSTankControllerBase::ApplyVisionModeToActiveCapture()
+{
+	if (!ActiveCrewViewCapture)
+	{
+		return;
+	}
+
+	// Always start from what the designer authored. Layering one mode's grading on top of the
+	// previous one's is how a filter chain ends up permanently green.
+	if (const FPostProcessSettings* Authored = AuthoredCrewViewPostProcess.Find(ActiveCrewViewRole))
+	{
+		ActiveCrewViewCapture->PostProcessSettings = *Authored;
+	}
+	ActiveCrewViewCapture->PostProcessBlendWeight = 1.f;
+
+	// Bloom is off by default for cost (ConfigureCrewViewCapture), but an image intensifier without
+	// bloom does not read as one - the blooming of bright sources IS the look.
+	ActiveCrewViewCapture->ShowFlags.SetBloom(CrewViewVisionMode == ETSVisionMode::NightVision);
+
+	if (CrewViewVisionMode == ETSVisionMode::Normal)
+	{
+		return;
+	}
+
+	// An authored material wins: colour grading cannot express a thermal ramp (inverted luminance
+	// through a gradient), so anyone who needs a real one supplies a post-process material.
+	if (TObjectPtr<UMaterialInterface>* ModeMaterial = VisionModeMaterials.Find(CrewViewVisionMode))
+	{
+		if (*ModeMaterial)
+		{
+			ActiveCrewViewCapture->PostProcessSettings.AddBlendable(*ModeMaterial, 1.f);
+			return;
+		}
+	}
+
+	FPostProcessSettings& PP = ActiveCrewViewCapture->PostProcessSettings;
+
+	// Both built-in looks are monochrome first. W is the luminance/overall channel of the colour
+	// grading vectors and must stay at 1, or the whole image scales with it.
+	PP.bOverride_ColorSaturation = true;
+	PP.ColorSaturation = FVector4(0.f, 0.f, 0.f, 1.f);
+
+	if (CrewViewVisionMode == ETSVisionMode::NightVision)
+	{
+		PP.bOverride_ColorGain = true;
+		PP.ColorGain = FVector4(
+			NightVisionTint.R * NightVisionGain,
+			NightVisionTint.G * NightVisionGain,
+			NightVisionTint.B * NightVisionGain,
+			1.f);
+
+		// Lift the shadows: an intensifier's whole job is that you can see into them.
+		PP.bOverride_ColorGamma = true;
+		PP.ColorGamma = FVector4(0.65f, 0.65f, 0.65f, 1.f);
+
+		PP.bOverride_BloomIntensity = true;
+		PP.BloomIntensity = 1.5f;
+
+		PP.bOverride_VignetteIntensity = true;
+		PP.VignetteIntensity = 1.2f;
+
+		// Grain, so the image reads as amplified rather than merely tinted.
+		PP.bOverride_FilmGrainIntensity = true;
+		PP.FilmGrainIntensity = 0.6f;
+	}
+	else // Thermal - white hot.
+	{
+		PP.bOverride_ColorContrast = true;
+		PP.ColorContrast = FVector4(ThermalContrast, ThermalContrast, ThermalContrast, 1.f);
+
+		PP.bOverride_ColorGain = true;
+		PP.ColorGain = FVector4(1.4f, 1.4f, 1.4f, 1.f);
+
+		PP.bOverride_ColorOffset = true;
+		PP.ColorOffset = FVector4(-0.05f, -0.05f, -0.05f, 0.f);
+
+		PP.bOverride_VignetteIntensity = true;
+		PP.VignetteIntensity = 0.4f;
+	}
+}
+
 void ATSTankControllerBase::UpdateCrewViewCapture(float InDeltaSeconds)
 {
 	// A dedicated server draws nothing for anybody. Checked explicitly rather than left to fall out
@@ -437,6 +553,7 @@ void ATSTankControllerBase::UpdateCrewViewCapture(float InDeltaSeconds)
 			if (ActiveCrewViewCapture)
 			{
 				ConfigureCrewViewCapture(ActiveCrewViewCapture);
+				ApplyVisionModeToActiveCapture();
 
 				// Draw one immediately rather than waiting out the interval, so sitting down does
 				// not start with a stale or empty screen.
