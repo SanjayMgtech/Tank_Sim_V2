@@ -166,6 +166,18 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	bool bGunnerMouseDrivesGun = true;
 
+	// VR Gunner: the STICKS aim the gun (right = traverse, left = elevation, VRStickSlewSpeed deg/s)
+	// through the same hull-relative command the desktop mouse drives, and the head only LOOKS.
+	//
+	// Head aim cannot work from this seat. The Gunner rides the turret, so looking 10 degrees right
+	// turns the turret, which turns the seat and the view with it - and the head is still 10 degrees
+	// right of centre, so the turret keeps going for as long as the player is not looking dead ahead.
+	// Found in the first headset test ("it keeps on spinning"). The stick slew made it worse: a
+	// constant offset on top of the head, so the turret spun even with the head straight.
+	// False restores head aim, which is only sane from a seat that does NOT ride the turret.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	bool bVRGunnerStickAims = true;
+
 	// How far the mouse command may run ahead of where the gun has actually got to, in degrees.
 	//
 	// Without a cap this winds up: a long mouse sweep against a slowly traversing turret banks the
@@ -173,6 +185,12 @@ public:
 	// mouse. Capping the lead keeps the gun responsive and makes it stop when the hand stops.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "1.0", ClampMax = "180.0"))
 	float MaxGunnerAimLead = 45.f;
+
+	// The same cap for the VR sticks, and much tighter. The stick is a RATE control held for seconds
+	// (60 deg/s against a far slower traverse), so a 45 degree lead would carry the turret on for
+	// seconds after the stick is released. 10 makes it stop about when the hand stops.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "1.0", ClampMax = "180.0"))
+	float VRGunnerMaxAimLead = 10.f;
 
 	UFUNCTION()
 	void ApplyRoleMappingContext_FromPlayerState();
@@ -612,7 +630,8 @@ private:
 	bool bManualInputWasActive = false;
 
 	// --- Gunner aim command -----------------------------------------------------------------------
-	// True when this pawn's mouse should be steering the launcher instead of turning the view.
+	// True when this pawn's mouse - or in a headset its sticks (bVRGunnerStickAims) - steers the
+	// launcher through the hull-relative aim command, instead of the view being the aim.
 	bool IsGunnerMouseDrivingGun() const;
 
 	// Per-frame upkeep of the aim command: seed it from the gun the first time, then keep its lead

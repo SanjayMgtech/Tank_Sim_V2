@@ -3343,3 +3343,26 @@ change cannot strand the override on the old tank.
 
 Owed a headset: whether 15cm reach, the 4cm marker, and the haptic strengths feel right. All are
 `EditDefaultsOnly` on `BP_TSVRPawn` / the tank - tune in Class Defaults, no rebuild.
+
+## ⛔ VR Gunner turret SPUN - head aim from a turret-mounted seat is a feedback loop (2026-09-10)
+Headset report: "gunner have rotation problem ... it keeps on spinning". Structural, not a typo:
+`UpdateGunnerAim` traced along the HEAD's forward vector, and the Gunner's seat rides the turret.
+Look 10° right -> turret traverses right -> it carries the seat and the view right -> the head is
+still 10° right of centre -> the turret keeps going, until the player looks dead ahead. The stick
+slew (`VRSlewYaw`, an offset added to the head direction) made it worse: a constant offset meant the
+turret spun even with the head straight. The log showed the player fighting it with the stick
+(`IA_AimTurret` swinging to +/-0.93 over and over).
+
+The desktop path never had this because its command (`SeatViewYaw/Pitch`) is held in HULL space and
+never reads the camera. Fix: **`bVRGunnerStickAims` (default on)** routes the VR sticks into that
+same command - `IsGunnerMouseDrivingGun()` is now true in a headset too - at `VRStickSlewSpeed`
+deg/s, lead capped by the new `VRGunnerMaxAimLead` (10°, not the mouse's 45°, so a held stick stops
+about when released). The head only looks. `UpdateGunnerAimCommand` no longer zeroes the camera's
+relative rotation in a headset - there it IS the tracked head.
+
+**Generalise: never aim with the head from a seat the aim rotates.** Head aim needs a hull-fixed
+seat; a turret-mounted one must aim with something that is not the view. Turning the flag off
+restores head aim and the loop with it.
+
+Not automatable: `IsHeadTrackingActive()` is false in a transient world, so no test reaches the VR
+branch. Needs the headset.

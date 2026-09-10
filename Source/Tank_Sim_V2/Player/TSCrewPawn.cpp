@@ -639,6 +639,17 @@ bool ATSCrewPawn::ApplyVRStickSlew(const FVector2D& StickAxis)
 	// without it the gun traverses nearly twice as fast on the faster device.
 	const float DeltaSeconds = World->GetDeltaSeconds();
 
+	// Stick aim (bVRGunnerStickAims): the stick drives the hull-relative aim COMMAND, exactly as the
+	// desktop mouse does, at VRStickSlewSpeed deg/s. The head is not involved, so the turret carrying
+	// the player round cannot feed back into the aim.
+	if (IsGunnerMouseDrivingGun())
+	{
+		SeatViewYaw = FRotator::NormalizeAxis(SeatViewYaw + StickAxis.X * VRStickSlewSpeed * DeltaSeconds);
+		SeatViewPitch = FMath::Clamp(SeatViewPitch + StickAxis.Y * VRStickSlewSpeed * DeltaSeconds, MinAimPitch, MaxAimPitch);
+		ClampGunnerAimLead();
+		return true;
+	}
+
 	VRSlewYaw = FMath::Clamp(VRSlewYaw + StickAxis.X * VRStickSlewSpeed * DeltaSeconds,
 		-VRStickSlewYawLimit, VRStickSlewYawLimit);
 	VRSlewPitch = FMath::Clamp(VRSlewPitch + StickAxis.Y * VRStickSlewSpeed * DeltaSeconds,
@@ -680,9 +691,13 @@ ATSTankControllerBase* ATSCrewPawn::GetAssignedTankController() const
 
 bool ATSCrewPawn::IsGunnerMouseDrivingGun() const
 {
-	// Head tracking excluded on purpose: in a headset the Gunner aims by looking, so the head has to
-	// keep turning the view and the aim ray has to follow it.
-	return bGunnerMouseDrivesGun && IsLocalGunner() && !UTSVRModeLibrary::IsHeadTrackingActive();
+	if (!IsLocalGunner())
+	{
+		return false;
+	}
+	// In a headset the sticks drive the command (see bVRGunnerStickAims for why the head cannot);
+	// on a flat screen, the mouse.
+	return UTSVRModeLibrary::IsHeadTrackingActive() ? bVRGunnerStickAims : bGunnerMouseDrivesGun;
 }
 
 FRotator ATSCrewPawn::GetGunnerAimWorldRotation() const
@@ -698,7 +713,8 @@ FRotator ATSCrewPawn::GetGunnerAimWorldRotation() const
 void ATSCrewPawn::ClampGunnerAimLead()
 {
 	const ATSTankControllerBase* Tank = GetAssignedTankController();
-	if (!Tank || MaxGunnerAimLead <= 0.f)
+	const float LeadCap = UTSVRModeLibrary::IsHeadTrackingActive() ? VRGunnerMaxAimLead : MaxGunnerAimLead;
+	if (!Tank || LeadCap <= 0.f)
 	{
 		return;
 	}
@@ -706,7 +722,7 @@ void ATSCrewPawn::ClampGunnerAimLead()
 	// Yaw only. Pitch is already clamped to MinAimPitch/MaxAimPitch, a range far smaller than any
 	// sensible lead, so a second cap on it would never bind.
 	const double GunYaw = Tank->GetMainGunAimRotation().Yaw;
-	const double Lead = FMath::Clamp(FRotator::NormalizeAxis(SeatViewYaw - GunYaw), -(double)MaxGunnerAimLead, (double)MaxGunnerAimLead);
+	const double Lead = FMath::Clamp(FRotator::NormalizeAxis(SeatViewYaw - GunYaw), -(double)LeadCap, (double)LeadCap);
 	SeatViewYaw = FRotator::NormalizeAxis(GunYaw + Lead);
 }
 
@@ -739,7 +755,9 @@ void ATSCrewPawn::UpdateGunnerAimCommand()
 	// any role that is not steering the gun, and a player who moved the mouse in the moment before
 	// their Gunner assignment landed would keep that stray angle for the rest of the session, with
 	// nothing to clear it and no way to tell it from a mis-authored seat.
-	if (Camera && !Camera->GetRelativeRotation().IsNearlyZero())
+	// Never in a headset: there the camera's relative rotation IS the tracked head, and zeroing it
+	// would fight the pose every frame.
+	if (Camera && !UTSVRModeLibrary::IsHeadTrackingActive() && !Camera->GetRelativeRotation().IsNearlyZero())
 	{
 		Camera->SetRelativeRotation(FRotator::ZeroRotator);
 	}
@@ -1251,8 +1269,9 @@ void ATSCrewPawn::Tick(float DeltaSeconds)
 		UpdateGunnerAimCommand();
 	}
 
-	// In a headset the Gunner aims by turning their head, which fires no input action whatsoever.
-	// Without this the turret would simply never receive an aim point in VR.
+	// Every frame, not only on input: the aim point is re-sent as the hull moves under it, and with
+	// bVRGunnerStickAims off (head aim) the head generates pose, never an input action - without this
+	// the turret would never receive an aim point in VR at all.
 	UpdateGunnerAim();
 }
 
