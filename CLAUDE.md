@@ -3193,3 +3193,54 @@ to engine objects (CDO handles, and a bound UFUNCTION: `f = unreal.TSCrewPawn.co
 which Python then touched after the engine had freed them. Cheap to avoid, so do: put `run_python`
 bodies inside a function and `del` it afterwards, and never park a PIE actor in `builtins` across
 PIE teardown.
+
+
+## 🧪 Automated VR tests — `TankSim.VR.*` (2026-09-10)
+
+**Run everything with one call** (in the running editor, no PIE, no headset, ~0.1s):
+```
+editor_query run_automation_tests  {"prefix": "TankSim"}      # 8 tests, all must pass
+```
+Source: `Source/Tank_Sim_V2/Tests/TSManualDrivingTests.cpp`. Run it after ANY change to VR input,
+an Input Action, an IMC, the crew pawn's input handling, or the interior control poses.
+
+| Test | Covers |
+|---|---|
+| `TankSim.VR.InputBindings` | The old T0/T1 checks, now C++: every IMC/Action description non-empty, **< 128 chars**, unique; every XR key's component type matches its action's ValueType (`*_2D` only on Axis2D); the four manual-driving actions exist with the right type, `bConsumeInput` (false on grips), 3 profile bindings each in `IMC_Driver`, and are assigned on `BP_TSVRPawn` |
+| `TankSim.VR.ManualDriving.Mapping` | pedals + levers -> (throttle, steering): 7 cases incl. cancelling and clamping |
+| `TankSim.VR.ManualDriving.LeverPull` | hand travel -> 0..1 pull: 9 cases incl. push-away, sideways, unnormalised and zero axis |
+| `TankSim.VR.ManualDriving.Pipeline` | the REAL VK1602 + GameMode: seat/mode gating, the GameMode's VR rule, pedals -> tank input, grab reach, grab -> pull -> RPC -> tank input, both levers + pedal together, the interior bone landing halfway between the measured poses, release, and leaving Manual sending the terminal STOP |
+
+### Why this approach, and not an XR simulator
+Researched: the **Meta XR Simulator** is a genuine fake OpenXR runtime with simulated controllers
+and record/replay automation (supported from UE Meta XR plugin v57). It is the right tool for a
+FULL end-to-end headless run, but it replaces the OpenXR runtime a real Quest Link session uses, so
+it is an opt-in install, not a default. **OpenXRSim** (github.com/sanky369/OpenXRSim) does similar;
+it is third-party and unvetted. These native tests cover every layer that does not need an XR
+runtime and name the ones they cannot reach - see the table at the top of the test file.
+
+### Techniques that made it possible - reuse them
+- **Hands can be placed directly.** `UMotionControllerComponent::TickComponent` only writes the
+  transform when the controller reports TRACKED, so with no XR runtime a placed hand stays placed.
+- **`APlayerController::SetAsLocalPlayerController()` is public.** It makes a controller local with
+  no `ULocalPlayer` - a transient test world has no viewport to attach one to, and every
+  manual-driving path is gated on `IsLocalController()`. No test seam needed on our controller.
+- **A Server RPC called on the authority in a standalone world runs locally**, so the pawn's real
+  `ServerSetDriveInput` call reaches the tank's control component exactly as in play.
+- **`friend struct FTSManualDrivingTestAccess`** on `ATSCrewPawn` and `ATSTankControllerBase` gives
+  the test the private handlers and state, so it drives the real code rather than a copy of it.
+- **Spawn the pawn BLUEPRINT, not the native class.** The native crew pawn carries no input assets
+  and rightly logs an ERROR saying so - and any logged error fails an automation test. The first
+  run failed on exactly that, with every assertion passing.
+- `ComputeLeverPull` was extracted from a lambda into a static so the pull maths is testable alone.
+
+### What these tests do NOT prove
+The key -> action layer is checked statically (types and bindings), not fired - input handlers are
+called directly because `InjectInputForAction` needs a `ULocalPlayer`. OpenXR accepting the bindings
+still needs a `-game -vr` run with `grep XR_ERROR`. And whether a 60cm reach and a backwards pull
+FEEL right is a human in the headset, last.
+
+**Expected warnings, not failures:** the Pipeline and Flow tests each log 3, all environmental in a
+transient world - no `TSTeamSpawn_TeamA` actor (there is no level, so the tank drops at the
+world-origin fallback), `UTSVoiceSubsystem` with no voice plugin loaded, and missing engine editor
+icons. A NEW warning class appearing here is worth reading; these three are not.

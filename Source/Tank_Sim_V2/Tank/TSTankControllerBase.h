@@ -27,6 +27,10 @@ class TANK_SIM_V2_API ATSTankControllerBase : public AWheeledVehiclePawn, public
 {
 	GENERATED_BODY()
 
+	// Automation tests (Tests/TSManualDrivingTests.cpp) drive the private input handlers and read
+	// private state through this, so they exercise the real code paths rather than a copy of them.
+	friend struct FTSManualDrivingTestAccess;
+
 public:
 	ATSTankControllerBase();
 

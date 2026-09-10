@@ -34,6 +34,10 @@ class ATSCrewPawn : public APawn
 {
 	GENERATED_BODY()
 
+	// Automation tests (Tests/TSManualDrivingTests.cpp) drive the private input handlers and read
+	// private state through this, so they exercise the real code paths rather than a copy of them.
+	friend struct FTSManualDrivingTestAccess;
+
 public:
 	ATSCrewPawn();
 
@@ -54,6 +58,12 @@ public:
 	// sign the stick and the interior lever animation already use.
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Control")
 	static FVector2D ComputeManualDriveInput(float Gas, float Brake, float LeftPull, float RightPull);
+
+	// How far a held lever is pulled, 0..1: the hand's travel from where it took hold, projected onto
+	// the pull axis, over the distance that counts as a full pull. Only the along-axis component
+	// counts - pushing away or moving sideways is never a pull. Pure for the same reason as above.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Control")
+	static float ComputeLeverPull(const FVector& StartLocal, const FVector& NowLocal, const FVector& PullAxisLocal, float FullPullDistance);
 
 	// ---------------------------------------------------------------------
 	// Play mode - which of the two crew pawns this class IS.

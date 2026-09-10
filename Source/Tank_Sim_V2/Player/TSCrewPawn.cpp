@@ -761,6 +761,17 @@ FVector2D ATSCrewPawn::ComputeManualDriveInput(float Gas, float Brake, float Lef
 	return FVector2D(Throttle, Steering);
 }
 
+float ATSCrewPawn::ComputeLeverPull(const FVector& StartLocal, const FVector& NowLocal, const FVector& PullAxisLocal, float FullPullDistance)
+{
+	const FVector Axis = PullAxisLocal.GetSafeNormal();
+	if (Axis.IsNearlyZero())
+	{
+		return 0.f;
+	}
+	const float Along = static_cast<float>(FVector::DotProduct(NowLocal - StartLocal, Axis));
+	return FMath::Clamp(Along / FMath::Max(FullPullDistance, 1.f), 0.f, 1.f);
+}
+
 bool ATSCrewPawn::IsLocalManualDriver() const
 {
 	const APlayerController* PC = Cast<APlayerController>(GetController());
@@ -878,8 +889,6 @@ void ATSCrewPawn::UpdateManualDriving()
 	if (const ATSTankControllerBase* Tank = GetAssignedTankController())
 	{
 		const FTransform TankTransform = Tank->GetActorTransform();
-		const FVector PullAxis = Tank->LeverPullAxisLocal.GetSafeNormal();
-		const float FullPull = FMath::Max(Tank->LeverPullDistance, 1.f);
 
 		auto PullFor = [&](bool bHeld, const UMotionControllerComponent* Hand, const FVector& StartLocal)
 		{
@@ -887,8 +896,8 @@ void ATSCrewPawn::UpdateManualDriving()
 			{
 				return 0.f;
 			}
-			const FVector Delta = TankTransform.InverseTransformPosition(Hand->GetComponentLocation()) - StartLocal;
-			return FMath::Clamp(static_cast<float>(FVector::DotProduct(Delta, PullAxis)) / FullPull, 0.f, 1.f);
+			return ComputeLeverPull(StartLocal, TankTransform.InverseTransformPosition(Hand->GetComponentLocation()),
+				Tank->LeverPullAxisLocal, Tank->LeverPullDistance);
 		};
 
 		LeftLeverPull = PullFor(bLeftLeverHeld, LeftHand.Get(), LeftGrabStartLocal);
