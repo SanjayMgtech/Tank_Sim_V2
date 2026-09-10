@@ -836,6 +836,29 @@ FVector ATSTankControllerBase::GetInteriorLeverLocation(bool bLeft) const
 		: FMath::Lerp(RightLeverRestLocation, RightLeverPulledLocation, GetInteriorRightLeverAlpha());
 }
 
+bool ATSTankControllerBase::GetLeverGrabLocation(bool bLeft, FVector& OutLocation) const
+{
+	const FName GrabSocket = bLeft ? LeftLeverGrabSocket : RightLeverGrabSocket;
+	if (GrabSocket.IsNone())
+	{
+		return false;
+	}
+
+	// Searched rather than naming the interior component: the lever lives on whichever skeletal mesh
+	// the rigger put it on, and GetSocketLocation accepts a bone name as readily as a socket.
+	TArray<USkeletalMeshComponent*> Meshes;
+	GetComponents<USkeletalMeshComponent>(Meshes);
+	for (const USkeletalMeshComponent* MeshComp : Meshes)
+	{
+		if (MeshComp && MeshComp->DoesSocketExist(GrabSocket))
+		{
+			OutLocation = MeshComp->GetSocketLocation(GrabSocket);
+			return true;
+		}
+	}
+	return false;
+}
+
 FRotator ATSTankControllerBase::GetMainGunAimRotation() const
 {
 	// Index 0 is the main turret / main gun. Both arrays are pre-sized to 10 in the constructor, but

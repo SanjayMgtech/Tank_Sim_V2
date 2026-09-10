@@ -503,6 +503,33 @@ void ATSCrewPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	if (IA_FireMachineGun) EIC->BindAction(IA_FireMachineGun, ETriggerEvent::Triggered, this, &ATSCrewPawn::Input_FireMachineGun);
 	if (IA_ReloadWeapon) EIC->BindAction(IA_ReloadWeapon, ETriggerEvent::Started, this, &ATSCrewPawn::Input_ReloadWeapon);
 	if (IA_RequestIntel) EIC->BindAction(IA_RequestIntel, ETriggerEvent::Started, this, &ATSCrewPawn::Input_RequestIntel);
+
+	// Manual (VR hand) driving. Pedals latch a value while pressed, so each needs Completed AND
+	// Canceled to clear it - the same rule as IA_Drive, or a released trigger keeps the throttle on.
+	if (IA_DrivePedalGas)
+	{
+		EIC->BindAction(IA_DrivePedalGas, ETriggerEvent::Triggered, this, &ATSCrewPawn::Input_PedalGas);
+		EIC->BindAction(IA_DrivePedalGas, ETriggerEvent::Completed, this, &ATSCrewPawn::Input_PedalGasReleased);
+		EIC->BindAction(IA_DrivePedalGas, ETriggerEvent::Canceled, this, &ATSCrewPawn::Input_PedalGasReleased);
+	}
+	if (IA_DrivePedalBrake)
+	{
+		EIC->BindAction(IA_DrivePedalBrake, ETriggerEvent::Triggered, this, &ATSCrewPawn::Input_PedalBrake);
+		EIC->BindAction(IA_DrivePedalBrake, ETriggerEvent::Completed, this, &ATSCrewPawn::Input_PedalBrakeReleased);
+		EIC->BindAction(IA_DrivePedalBrake, ETriggerEvent::Canceled, this, &ATSCrewPawn::Input_PedalBrakeReleased);
+	}
+	if (IA_LeverGripLeft)
+	{
+		EIC->BindAction(IA_LeverGripLeft, ETriggerEvent::Started, this, &ATSCrewPawn::Input_LeverGripLeftPressed);
+		EIC->BindAction(IA_LeverGripLeft, ETriggerEvent::Completed, this, &ATSCrewPawn::Input_LeverGripLeftReleased);
+		EIC->BindAction(IA_LeverGripLeft, ETriggerEvent::Canceled, this, &ATSCrewPawn::Input_LeverGripLeftReleased);
+	}
+	if (IA_LeverGripRight)
+	{
+		EIC->BindAction(IA_LeverGripRight, ETriggerEvent::Started, this, &ATSCrewPawn::Input_LeverGripRightPressed);
+		EIC->BindAction(IA_LeverGripRight, ETriggerEvent::Completed, this, &ATSCrewPawn::Input_LeverGripRightReleased);
+		EIC->BindAction(IA_LeverGripRight, ETriggerEvent::Canceled, this, &ATSCrewPawn::Input_LeverGripRightReleased);
+	}
 }
 
 void ATSCrewPawn::Input_Recenter(const FInputActionValue& Value)
@@ -725,6 +752,190 @@ void ATSCrewPawn::UpdateGunnerAimCommand()
 	// with it the player - follows because it is bolted to the turret.
 }
 
+FVector2D ATSCrewPawn::ComputeManualDriveInput(float Gas, float Brake, float LeftPull, float RightPull)
+{
+	const float Throttle = FMath::Clamp(FMath::Clamp(Gas, 0.f, 1.f) - FMath::Clamp(Brake, 0.f, 1.f), -1.f, 1.f);
+	const float Steering = FMath::Clamp(FMath::Clamp(RightPull, 0.f, 1.f) - FMath::Clamp(LeftPull, 0.f, 1.f), -1.f, 1.f);
+
+	// X throttle, Y steering: the order ServerSetDriveInput and CurrentDriveInput both use.
+	return FVector2D(Throttle, Steering);
+}
+
+bool ATSCrewPawn::IsLocalManualDriver() const
+{
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !PC->IsLocalController())
+	{
+		return false;
+	}
+
+	const ATSTankPlayerState* PS = PC->GetPlayerState<ATSTankPlayerState>();
+	return PS && PS->GetCrewRole() == ETSCrewRole::Driver
+		&& PS->GetDriveControlMode() == ETSDriveControlMode::Manual;
+}
+
+void ATSCrewPawn::Input_PedalGas(const FInputActionValue& Value)
+{
+	if (IsLocalManualDriver())
+	{
+		PedalGas = FMath::Clamp(Value.Get<float>(), 0.f, 1.f);
+	}
+}
+
+void ATSCrewPawn::Input_PedalGasReleased(const FInputActionValue& Value)
+{
+	PedalGas = 0.f;
+}
+
+void ATSCrewPawn::Input_PedalBrake(const FInputActionValue& Value)
+{
+	if (IsLocalManualDriver())
+	{
+		PedalBrake = FMath::Clamp(Value.Get<float>(), 0.f, 1.f);
+	}
+}
+
+void ATSCrewPawn::Input_PedalBrakeReleased(const FInputActionValue& Value)
+{
+	PedalBrake = 0.f;
+}
+
+void ATSCrewPawn::Input_LeverGripLeftPressed(const FInputActionValue& Value) { TryGrabLever(true); }
+void ATSCrewPawn::Input_LeverGripLeftReleased(const FInputActionValue& Value) { ReleaseLever(true); }
+void ATSCrewPawn::Input_LeverGripRightPressed(const FInputActionValue& Value) { TryGrabLever(false); }
+void ATSCrewPawn::Input_LeverGripRightReleased(const FInputActionValue& Value) { ReleaseLever(false); }
+
+void ATSCrewPawn::TryGrabLever(bool bLeft)
+{
+	if (!IsLocalManualDriver())
+	{
+		return;
+	}
+
+	const ATSTankControllerBase* Tank = GetAssignedTankController();
+	const UMotionControllerComponent* Hand = bLeft ? LeftHand.Get() : RightHand.Get();
+	if (!Tank || !Hand)
+	{
+		return;
+	}
+
+	const TCHAR* Side = bLeft ? TEXT("Left") : TEXT("Right");
+	FVector GrabPoint;
+	if (!Tank->GetLeverGrabLocation(bLeft, GrabPoint))
+	{
+		UE_LOG(LogTankSim, Warning,
+			TEXT("[ManualDrive] %s lever: tank %s has no socket or bone '%s' - it cannot be grabbed."),
+			Side, *Tank->GetName(),
+			*(bLeft ? Tank->LeftLeverGrabSocket : Tank->RightLeverGrabSocket).ToString());
+		return;
+	}
+
+	// Left hand takes the left lever, right hand the right - the physical layout, and it means a hand
+	// can never be holding two levers or grab the one on the far side by reaching across.
+	const FVector HandLocation = Hand->GetComponentLocation();
+	const float Distance = FVector::Dist(HandLocation, GrabPoint);
+	const bool bInReach = Distance <= Tank->LeverGrabRadius;
+
+	UE_LOG(LogTankSim, Log, TEXT("[ManualDrive] %s grip: hand %.1f cm from lever grab point (reach %.1f) -> %s"),
+		Side, Distance, Tank->LeverGrabRadius, bInReach ? TEXT("GRABBED") : TEXT("out of reach"));
+
+	if (!bInReach)
+	{
+		return;
+	}
+
+	// Recorded in TANK space, so driving along does not register as the hand pulling the lever.
+	const FVector StartLocal = Tank->GetActorTransform().InverseTransformPosition(HandLocation);
+	if (bLeft)
+	{
+		bLeftLeverHeld = true;
+		LeftGrabStartLocal = StartLocal;
+	}
+	else
+	{
+		bRightLeverHeld = true;
+		RightGrabStartLocal = StartLocal;
+	}
+}
+
+void ATSCrewPawn::ReleaseLever(bool bLeft)
+{
+	// A released lever springs back to rest, which is what a real tank's steering lever does.
+	if (bLeft)
+	{
+		bLeftLeverHeld = false;
+		LeftLeverPull = 0.f;
+	}
+	else
+	{
+		bRightLeverHeld = false;
+		RightLeverPull = 0.f;
+	}
+}
+
+void ATSCrewPawn::UpdateManualDriving()
+{
+	if (const ATSTankControllerBase* Tank = GetAssignedTankController())
+	{
+		const FTransform TankTransform = Tank->GetActorTransform();
+		const FVector PullAxis = Tank->LeverPullAxisLocal.GetSafeNormal();
+		const float FullPull = FMath::Max(Tank->LeverPullDistance, 1.f);
+
+		auto PullFor = [&](bool bHeld, const UMotionControllerComponent* Hand, const FVector& StartLocal)
+		{
+			if (!bHeld || !Hand)
+			{
+				return 0.f;
+			}
+			const FVector Delta = TankTransform.InverseTransformPosition(Hand->GetComponentLocation()) - StartLocal;
+			return FMath::Clamp(static_cast<float>(FVector::DotProduct(Delta, PullAxis)) / FullPull, 0.f, 1.f);
+		};
+
+		LeftLeverPull = PullFor(bLeftLeverHeld, LeftHand.Get(), LeftGrabStartLocal);
+		RightLeverPull = PullFor(bRightLeverHeld, RightHand.Get(), RightGrabStartLocal);
+	}
+
+	ATSTankPlayerController* PC = GetTankController();
+	if (!PC)
+	{
+		return;
+	}
+
+	const FVector2D Drive = ComputeManualDriveInput(PedalGas, PedalBrake, LeftLeverPull, RightLeverPull);
+
+	// Every frame while non-zero: ServerSetDriveInput is Unreliable and the server's dead-man switch
+	// releases the throttle after 0.5s without fresh input, so a held command has to keep arriving.
+	if (!Drive.IsNearlyZero())
+	{
+		PC->ServerSetDriveInput(Drive.X, Drive.Y);
+		bManualInputWasActive = true;
+	}
+	else if (bManualInputWasActive)
+	{
+		PC->ServerSetDriveInput(0.f, 0.f);
+		bManualInputWasActive = false;
+	}
+}
+
+void ATSCrewPawn::ResetManualDriving()
+{
+	PedalGas = 0.f;
+	PedalBrake = 0.f;
+	bLeftLeverHeld = false;
+	bRightLeverHeld = false;
+	LeftLeverPull = 0.f;
+	RightLeverPull = 0.f;
+
+	if (bManualInputWasActive)
+	{
+		if (ATSTankPlayerController* PC = GetTankController())
+		{
+			PC->ServerSetDriveInput(0.f, 0.f);
+		}
+		bManualInputWasActive = false;
+	}
+}
+
 bool ATSCrewPawn::IsLocalGunner() const
 {
 	const APlayerController* PC = Cast<APlayerController>(GetController());
@@ -745,12 +956,35 @@ void ATSCrewPawn::UpdateAimTickEnabled()
 	//
 	// A PARKED pawn never ticks whatever its role: the player's other embodiment holds the seat, and
 	// two pawns feeding the same tank an aim point would fight each other.
-	SetActorTickEnabled(bCrewPawnActive && IsLocalGunner());
+	// ...and the local Driver in Manual mode, whose levers are read from the hands every frame.
+	//
+	// Leaving Manual (mode change, seat change, parking this pawn) must not strand a held lever or a
+	// pressed pedal: clear them, and send the terminal STOP if a command was going out.
+	const bool bManualDriver = bCrewPawnActive && IsLocalManualDriver();
+	if (!bManualDriver && (bManualInputWasActive || bLeftLeverHeld || bRightLeverHeld || PedalGas > 0.f || PedalBrake > 0.f))
+	{
+		ResetManualDriving();
+	}
+
+	SetActorTickEnabled(bCrewPawnActive && (IsLocalGunner() || bManualDriver));
 }
 
 void ATSCrewPawn::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	if (IsLocalManualDriver())
+	{
+		UpdateManualDriving();
+	}
+
+	// Everything below is the Gunner's. Tick now also runs for a manual Driver, and UpdateGunnerAim
+	// sends an aim point to the server unconditionally - without this gate the Driver would start
+	// steering the turret.
+	if (!IsLocalGunner())
+	{
+		return;
+	}
 
 	// Flat screen: keep the aim command honest. Nothing here moves the player - the basket does that.
 	if (IsGunnerMouseDrivingGun())

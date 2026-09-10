@@ -801,58 +801,65 @@ public:
 	// NOTE the Details panel lists rotation as X/Y/Z = Roll/Pitch/Yaw. Typing into these properties
 	// in the editor uses that same order, so values can be copied across as-is; only C++ constructors
 	// take (Pitch, Yaw, Roll). That mismatch has already put a tank upside down once.
+	// DEFAULTS ARE THE MEASURED VK1602 POSES, deliberately, not zero. Stored as Blueprint overrides
+	// these were wiped THREE times - by the editor's reload-assets modal, by a binary merge conflict,
+	// and by another session re-saving BP_VK1602Leopard_Controller_Chaos from an older copy - and each
+	// time every control collapsed to a zero pose, which reads as "no rest pose and no animation", not
+	// as lost data. As C++ defaults they survive all three: a Blueprint that stores nothing still gets
+	// them. Another tank's interior overrides them in its own Blueprint; on a tank with no rigged
+	// interior they are simply never read.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator GasPedalRestRotation = FRotator::ZeroRotator;
+	FRotator GasPedalRestRotation = FRotator(-82.780956f, 76.474784f, -104.122554f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator GasPedalPressedRotation = FRotator::ZeroRotator;
+	FRotator GasPedalPressedRotation = FRotator(-82.780956f, 76.474784f, -104.122554f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator BrakePedalRestRotation = FRotator::ZeroRotator;
+	FRotator BrakePedalRestRotation = FRotator(-85.945284f, -33.590524f, 90.408865f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator BrakePedalPressedRotation = FRotator::ZeroRotator;
+	FRotator BrakePedalPressedRotation = FRotator(-85.945369f, -33.588752f, 110.407088f);
 
 	// Levers get their own pair each: they are mirrored geometry, so one pose pair mirrored in code
 	// would only be right if the rigger mirrored them exactly. Measuring both removes the guess.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator LeftLeverRestRotation = FRotator::ZeroRotator;
+	FRotator LeftLeverRestRotation = FRotator(-89.676731f, 100.339338f, -104.799808f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator LeftLeverPulledRotation = FRotator::ZeroRotator;
+	FRotator LeftLeverPulledRotation = FRotator(-89.676731f, 100.339338f, -94.799808f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator RightLeverRestRotation = FRotator::ZeroRotator;
+	FRotator RightLeverRestRotation = FRotator(-87.327567f, -63.007877f, 58.656313f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator RightLeverPulledRotation = FRotator::ZeroRotator;
+	FRotator RightLeverPulledRotation = FRotator(-87.327567f, -63.007877f, 68.656313f);
 
 	// The controls TRANSLATE as well as rotate - the VK1602's gas pedal moves about 0.035 on X and
 	// 0.073 on Y between rest and pressed, which a rotation-only version silently dropped. Left at
 	// zero these are ignored, so a control that only pivots needs nothing set here.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector GasPedalRestLocation = FVector::ZeroVector;
+	FVector GasPedalRestLocation = FVector(1.525485f, -0.058008f, -0.348026f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector GasPedalPressedLocation = FVector::ZeroVector;
+	FVector GasPedalPressedLocation = FVector(1.455214f, -0.000887f, -0.343073f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector BrakePedalRestLocation = FVector::ZeroVector;
+	FVector BrakePedalRestLocation = FVector(1.128539f, -0.026828f, -0.623563f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector BrakePedalPressedLocation = FVector::ZeroVector;
+	FVector BrakePedalPressedLocation = FVector(1.128539f, -0.026828f, -0.623563f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector LeftLeverRestLocation = FVector::ZeroVector;
+	FVector LeftLeverRestLocation = FVector(1.269585f, -0.114225f, -0.468422f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector LeftLeverPulledLocation = FVector::ZeroVector;
+	FVector LeftLeverPulledLocation = FVector(1.269585f, -0.114225f, -0.468422f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector RightLeverRestLocation = FVector::ZeroVector;
+	FVector RightLeverRestLocation = FVector(1.286263f, -0.106559f, -0.422223f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector RightLeverPulledLocation = FVector::ZeroVector;
+	FVector RightLeverPulledLocation = FVector(1.286263f, -0.106559f, -0.422223f);
 
 	// Paired with the rotation accessors; feed these into the same Transform (Modify) Bone node's
 	// Translation pin, also in Parent Bone Space with Translation Mode Replace Existing.
@@ -864,6 +871,43 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
 	FVector GetInteriorLeverLocation(bool bLeft) const;
+
+public:
+	// --- Manual (VR hand) driving: where the levers can be GRABBED ------------------------------
+	// A socket OR bone name on whichever skeletal mesh carries it - the interior mesh on the VK1602.
+	// Defaults are the lever bones. If the pivot is too far from where a hand naturally closes on the
+	// handle, add a socket at the handle in the skeleton and name it here - no code change.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
+	FName LeftLeverGrabSocket = TEXT("b_L_Lever");
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
+	FName RightLeverGrabSocket = TEXT("b_R_Lever");
+
+	// How close, in cm, a closing hand must be to the grab point to take hold of the lever.
+	//
+	// 60, not a tidy 30, because of MEASURED geometry: on the VK1602 the default grab points are the
+	// lever PIVOT bones, which sit on the floor ~89cm below the driver's head (tank-local z 62 vs the
+	// DriverSeat's 151) and only ~5cm apart. A hand closed on the handle is roughly 40-60cm from the
+	// pivot, so 30 would demand reaching to the floor. Point LeftLeverGrabSocket/RightLeverGrabSocket
+	// at sockets placed on the handle tips and this can come back down to ~15.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving", meta = (ClampMin = "1.0"))
+	float LeverGrabRadius = 60.f;
+
+	// Direction the hand moves to PULL a lever, in the tank's own space. Default is backwards, towards
+	// the driver. Tank space rather than world, so the pull does not change as the hull turns.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
+	FVector LeverPullAxisLocal = FVector(-1.f, 0.f, 0.f);
+
+	// Hand travel, in cm along LeverPullAxisLocal, that counts as a fully pulled lever.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving", meta = (ClampMin = "1.0"))
+	float LeverPullDistance = 20.f;
+
+	// World location of a lever's grab point, from whichever skeletal mesh owns that socket/bone.
+	// False when no mesh on this tank has it - the lever simply cannot be grabbed then.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior|Manual Driving")
+	bool GetLeverGrabLocation(bool bLeft, FVector& OutLocation) const;
+
+public:
 
 	// How fast the controls chase the input, in units per second. Raw input is a STEP - a stick or a
 	// key goes 0 -> 1 in one frame - and a pedal that teleports reads as broken. 0 disables smoothing.

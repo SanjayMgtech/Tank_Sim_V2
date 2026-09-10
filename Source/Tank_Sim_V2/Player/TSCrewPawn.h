@@ -48,6 +48,13 @@ public:
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 	virtual void Tick(float DeltaSeconds) override;
 
+	// The Manual (VR hand) drive mapping, as a pure function so it can be tested without a headset:
+	// throttle = gas - brake, steering = right lever - left lever. A tracked vehicle turns towards the
+	// side whose lever is pulled, so the LEFT lever alone gives negative (left) steering - the same
+	// sign the stick and the interior lever animation already use.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Control")
+	static FVector2D ComputeManualDriveInput(float Gas, float Brake, float LeftPull, float RightPull);
+
 	// ---------------------------------------------------------------------
 	// Play mode - which of the two crew pawns this class IS.
 	//
@@ -308,6 +315,20 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputAction> IA_RequestIntel;
 
+	// --- Manual (VR hand) driving: active only for the local Driver in ETSDriveControlMode::Manual.
+	// Triggers are the PEDALS (a seated VR player has no feet on anything); grips take the LEVERS.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_DrivePedalGas;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_DrivePedalBrake;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_LeverGripLeft;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_LeverGripRight;
+
 	// Extension point for hand-interaction with cockpit levers/switches - not prescribed by the doc.
 	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|VR")
 	void OnInteractPressed();
@@ -416,6 +437,40 @@ private:
 
 	// True only for the local player who currently holds the Gunner seat.
 	bool IsLocalGunner() const;
+
+	// Local Driver in Manual mode - the only player the pedal/lever inputs apply to.
+	bool IsLocalManualDriver() const;
+
+	void Input_PedalGas(const FInputActionValue& Value);
+	void Input_PedalGasReleased(const FInputActionValue& Value);
+	void Input_PedalBrake(const FInputActionValue& Value);
+	void Input_PedalBrakeReleased(const FInputActionValue& Value);
+	void Input_LeverGripLeftPressed(const FInputActionValue& Value);
+	void Input_LeverGripLeftReleased(const FInputActionValue& Value);
+	void Input_LeverGripRightPressed(const FInputActionValue& Value);
+	void Input_LeverGripRightReleased(const FInputActionValue& Value);
+
+	// Take hold of a lever if the closing hand is within reach of its grab point. Logs the distance
+	// either way, so a first headset test says how far off the hands are rather than just "nothing".
+	void TryGrabLever(bool bLeft);
+	void ReleaseLever(bool bLeft);
+
+	// Per tick while a local manual Driver: turn held levers + pedals into a drive command.
+	void UpdateManualDriving();
+
+	// Clears every manual input and, if one was being sent, sends the terminal (0,0) - the same STOP
+	// the stick sends on release, and for the same reason.
+	void ResetManualDriving();
+
+	float PedalGas = 0.f;
+	float PedalBrake = 0.f;
+	bool bLeftLeverHeld = false;
+	bool bRightLeverHeld = false;
+	FVector LeftGrabStartLocal = FVector::ZeroVector;    // hand position in TANK space at grab
+	FVector RightGrabStartLocal = FVector::ZeroVector;
+	float LeftLeverPull = 0.f;
+	float RightLeverPull = 0.f;
+	bool bManualInputWasActive = false;
 
 	// --- Gunner aim command -----------------------------------------------------------------------
 	// True when this pawn's mouse should be steering the launcher instead of turning the view.

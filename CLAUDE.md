@@ -3097,3 +3097,99 @@ The rest still owed:
 - driving turns the compass while the tank stays put; traversing swings the launcher
 - `TSVision night` / `thermal` visibly change the feed (needs a station with a render target)
 - two-window listen server: the client's blip moves on the host's radar and vice versa
+
+
+## 🖐 Manual (VR hand) driving — pedals on the triggers, levers on the grips (2026-09-10)
+
+Fills the gap left by the Stick/Levers switch: `ETSDriveControlMode::Manual` used to mean only "the
+stick is off". It now drives the tank from the hands. Everything lives on `ATSCrewPawn` and is gated
+on `IsLocalManualDriver()` - local controller, Driver role, Manual mode - so no other seat or mode
+is affected.
+
+| Control | Binding (`IMC_Driver`) | Action |
+|---|---|---|
+| Gas pedal | `*_Right_Trigger_Axis` | `IA_DrivePedalGas` (Axis1D) |
+| Brake pedal | `*_Left_Trigger_Axis` | `IA_DrivePedalBrake` (Axis1D) |
+| Left lever | `OculusTouch/Vive_Left_Grip_Click`, `ValveIndex_Left_Grip_Force` | `IA_LeverGripLeft` (Bool) |
+| Right lever | same, right hand | `IA_LeverGripRight` (Bool) |
+
+**Pedals are on the triggers because a seated VR player has no feet on anything** - a stated design
+choice, not a limitation to route around. Analog triggers map naturally onto pedal pressure.
+
+**The grips are ALREADY bound in `IMC_Shared`** (left -> `IA_Grab`, right -> `IA_Interact`). The two
+lever-grip actions therefore have **`bConsumeInput = false`**; with the default `true`, the Driver
+context (priority 1) would silently swallow those shared actions for the driver.
+
+### The mapping
+`ComputeManualDriveInput(Gas, Brake, LeftPull, RightPull)` -> `(throttle = gas - brake,
+steering = right - left)`, clamped. Static and BlueprintPure specifically so it can be tested
+without a headset - 7/7 cases pass, including both levers cancelling and out-of-range clamping.
+A tracked vehicle turns towards the side whose lever is pulled, so the left lever alone gives
+negative steering - the same sign the stick and the interior lever animation already use.
+
+It then goes out through the **same `ServerSetDriveInput` the stick uses**, every frame while
+non-zero (the RPC is Unreliable and the server's dead-man switch releases after 0.5s), with one
+terminal `(0,0)` on the transition to idle. Because it lands in the replicated `CurrentDriveInput`,
+**the interior lever and pedal animation follows the hands for free** - the hand owns the input,
+the input owns the pose. That is how the "both cannot own the pose" conflict actually resolves.
+
+### How a lever is held
+Grip press -> `TryGrabLever`: the hand must be within `LeverGrabRadius` of the tank's
+`LeftLeverGrabSocket` / `RightLeverGrabSocket` (a socket OR bone name, found on whichever skeletal
+mesh has it). Left hand takes only the left lever, right hand only the right. The hand position is
+recorded in **tank space**, so driving along never reads as pulling. Pull =
+`dot(handDelta, LeverPullAxisLocal) / LeverPullDistance`, clamped 0..1. Release springs the lever
+back to rest. **Every grip press logs the measured distance**, grabbed or not:
+```
+[ManualDrive] Left grip: hand 42.3 cm from lever grab point (reach 60.0) -> GRABBED
+```
+
+### ⚠ Measured: the lever bones are PIVOTS on the floor, not handles
+```
+LEFT  grab point  tank-local (127.0, -46.8,  62.0)   93cm from DriverSeat
+RIGHT grab point  tank-local (128.6, -42.2,  61.3)   94cm from DriverSeat
+DriverSeat (head) tank-local (102.1, -40.9, 151.3)
+```
+`b_L_Lever` / `b_R_Lever` are ~89cm below the driver's head and ~5cm apart. The skeleton has no
+handle bone, so the handle position is mesh geometry, not skeleton data. The guessed 30cm radius
+would have required reaching to the floor; it is **60** as an interim. The precise fix is data, not
+code: place `LeverHandle_L` / `LeverHandle_R` sockets on the handle tips in `Tank_New_Skeleton` and
+point the two grab-socket properties at them, then drop the radius to ~15.
+
+### ⚠ Gate the Gunner's tick work when adding another tick user
+`Tick` used to be enabled only for a local Gunner, so it called `UpdateGunnerAim()` unconditionally
+- and that SENDS an aim point to the server. Enabling tick for a manual Driver without gating it
+would have had the Driver steering the turret. `Tick` now returns before the Gunner work unless
+`IsLocalGunner()`. Any future tick user needs the same care.
+
+### Leaving Manual cannot strand an input
+`UpdateAimTickEnabled` (re-run on every assignment change, mode changes included) calls
+`ResetManualDriving` whenever the player stops being a manual Driver while anything is held,
+sending the terminal STOP if a command was going out.
+
+### The interior poses are now C++ DEFAULTS
+They were wiped from `BP_VK1602Leopard_Controller_Chaos` three times - the reload-assets modal, a
+binary merge conflict, and another session re-saving the Blueprint from an older copy (`be83ca5`).
+Each time every control collapsed to a zero pose. As C++ defaults, a Blueprint that stores nothing
+still gets them; delta serialisation means the Blueprint only ever stores a value that DIFFERS from
+the default, so there is nothing left for a stale save to clobber. Verified: the VK Blueprint reads
+gas travel `0.090694` and brake roll delta `19.998` with no override of its own.
+
+### Verified vs owed
+Verified: build clean; T0 (21 descriptions, 0 problems) and T1 (54 XR keys, 0 mismatches) pass with
+the new actions; the four actions are assigned on `BP_TSVRPawn` and survive a package reload; the
+drive mapping is numerically correct; both lever grab points resolve on the real interior mesh.
+
+**Owed a headset test:** grab reach (60cm from the pivot is a measured-geometry estimate), the pull
+direction (`LeverPullAxisLocal` defaults to backwards, -X), and the Index grip, which has no
+`Grip_Click` and uses `Grip_Force` on a Boolean action exactly as `IMC_Shared` already does.
+
+### ⚠ Editor crashed at EXIT inside the Python plugin (2026-09-10) - keep script state local
+`EXCEPTION_ACCESS_VIOLATION` in `python311` / `UnrealEditor_PythonScriptPlugin`, logged AFTER
+`LogExit: Preparing to exit` - i.e. during shutdown, after every package had saved. Nothing was
+lost and the next launch showed no recovery modal. The dump carries module names only, no symbols,
+so the cause is **not proven**. Leading suspect: `run_python` calls had left module-level references
+to engine objects (CDO handles, and a bound UFUNCTION: `f = unreal.TSCrewPawn.compute_manual_drive_input`),
+which Python then touched after the engine had freed them. Cheap to avoid, so do: put `run_python`
+bodies inside a function and `del` it afterwards, and never park a PIE actor in `builtins` across
+PIE teardown.
