@@ -3263,3 +3263,29 @@ alive, because `FChaosVehicleManager` holds weak pointers and `check()`s them on
 `Bringing World /Temp/Untitled_N` line in the log must be followed by a `CleanupWorld for Untitled`.
 A missing one is a leaked world. Verified after the fix: 4 of 4 cleaned up, 5 forced GCs, and a
 graceful editor close with no crash dir and 0 ensures.
+
+## 🖐 Visible VR hands on `BP_TSVRPawn` (2026-09-10)
+The crew pawn's `LeftHand` / `RightHand` are bare `MotionControllerComponent`s, and UE 5.7 motion
+controllers render nothing on their own, so the hands were **invisible** in the headset. Two
+`BP_MannequinsXR` components now ride them, with values copied verbatim from the VR template's
+`BP_XRPawn` (`HandLeft` / `HandRight`): `SKM_MannyXR_left/right`, `ABP_MannequinsXR`, offset
+`(-2.98, ∓3.5, 4.56)`, rotation `(P ∓25, Y -180/0, R 90)`, `bMirror` true on the left only. They are
+Blueprint data (RULE 8); C++ has no reference to them. They sit in the idle pose; closing the fingers
+on grip is not wired yet.
+
+Their variable names are the auto-generated `BP_MannequinsXR` / `BP_MannequinsXR1`, on purpose:
+
+### ⛔ Adding an SCS component under an INHERITED NATIVE parent - what crashed, what works
+- `blueprint_query add_component` with `parent: LeftHand` answers `Parent component not found` (it
+  only sees SCS parents, like `reparent_component`). **It still leaves a half-made template behind
+  in memory** under the name you asked for.
+- `SubobjectDataSubsystem.add_new_subobject(AddNewSubobjectParams(parent_handle=<native handle>,
+  new_class=..., blueprint_context=bp))` from Python **works** - it is what the Components panel
+  itself calls - and attaches correctly to the native parent (verified on a spawned instance).
+- **`rename_subobject` then CRASHED THE EDITOR**, a fatal assert rather than an error:
+  `Renaming an object (..._GEN_VARIABLE) on top of an existing object (HandMeshLeft_GEN_VARIABLE) is
+  not allowed` (`Obj.cpp:349`) - the leftover from the failed `add_component` held the name. Nothing
+  was saved, so nothing was lost, but it cost a crash and a relaunch.
+
+So: after ANY failed add, relaunch (or pick a name nothing has touched) before renaming. Renaming
+these two to `HandMeshLeft` / `HandMeshRight` is safe in the Components panel by hand.
