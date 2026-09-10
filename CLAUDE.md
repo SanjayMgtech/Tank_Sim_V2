@@ -3244,3 +3244,22 @@ FEEL right is a human in the headset, last.
 transient world - no `TSTeamSpawn_TeamA` actor (there is no level, so the tank drops at the
 world-origin fallback), `UTSVoiceSubsystem` with no voice plugin loaded, and missing engine editor
 icons. A NEW warning class appearing here is worth reading; these three are not.
+
+### ⚠ A test world MUST be destroyed in TearDown — or the editor crashes minutes later, or at exit
+Two editor crashes on 2026-09-10 came from test worlds that were never destroyed. They showed up
+~25 minutes after a green run, or on closing the editor, so nothing pointed back at the tests:
+```
+Assertion failed: Vehicle != 0   ChaosVehicleManager.cpp:137          <- Pipeline test (real VK1602)
+Ensure: Tickable subsystem MassSignalSubsystem /Temp/Untitled_2 ... destroyed while still initialized
+  then EXCEPTION_ACCESS_VIOLATION in CoreUObject                      <- Flow test
+```
+**`UGameInstance::Shutdown()` does NOT destroy the world.** It only drops the WorldContext, so the
+world lives on until a later GC or engine exit, which tears it down out of order. Every fixture now
+ends with `GEngine->DestroyWorldContext(World); World->DestroyWorld(false);`. A fixture that spawns
+a Chaos vehicle also `Destroy()`s each `AWheeledVehiclePawn` FIRST, while its physics scene is still
+alive, because `FChaosVehicleManager` holds weak pointers and `check()`s them on the way out.
+
+**Check for a leak without waiting for a crash:** after `run_automation_tests`, every
+`Bringing World /Temp/Untitled_N` line in the log must be followed by a `CleanupWorld for Untitled`.
+A missing one is a leaked world. Verified after the fix: 4 of 4 cleaned up, 5 forced GCs, and a
+graceful editor close with no crash dir and 0 ensures.

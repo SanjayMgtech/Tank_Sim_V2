@@ -29,7 +29,9 @@
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/WorldSettings.h"
+#include "WheeledVehiclePawn.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
@@ -175,14 +177,45 @@ namespace
 			return Pawn;
 		}
 
+		// This teardown CRASHED THE EDITOR in its first version, ~25 minutes after a green run:
+		//   Assertion failed: Vehicle != 0   ChaosVehicleManager.cpp:137   (called from GC)
+		// Two engine facts combine into that:
+		//  - UGameInstance::Shutdown does NOT destroy the world - it only clears WorldContext - so the
+		//    test world lived on until some later garbage collection picked it up;
+		//  - FChaosVehicleManager holds WEAK pointers to its vehicles and check()s each one as its
+		//    destructor removes them. Collected out of order, a vehicle is already gone when the
+		//    manager dies with it still listed.
+		// So: destroy every Chaos vehicle first, while its physics scene is alive - OnDestroyPhysicsState
+		// then removes it from the manager with a valid pointer - and destroy the world HERE, not in a
+		// GC nobody is watching. The flow tests never hit this because their stand-in tank is not a
+		// Chaos vehicle; anything spawning a real tank must tear down like this.
 		void TearDown()
 		{
+			if (World)
+			{
+				TArray<AActor*> Vehicles;
+				for (TActorIterator<AWheeledVehiclePawn> It(World); It; ++It)
+				{
+					Vehicles.Add(*It);
+				}
+				for (AActor* Vehicle : Vehicles)
+				{
+					Vehicle->Destroy();
+				}
+			}
+
 			if (GameInstance)
 			{
 				GameInstance->Shutdown();
 				GameInstance = nullptr;
 			}
-			World = nullptr;
+
+			if (World)
+			{
+				GEngine->DestroyWorldContext(World);
+				World->DestroyWorld(false);
+				World = nullptr;
+			}
 		}
 	};
 }
