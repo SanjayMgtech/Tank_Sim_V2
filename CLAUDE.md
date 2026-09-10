@@ -3289,3 +3289,57 @@ Their variable names are the auto-generated `BP_MannequinsXR` / `BP_MannequinsXR
 
 So: after ANY failed add, relaunch (or pick a name nothing has touched) before renaming. Renaming
 these two to `HandMeshLeft` / `HandMeshRight` is safe in the Components panel by hand.
+
+## ✋ Lever handles, grip feedback and firing haptics (2026-09-10)
+Asked for: "grip the TOP of the lever", "feedback that I am holding it", "a point showing where to
+hold", "haptics on shooting". All four done; test `TankSim.VR.ManualDriving.Feedback` covers what a
+transient world can see.
+
+### Grab points are now measured HANDLE sockets
+`LeverHandle_L` / `LeverHandle_R` on `Tank_New_Skeleton`, parented to `b_L_Lever` / `b_R_Lever`, are
+the new defaults of `LeftLeverGrabSocket` / `RightLeverGrabSocket`. Placed from the mesh, not by eye:
+GeometryScript `copy_mesh_from_skeletal_mesh` -> `get_largest_vertex_bone_weight` per vertex -> the
+388 vertices skinned to each lever -> centroid of the top 6cm of a 69cm rod -> into bone space.
+Verified on a spawned mesh at 0.00cm from the measured centroid. Reach is now 15cm (was 60 while the
+grab points were floor pivots).
+
+- Sockets go on via **`animation_query add_socket`**. Python cannot do it: `SkeletalMeshSocket.socket_name`
+  is read-only to `set_editor_property`.
+- These bones carry a **x100 scale** (bone-space units are metres), so socket offsets look tiny (0.666).
+
+### ⚠ The authored "pulled" lever pose moves the handle FORWARD
+Composing the C++ pose pair onto the parent bone: rest -> pulled (roll +10) moves the handle
+**11.6cm along +X, away from the driver**. The rest pose itself sits ~20° back from the mesh's bind
+pose, putting the handle ~31cm from the driver's head, so a pull-BACK pose would drive it into the
+chest. `LeverPullAxisLocal = +X`, `LeverPullDistance = 11.6`: the handle stays under the hand 1:1.
+To make it a pull instead: re-author the pulled pose at roll -10 and flip the axis to -X.
+
+### The held lever is drawn from the HAND on the driver's own machine
+`ATSTankControllerBase::SetLocalLeverPullOverride` - local, never replicated, unsmoothed. Needed
+because steering is right-minus-left: both levers pulled equally is zero steering, so the replicated
+pose would leave both levers at rest in the player's hands. Other crew still see the
+steering-derived pose. The crew pawn tracks which tank it overrides (`LeverOverrideTank`) so a seat
+change cannot strand the override on the old tank.
+
+### Feedback cues (all `ATSCrewPawn` properties, assets set on `BP_TSVRPawn` - RULE 2)
+| Cue | How |
+|---|---|
+| where to hold | glowing marker on each handle socket (`/Engine/BasicShapes/Sphere` + `M_SimpleGlow`, 4cm), amber; **green** when the hand is in reach; hidden while held; local Driver only |
+| in reach | light haptic tick on entering reach |
+| grabbed | full haptic pulse + hand closes (`PoseAlphaGrasp`=1) + **hand drawn on the handle** (hand mesh shifted by the controller-to-socket gap; the socket rides the animated bone) |
+| missed grip | hand half-closes (0.5), no haptic |
+| end of travel | haptic pulse when pull reaches 1, re-armed below 0.9 |
+| released | soft pulse, hand opens, hand back on its controller |
+| main cannon | full pulse on BOTH hands |
+| machine gun | light pulse on the left hand every 0.08s while held |
+
+- Haptics use **`PlayHapticEffect`** with the template's `/Game/XRFramework/Haptics/GrabHapticEffect`
+  (`HapticFeedbackEffect_Curve`), not `SetHapticsByValue`: OpenXR applies a by-value vibration for
+  ONE frame (`duration = CurrentDeltaTime`), so a pulse would need re-sending every tick.
+- `PoseAlphaGrasp` is set **by name through reflection** (`FDoubleProperty` - Blueprint floats are
+  doubles), because `ABP_MannequinsXR` is a Blueprint type. The VR template drives the same variable.
+- Firing haptics play on the INPUT, locally - immediate, but they also play for a shot the server
+  then refuses (reloading).
+
+Owed a headset: whether 15cm reach, the 4cm marker, and the haptic strengths feel right. All are
+`EditDefaultsOnly` on `BP_TSVRPawn` / the tank - tune in Class Defaults, no rebuild.

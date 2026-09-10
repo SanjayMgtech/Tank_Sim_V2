@@ -36,6 +36,11 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "MotionControllerComponent.h"
+#include "Animation/AnimInstance.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Haptics/HapticFeedbackEffect_Base.h"
 #include "Player/TSCrewPawn.h"
 #include "Player/TSDesktopPawn.h"
 #include "Player/TSTankPlayerController.h"
@@ -85,6 +90,38 @@ struct FTSManualDrivingTestAccess
 	}
 
 	static void TickInterior(ATSTankControllerBase* Tank, float DeltaSeconds) { Tank->UpdateInteriorControlState(DeltaSeconds); }
+	static bool LeverOverride(const ATSTankControllerBase* Tank) { return Tank->bLocalLeverOverride; }
+
+	// --- Feedback ---
+	static void Feedback(ATSCrewPawn* Pawn) { Pawn->UpdateLeverFeedback(); }
+	static USkeletalMeshComponent* HandMesh(const ATSCrewPawn* Pawn, bool bLeft) { return Pawn->FindHandMesh(bLeft); }
+	static UStaticMeshComponent* Indicator(const ATSCrewPawn* Pawn, bool bLeft) { return bLeft ? Pawn->LeftLeverIndicator.Get() : Pawn->RightLeverIndicator.Get(); }
+	static bool InReach(const ATSCrewPawn* Pawn, bool bLeft) { return bLeft ? Pawn->bLeftHandInReach : Pawn->bRightHandInReach; }
+	static float MissGrasp(const ATSCrewPawn* Pawn) { return Pawn->LeverMissGraspAlpha; }
+	static const UObject* HapticEffect(const ATSCrewPawn* Pawn) { return Pawn->LeverHapticEffect; }
+	static const UObject* IndicatorMesh(const ATSCrewPawn* Pawn) { return Pawn->LeverGrabIndicatorMesh; }
+
+	// The hand AnimBP's grasp float, read the same way the pawn writes it. -1 = no anim instance,
+	// -2 = no such variable.
+	static float Grasp(const ATSCrewPawn* Pawn, bool bLeft)
+	{
+		const USkeletalMeshComponent* Mesh = Pawn->FindHandMesh(bLeft);
+		const UAnimInstance* Anim = Mesh ? Mesh->GetAnimInstance() : nullptr;
+		if (!Anim)
+		{
+			return -1.f;
+		}
+		const FProperty* Prop = Anim->GetClass()->FindPropertyByName(Pawn->HandGraspPoseVariable);
+		if (const FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Prop))
+		{
+			return static_cast<float>(DoubleProp->GetPropertyValue_InContainer(Anim));
+		}
+		if (const FFloatProperty* FloatProp = CastField<FFloatProperty>(Prop))
+		{
+			return FloatProp->GetPropertyValue_InContainer(Anim);
+		}
+		return -2.f;
+	}
 };
 
 namespace
@@ -152,9 +189,9 @@ namespace
 		//    switch stereo on, so the test cannot touch the editor's viewport;
 		//  - the Blueprint rather than the native class, because the native class carries no input
 		//    assets and the pawn rightly logs an ERROR about that - which fails any automation test.
-		ATSCrewPawn* MakeCrew(ATSTankPlayerController*& OutPC) const
+		ATSCrewPawn* MakeCrew(ATSTankPlayerController*& OutPC, const TCHAR* PawnClassPath = DesktopPawnClassPath) const
 		{
-			UClass* PawnClass = LoadClass<ATSCrewPawn>(nullptr, DesktopPawnClassPath);
+			UClass* PawnClass = LoadClass<ATSCrewPawn>(nullptr, PawnClassPath);
 			if (!PawnClass)
 			{
 				return nullptr;
@@ -536,18 +573,30 @@ bool FTSManualDrivingPipelineTest::RunTest(const FString& Parameters)
 	Access::GasReleased(Driver);
 
 	// --- The interior animation follows the hands ------------------------------------------------
+	// On the Driver's own machine each lever shows ITS OWN pull (local override), not the net steering:
+	// right fully + left half is steering +0.5, but the levers must sit at 1.0 and 0.5 - each under
+	// the hand holding it. The net-steering view would show the left lever at rest in the left hand.
+	TestTrue(TEXT("the manual Driver's hands own this machine's interior levers"), Access::LeverOverride(Tank));
 	for (int32 Frame = 0; Frame < 120; ++Frame)
 	{
 		Access::TickInterior(Tank, 1.f / 30.f);
 	}
-	TestTrue(FString::Printf(TEXT("interior RIGHT lever alpha follows (got %.3f)"), Tank->GetInteriorRightLeverAlpha()),
-		FMath::IsNearlyEqual(Tank->GetInteriorRightLeverAlpha(), 0.5f, 0.02f));
-	TestTrue(TEXT("interior LEFT lever stays at rest while steering right"), Tank->GetInteriorLeftLeverAlpha() < 0.02f);
-	const float RestRoll = Tank->RightLeverRestRotation.Roll;
-	const float PulledRoll = Tank->RightLeverPulledRotation.Roll;
-	const float GotRoll = Tank->GetInteriorLeverRotation(false).Roll;
-	TestTrue(FString::Printf(TEXT("the right lever BONE sits halfway between its measured poses (%.2f, expect %.2f)"),
-		GotRoll, (RestRoll + PulledRoll) * 0.5f), FMath::IsNearlyEqual(GotRoll, (RestRoll + PulledRoll) * 0.5f, 0.2f));
+	TestTrue(FString::Printf(TEXT("interior RIGHT lever sits where the right hand holds it (got %.3f, expect 1.0)"), Tank->GetInteriorRightLeverAlpha()),
+		FMath::IsNearlyEqual(Tank->GetInteriorRightLeverAlpha(), 1.f, 0.02f));
+	TestTrue(FString::Printf(TEXT("interior LEFT lever shows its own half pull, not the net steering (got %.3f, expect 0.5)"), Tank->GetInteriorLeftLeverAlpha()),
+		FMath::IsNearlyEqual(Tank->GetInteriorLeftLeverAlpha(), 0.5f, 0.02f));
+
+	// Compared as quaternion angles, not Euler roll: both lever poses sit at pitch ~-89, right at the
+	// gimbal, where roll and yaw trade off and a halfway Rotator need not show a halfway roll.
+	auto PoseFraction = [](const FRotator& Got, const FRotator& Rest, const FRotator& Pulled)
+	{
+		const double Full = Rest.Quaternion().AngularDistance(Pulled.Quaternion());
+		return Full > UE_KINDA_SMALL_NUMBER ? Rest.Quaternion().AngularDistance(Got.Quaternion()) / Full : 0.0;
+	};
+	const double RightFrac = PoseFraction(Tank->GetInteriorLeverRotation(false), Tank->RightLeverRestRotation, Tank->RightLeverPulledRotation);
+	const double LeftFrac = PoseFraction(Tank->GetInteriorLeverRotation(true), Tank->LeftLeverRestRotation, Tank->LeftLeverPulledRotation);
+	TestTrue(FString::Printf(TEXT("the right lever BONE is at its measured pulled pose (%.3f of the way)"), RightFrac), FMath::IsNearlyEqual(RightFrac, 1.0, 0.02));
+	TestTrue(FString::Printf(TEXT("the left lever BONE is halfway between its measured poses (%.3f of the way)"), LeftFrac), FMath::IsNearlyEqual(LeftFrac, 0.5, 0.02));
 
 	// --- Releasing and leaving -------------------------------------------------------------------
 	Access::Grip(Driver, false, false);
@@ -558,6 +607,139 @@ bool FTSManualDrivingPipelineTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("leaving Manual releases a lever still held"), Access::Held(Driver, true));
 	TestTrue(FString::Printf(TEXT("leaving Manual mid-pull sends the terminal STOP (got %.2f, %.2f)"), Input().X, Input().Y),
 		Near(Input(), FVector2D::ZeroVector));
+
+	TestFalse(TEXT("leaving Manual drops the local lever override"), Access::LeverOverride(Tank));
+	for (int32 Frame = 0; Frame < 120; ++Frame)
+	{
+		Access::TickInterior(Tank, 1.f / 30.f);
+	}
+	TestTrue(FString::Printf(TEXT("the interior levers go back to following the steering input (L %.3f, R %.3f)"),
+		Tank->GetInteriorLeftLeverAlpha(), Tank->GetInteriorRightLeverAlpha()),
+		Tank->GetInteriorLeftLeverAlpha() < 0.02f && Tank->GetInteriorRightLeverAlpha() < 0.02f);
+
+	Fx.TearDown();
+	return true;
+}
+
+// ------------------------------------------------------------------------------------------------
+// 5. Feedback on the real VR pawn: the handle marker, the reach cue, the hand closing and snapping
+//    onto the handle, and all of it undone on release and on leaving Manual.
+//    Haptics are fired but not asserted: a transient world has no controller to play them on.
+// ------------------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTSManualDrivingFeedbackTest,
+	"TankSim.VR.ManualDriving.Feedback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTSManualDrivingFeedbackTest::RunTest(const FString& Parameters)
+{
+	using Access = FTSManualDrivingTestAccess;
+
+	UClass* VKClass = LoadClass<APawn>(nullptr, VKTankClassPath);
+	if (!TestNotNull(TEXT("the VK1602 tank Blueprint loads"), VKClass))
+	{
+		return false;
+	}
+
+	FTSManualFixture Fx;
+	if (!TestTrue(TEXT("world with a live ATSGameMode"), Fx.Setup(VKClass)))
+	{
+		Fx.TearDown();
+		return false;
+	}
+
+	// The VR pawn this time: the visible hands and the feedback assets are BP_TSVRPawn data.
+	ATSTankPlayerController* PC = nullptr;
+	ATSCrewPawn* Driver = Fx.MakeCrew(PC, VRPawnClassPath);
+	if (!TestTrue(TEXT("a local VR crew pawn"), Driver && PC))
+	{
+		Fx.TearDown();
+		return false;
+	}
+	ATSTankPlayerState* PS = PC->GetPlayerState<ATSTankPlayerState>();
+	TestTrue(TEXT("Driver takes Team A"), Fx.GameMode->TryAssignTeam(PC, ETSTeamId::TeamA));
+	TestTrue(TEXT("Driver takes the Driver seat"), Fx.GameMode->TryAssignRole(PC, ETSCrewRole::Driver));
+	PS->SetDriveControlMode(ETSDriveControlMode::Manual);
+	ATSTankControllerBase* Tank = Cast<ATSTankControllerBase>(PS->GetAssignedTank());
+	if (!TestTrue(TEXT("the manual Driver of a real VK1602"), Tank && Access::IsLocalManualDriver(Driver)))
+	{
+		Fx.TearDown();
+		return false;
+	}
+
+	TestNotNull(TEXT("BP_TSVRPawn assigns the lever haptic effect"), Access::HapticEffect(Driver));
+	TestNotNull(TEXT("BP_TSVRPawn assigns the handle marker mesh"), Access::IndicatorMesh(Driver));
+	USkeletalMeshComponent* HandMesh = Access::HandMesh(Driver, true);
+	UMotionControllerComponent* Hand = Access::Hand(Driver, true);
+	FVector Grab;
+	if (!TestNotNull(TEXT("a visible hand mesh rides the left controller"), HandMesh)
+		|| !TestTrue(TEXT("the left handle socket resolves"), Hand && Tank->GetLeverGrabLocation(true, Grab)))
+	{
+		Fx.TearDown();
+		return false;
+	}
+	TestTrue(FString::Printf(TEXT("the hand's AnimBP exposes the grasp pose (read %.2f)"), Access::Grasp(Driver, true)),
+		Access::Grasp(Driver, true) >= 0.f);
+
+	// --- Out of reach: the marker shows where to hold; a grip there closes on nothing -------------
+	Hand->SetWorldLocation(Grab + FVector(0.f, 0.f, Tank->LeverGrabRadius + 20.f));
+	Access::Feedback(Driver);
+	UStaticMeshComponent* Marker = Access::Indicator(Driver, true);
+	if (TestNotNull(TEXT("a marker is created on the left handle"), Marker))
+	{
+		TestTrue(TEXT("the marker is visible on a free lever"), Marker->IsVisible());
+		TestTrue(FString::Printf(TEXT("the marker sits on the handle socket (%.2f cm off)"), FVector::Dist(Marker->GetComponentLocation(), Grab)),
+			FVector::Dist(Marker->GetComponentLocation(), Grab) < 0.1f);
+	}
+	TestFalse(TEXT("a hand out of reach is not flagged in reach"), Access::InReach(Driver, true));
+	Access::Grip(Driver, true, true);
+	TestFalse(TEXT("an out-of-reach grip takes nothing"), Access::Held(Driver, true));
+	TestTrue(FString::Printf(TEXT("a missed grip half-closes the hand (grasp %.2f)"), Access::Grasp(Driver, true)),
+		FMath::IsNearlyEqual(Access::Grasp(Driver, true), Access::MissGrasp(Driver), 0.01f));
+	Access::Grip(Driver, true, false);
+	TestTrue(TEXT("letting go opens the hand"), FMath::IsNearlyZero(Access::Grasp(Driver, true), 0.01f));
+
+	// --- In reach: flagged, grabbed, fist, hand drawn on the handle, marker hidden -----------------
+	const FVector Gap(0.f, 0.f, 6.f);
+	Hand->SetWorldLocation(Grab + Gap);
+	Access::Feedback(Driver);
+	TestTrue(TEXT("a hand within reach is flagged in reach"), Access::InReach(Driver, true));
+	const FVector RestRelative = HandMesh->GetRelativeLocation();
+	const FVector HandMeshBefore = HandMesh->GetComponentLocation();
+
+	Access::Grip(Driver, true, true);
+	TestTrue(TEXT("a grip in reach takes the lever"), Access::Held(Driver, true));
+	TestTrue(FString::Printf(TEXT("holding a lever closes the hand (grasp %.2f)"), Access::Grasp(Driver, true)),
+		FMath::IsNearlyEqual(Access::Grasp(Driver, true), 1.f, 0.01f));
+	Access::Update(Driver);
+	Access::Feedback(Driver);
+	const FVector Moved = HandMesh->GetComponentLocation() - HandMeshBefore;
+	TestTrue(FString::Printf(TEXT("the drawn hand snaps onto the handle - moved by the controller-to-handle gap (%.2f cm off)"),
+		FVector::Dist(Moved, -Gap)), FVector::Dist(Moved, -Gap) < 0.1f);
+	if (Marker)
+	{
+		TestFalse(TEXT("the marker hides while the lever is held"), Marker->IsVisible());
+	}
+	TestTrue(TEXT("this machine's interior lever follows the hand"), Access::LeverOverride(Tank));
+
+	// --- Release: hand back on the controller, marker back ----------------------------------------
+	Access::Grip(Driver, true, false);
+	Access::Update(Driver);
+	Access::Feedback(Driver);
+	TestTrue(FString::Printf(TEXT("released, the hand goes back on its controller (%.3f cm off)"),
+		FVector::Dist(HandMesh->GetRelativeLocation(), RestRelative)), FVector::Dist(HandMesh->GetRelativeLocation(), RestRelative) < 0.01f);
+	if (Marker)
+	{
+		TestTrue(TEXT("the marker comes back on release"), Marker->IsVisible());
+	}
+
+	// --- Leaving Manual clears every cue ----------------------------------------------------------
+	PS->SetDriveControlMode(ETSDriveControlMode::Analog);
+	if (Marker)
+	{
+		TestFalse(TEXT("leaving Manual hides the marker"), Marker->IsVisible());
+	}
+	TestFalse(TEXT("leaving Manual drops the lever override"), Access::LeverOverride(Tank));
 
 	Fx.TearDown();
 	return true;

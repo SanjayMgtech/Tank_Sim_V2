@@ -13,6 +13,11 @@
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "MotionControllerComponent.h"
+#include "Animation/AnimInstance.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Haptics/HapticFeedbackEffect_Base.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Components/WidgetInteractionComponent.h"
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
@@ -811,23 +816,44 @@ void ATSCrewPawn::Input_PedalBrakeReleased(const FInputActionValue& Value)
 	PedalBrake = 0.f;
 }
 
-void ATSCrewPawn::Input_LeverGripLeftPressed(const FInputActionValue& Value) { TryGrabLever(true); }
-void ATSCrewPawn::Input_LeverGripLeftReleased(const FInputActionValue& Value) { ReleaseLever(true); }
-void ATSCrewPawn::Input_LeverGripRightPressed(const FInputActionValue& Value) { TryGrabLever(false); }
-void ATSCrewPawn::Input_LeverGripRightReleased(const FInputActionValue& Value) { ReleaseLever(false); }
+// A closed fist means "you have the lever"; a half-closed hand means the grip closed on nothing.
+// Outside Manual mode the grip has no lever to miss, so it is just a fist.
+void ATSCrewPawn::Input_LeverGripLeftPressed(const FInputActionValue& Value)
+{
+	const bool bGrabbed = TryGrabLever(true);
+	SetHandGrasp(true, (bGrabbed || !IsLocalManualDriver()) ? 1.f : LeverMissGraspAlpha);
+}
 
-void ATSCrewPawn::TryGrabLever(bool bLeft)
+void ATSCrewPawn::Input_LeverGripLeftReleased(const FInputActionValue& Value)
+{
+	ReleaseLever(true);
+	SetHandGrasp(true, 0.f);
+}
+
+void ATSCrewPawn::Input_LeverGripRightPressed(const FInputActionValue& Value)
+{
+	const bool bGrabbed = TryGrabLever(false);
+	SetHandGrasp(false, (bGrabbed || !IsLocalManualDriver()) ? 1.f : LeverMissGraspAlpha);
+}
+
+void ATSCrewPawn::Input_LeverGripRightReleased(const FInputActionValue& Value)
+{
+	ReleaseLever(false);
+	SetHandGrasp(false, 0.f);
+}
+
+bool ATSCrewPawn::TryGrabLever(bool bLeft)
 {
 	if (!IsLocalManualDriver())
 	{
-		return;
+		return false;
 	}
 
 	const ATSTankControllerBase* Tank = GetAssignedTankController();
 	const UMotionControllerComponent* Hand = bLeft ? LeftHand.Get() : RightHand.Get();
 	if (!Tank || !Hand)
 	{
-		return;
+		return false;
 	}
 
 	const TCHAR* Side = bLeft ? TEXT("Left") : TEXT("Right");
@@ -838,7 +864,7 @@ void ATSCrewPawn::TryGrabLever(bool bLeft)
 			TEXT("[ManualDrive] %s lever: tank %s has no socket or bone '%s' - it cannot be grabbed."),
 			Side, *Tank->GetName(),
 			*(bLeft ? Tank->LeftLeverGrabSocket : Tank->RightLeverGrabSocket).ToString());
-		return;
+		return false;
 	}
 
 	// Left hand takes the left lever, right hand the right - the physical layout, and it means a hand
@@ -852,7 +878,7 @@ void ATSCrewPawn::TryGrabLever(bool bLeft)
 
 	if (!bInReach)
 	{
-		return;
+		return false;
 	}
 
 	// Recorded in TANK space, so driving along does not register as the hand pulling the lever.
@@ -861,16 +887,25 @@ void ATSCrewPawn::TryGrabLever(bool bLeft)
 	{
 		bLeftLeverHeld = true;
 		LeftGrabStartLocal = StartLocal;
+		bLeftAtEndStop = false;
 	}
 	else
 	{
 		bRightLeverHeld = true;
 		RightGrabStartLocal = StartLocal;
+		bRightAtEndStop = false;
 	}
+	PlayLeverHaptic(bLeft, LeverGrabHapticScale);
+	return true;
 }
 
 void ATSCrewPawn::ReleaseLever(bool bLeft)
 {
+	if (bLeft ? bLeftLeverHeld : bRightLeverHeld)
+	{
+		PlayLeverHaptic(bLeft, LeverReleaseHapticScale);
+	}
+
 	// A released lever springs back to rest, which is what a real tank's steering lever does.
 	if (bLeft)
 	{
@@ -886,7 +921,7 @@ void ATSCrewPawn::ReleaseLever(bool bLeft)
 
 void ATSCrewPawn::UpdateManualDriving()
 {
-	if (const ATSTankControllerBase* Tank = GetAssignedTankController())
+	if (ATSTankControllerBase* Tank = GetAssignedTankController())
 	{
 		const FTransform TankTransform = Tank->GetActorTransform();
 
@@ -902,6 +937,15 @@ void ATSCrewPawn::UpdateManualDriving()
 
 		LeftLeverPull = PullFor(bLeftLeverHeld, LeftHand.Get(), LeftGrabStartLocal);
 		RightLeverPull = PullFor(bRightLeverHeld, RightHand.Get(), RightGrabStartLocal);
+
+		// This machine's interior levers follow these hands directly. A seat change moves the
+		// override to the new tank; the old one gets its steering-driven levers back.
+		if (LeverOverrideTank.IsValid() && LeverOverrideTank.Get() != Tank)
+		{
+			LeverOverrideTank->SetLocalLeverPullOverride(false, 0.f, 0.f);
+		}
+		Tank->SetLocalLeverPullOverride(true, LeftLeverPull, RightLeverPull);
+		LeverOverrideTank = Tank;
 	}
 
 	ATSTankPlayerController* PC = GetTankController();
@@ -943,6 +987,209 @@ void ATSCrewPawn::ResetManualDriving()
 		}
 		bManualInputWasActive = false;
 	}
+
+	if (LeverOverrideTank.IsValid())
+	{
+		LeverOverrideTank->SetLocalLeverPullOverride(false, 0.f, 0.f);
+	}
+	LeverOverrideTank.Reset();
+
+	ClearLeverFeedback();
+}
+
+USkeletalMeshComponent* ATSCrewPawn::FindHandMesh(bool bLeft) const
+{
+	const UMotionControllerComponent* Hand = bLeft ? LeftHand.Get() : RightHand.Get();
+	if (!Hand)
+	{
+		return nullptr;
+	}
+	for (USceneComponent* Child : Hand->GetAttachChildren())
+	{
+		if (USkeletalMeshComponent* HandMesh = Cast<USkeletalMeshComponent>(Child))
+		{
+			return HandMesh;
+		}
+	}
+	return nullptr;
+}
+
+void ATSCrewPawn::SetHandGrasp(bool bLeft, float Alpha)
+{
+	USkeletalMeshComponent* HandMesh = FindHandMesh(bLeft);
+	UAnimInstance* Anim = HandMesh ? HandMesh->GetAnimInstance() : nullptr;
+	if (!Anim || HandGraspPoseVariable.IsNone())
+	{
+		return;
+	}
+
+	// By name: the hand's AnimBP is a Blueprint type C++ cannot name. Double first - a Blueprint
+	// "float" variable is a double since UE 5.0.
+	FProperty* Prop = Anim->GetClass()->FindPropertyByName(HandGraspPoseVariable);
+	if (FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Prop))
+	{
+		DoubleProp->SetPropertyValue_InContainer(Anim, Alpha);
+	}
+	else if (FFloatProperty* FloatProp = CastField<FFloatProperty>(Prop))
+	{
+		FloatProp->SetPropertyValue_InContainer(Anim, Alpha);
+	}
+	else if (!bWarnedNoGraspVariable)
+	{
+		bWarnedNoGraspVariable = true;
+		UE_LOG(LogTankSim, Warning, TEXT("[ManualDrive] hand AnimBP %s has no float '%s' - the hand cannot close on a lever."),
+			*Anim->GetClass()->GetName(), *HandGraspPoseVariable.ToString());
+	}
+}
+
+void ATSCrewPawn::PlayLeverHaptic(bool bLeft, float Scale) const
+{
+	PlayHaptic(LeverHapticEffect, bLeft ? EControllerHand::Left : EControllerHand::Right, Scale);
+}
+
+void ATSCrewPawn::PlayHaptic(UHapticFeedbackEffect_Base* Effect, EControllerHand Hand, float Scale) const
+{
+	if (!Effect || Scale <= 0.f)
+	{
+		return;
+	}
+	// PlayHapticEffect rather than SetHapticsByValue: OpenXR applies a by-value vibration for one
+	// frame only, so a pulse would have to be re-sent every tick. An effect asset plays out its own
+	// curve through the controller's haptic update.
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (PC && PC->IsLocalController())
+	{
+		PC->PlayHapticEffect(Effect, Hand, Scale);
+	}
+}
+
+void ATSCrewPawn::UpdateLeverFeedback()
+{
+	const ATSTankControllerBase* Tank = GetAssignedTankController();
+
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		const bool bLeft = Side == 0;
+		const UMotionControllerComponent* Hand = bLeft ? LeftHand.Get() : RightHand.Get();
+		const bool bHeld = bLeft ? bLeftLeverHeld : bRightLeverHeld;
+		const float Pull = bLeft ? LeftLeverPull : RightLeverPull;
+		bool& bInReach = bLeft ? bLeftHandInReach : bRightHandInReach;
+		bool& bAtEndStop = bLeft ? bLeftAtEndStop : bRightAtEndStop;
+		bool& bSnapped = bLeft ? bLeftHandSnapped : bRightHandSnapped;
+		FVector& RestRelative = bLeft ? LeftHandMeshRestRelative : RightHandMeshRestRelative;
+		TObjectPtr<UStaticMeshComponent>& Indicator = bLeft ? LeftLeverIndicator : RightLeverIndicator;
+		TObjectPtr<UMaterialInstanceDynamic>& IndicatorMID = bLeft ? LeftLeverIndicatorMID : RightLeverIndicatorMID;
+
+		FVector Grab = FVector::ZeroVector;
+		const bool bHasGrab = Tank && Hand && Tank->GetLeverGrabLocation(bLeft, Grab);
+
+		// "You can grab here": one light tick as the hand enters reach of a free handle.
+		const bool bNowInReach = bHasGrab && !bHeld
+			&& FVector::Dist(Hand->GetComponentLocation(), Grab) <= Tank->LeverGrabRadius;
+		if (bNowInReach && !bInReach)
+		{
+			PlayLeverHaptic(bLeft, LeverInReachHapticScale);
+		}
+		bInReach = bNowInReach;
+
+		// The lever bottoming out. Re-arms once it comes back off the stop, so it does not buzz on
+		// every frame spent resting against it.
+		if (bHeld && Pull >= 0.99f)
+		{
+			if (!bAtEndStop)
+			{
+				PlayLeverHaptic(bLeft, LeverEndStopHapticScale);
+				bAtEndStop = true;
+			}
+		}
+		else if (Pull < 0.9f)
+		{
+			bAtEndStop = false;
+		}
+
+		// Draw the held hand ON the handle: shift the hand mesh by exactly the gap between the
+		// controller and the grab socket. The socket rides the animated lever bone, so the hand is
+		// carried along as the lever moves.
+		if (USkeletalMeshComponent* HandMesh = FindHandMesh(bLeft))
+		{
+			if (bHeld && bHasGrab && bSnapHandToHeldLever)
+			{
+				if (!bSnapped)
+				{
+					RestRelative = HandMesh->GetRelativeLocation();
+					bSnapped = true;
+				}
+				const FTransform HandTransform = Hand->GetComponentTransform();
+				HandMesh->SetWorldLocation(HandTransform.TransformPosition(RestRelative) + (Grab - HandTransform.GetLocation()));
+			}
+			else if (bSnapped)
+			{
+				HandMesh->SetRelativeLocation(RestRelative);
+				bSnapped = false;
+			}
+		}
+
+		// The handle marker. Created on first need, and only here - so only on the local manual
+		// Driver's machine, where this runs. Absolute transform: it follows the socket, not the pawn.
+		if (bHasGrab && LeverGrabIndicatorMesh)
+		{
+			if (!Indicator)
+			{
+				Indicator = NewObject<UStaticMeshComponent>(this, bLeft ? TEXT("LeftLeverIndicator") : TEXT("RightLeverIndicator"));
+				Indicator->SetStaticMesh(LeverGrabIndicatorMesh);
+				Indicator->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+				Indicator->SetGenerateOverlapEvents(false);
+				Indicator->SetCastShadow(false);
+				Indicator->SetUsingAbsoluteLocation(true);
+				Indicator->SetUsingAbsoluteRotation(true);
+				Indicator->SetUsingAbsoluteScale(true);
+				Indicator->SetupAttachment(GetRootComponent());
+				Indicator->RegisterComponent();
+				const float MeshSize = FMath::Max(static_cast<float>(LeverGrabIndicatorMesh->GetBounds().BoxExtent.GetMax()) * 2.f, 1.f);
+				Indicator->SetWorldScale3D(FVector(LeverGrabIndicatorSize / MeshSize));
+				if (LeverGrabIndicatorMaterial)
+				{
+					IndicatorMID = UMaterialInstanceDynamic::Create(LeverGrabIndicatorMaterial, this);
+					Indicator->SetMaterial(0, IndicatorMID);
+				}
+			}
+			Indicator->SetWorldLocation(Grab);
+			Indicator->SetVisibility(!bHeld);
+			if (IndicatorMID)
+			{
+				IndicatorMID->SetVectorParameterValue(LeverGrabIndicatorColorParameter,
+					bInReach ? LeverIndicatorInReachColor : LeverIndicatorIdleColor);
+			}
+		}
+		else if (Indicator)
+		{
+			Indicator->SetVisibility(false);
+		}
+	}
+}
+
+void ATSCrewPawn::ClearLeverFeedback()
+{
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		const bool bLeft = Side == 0;
+		bool& bSnapped = bLeft ? bLeftHandSnapped : bRightHandSnapped;
+		if (bSnapped)
+		{
+			if (USkeletalMeshComponent* HandMesh = FindHandMesh(bLeft))
+			{
+				HandMesh->SetRelativeLocation(bLeft ? LeftHandMeshRestRelative : RightHandMeshRestRelative);
+			}
+			bSnapped = false;
+		}
+		if (UStaticMeshComponent* Indicator = bLeft ? LeftLeverIndicator.Get() : RightLeverIndicator.Get())
+		{
+			Indicator->SetVisibility(false);
+		}
+		SetHandGrasp(bLeft, 0.f);
+	}
+	bLeftHandInReach = bRightHandInReach = false;
+	bLeftAtEndStop = bRightAtEndStop = false;
 }
 
 bool ATSCrewPawn::IsLocalGunner() const
@@ -970,7 +1217,9 @@ void ATSCrewPawn::UpdateAimTickEnabled()
 	// Leaving Manual (mode change, seat change, parking this pawn) must not strand a held lever or a
 	// pressed pedal: clear them, and send the terminal STOP if a command was going out.
 	const bool bManualDriver = bCrewPawnActive && IsLocalManualDriver();
-	if (!bManualDriver && (bManualInputWasActive || bLeftLeverHeld || bRightLeverHeld || PedalGas > 0.f || PedalBrake > 0.f))
+	if (!bManualDriver && (bManualInputWasActive || bLeftLeverHeld || bRightLeverHeld || PedalGas > 0.f || PedalBrake > 0.f
+		|| LeverOverrideTank.IsValid() || bLeftHandSnapped || bRightHandSnapped
+		|| (LeftLeverIndicator && LeftLeverIndicator->IsVisible()) || (RightLeverIndicator && RightLeverIndicator->IsVisible())))
 	{
 		ResetManualDriving();
 	}
@@ -985,6 +1234,7 @@ void ATSCrewPawn::Tick(float DeltaSeconds)
 	if (IsLocalManualDriver())
 	{
 		UpdateManualDriving();
+		UpdateLeverFeedback();
 	}
 
 	// Everything below is the Gunner's. Tick now also runs for a manual Driver, and UpdateGunnerAim
@@ -1086,6 +1336,8 @@ void ATSCrewPawn::Input_FireMainCannon(const FInputActionValue& Value)
 	if (ATSTankPlayerController* PC = GetTankController())
 	{
 		PC->ServerFireMainCannon();
+		PlayHaptic(FireHapticEffect, EControllerHand::Left, MainCannonHapticScale);
+		PlayHaptic(FireHapticEffect, EControllerHand::Right, MainCannonHapticScale);
 	}
 }
 
@@ -1094,6 +1346,13 @@ void ATSCrewPawn::Input_FireMachineGun(const FInputActionValue& Value)
 	if (ATSTankPlayerController* PC = GetTankController())
 	{
 		PC->ServerFireMachineGun();
+
+		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		if (Now - LastMachineGunHapticTime >= MachineGunHapticInterval || Now < LastMachineGunHapticTime)
+		{
+			LastMachineGunHapticTime = Now;
+			PlayHaptic(FireHapticEffect, EControllerHand::Left, MachineGunHapticScale);
+		}
 	}
 }
 

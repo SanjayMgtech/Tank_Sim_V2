@@ -776,18 +776,42 @@ void ATSTankControllerBase::UpdateInteriorControlState(float DeltaTime)
 	const float TargetThrottle = FMath::Max(Input.X, 0.f);
 	const float TargetBrake = FMath::Max(-Input.X, 0.f);
 	const float TargetSteering = FMath::Clamp(Input.Y, -1.f, 1.f);
+	const float TargetLeftLever = bLocalLeverOverride ? LocalLeftLeverPull : FMath::Max(-TargetSteering, 0.f);
+	const float TargetRightLever = bLocalLeverOverride ? LocalRightLeverPull : FMath::Max(TargetSteering, 0.f);
 
 	if (InteriorControlInterpSpeed <= 0.f)
 	{
 		DisplayThrottle = TargetThrottle;
 		DisplayBrake = TargetBrake;
 		DisplaySteering = TargetSteering;
+		DisplayLeftLever = TargetLeftLever;
+		DisplayRightLever = TargetRightLever;
 		return;
 	}
 
 	DisplayThrottle = FMath::FInterpTo(DisplayThrottle, TargetThrottle, DeltaTime, InteriorControlInterpSpeed);
 	DisplayBrake = FMath::FInterpTo(DisplayBrake, TargetBrake, DeltaTime, InteriorControlInterpSpeed);
 	DisplaySteering = FMath::FInterpTo(DisplaySteering, TargetSteering, DeltaTime, InteriorControlInterpSpeed);
+
+	// A lever held in the local Driver's hand is NOT smoothed: it has to stay under the hand holding
+	// it, and smoothing is exactly what would make the handle trail behind.
+	if (bLocalLeverOverride)
+	{
+		DisplayLeftLever = TargetLeftLever;
+		DisplayRightLever = TargetRightLever;
+	}
+	else
+	{
+		DisplayLeftLever = FMath::FInterpTo(DisplayLeftLever, TargetLeftLever, DeltaTime, InteriorControlInterpSpeed);
+		DisplayRightLever = FMath::FInterpTo(DisplayRightLever, TargetRightLever, DeltaTime, InteriorControlInterpSpeed);
+	}
+}
+
+void ATSTankControllerBase::SetLocalLeverPullOverride(bool bActive, float LeftPull, float RightPull)
+{
+	bLocalLeverOverride = bActive;
+	LocalLeftLeverPull = bActive ? FMath::Clamp(LeftPull, 0.f, 1.f) : 0.f;
+	LocalRightLeverPull = bActive ? FMath::Clamp(RightPull, 0.f, 1.f) : 0.f;
 }
 
 namespace

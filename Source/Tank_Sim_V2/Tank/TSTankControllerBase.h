@@ -768,12 +768,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
 	float GetInteriorSteeringAlpha() const { return DisplaySteering; }
 
-	// 0..1 per lever, split out so the AnimBP needs no Select node per side.
+	// 0..1 per lever, split out so the AnimBP needs no Select node per side. Normally derived from the
+	// net steering; on the manual Driver's own machine each lever shows its OWN pull instead - see
+	// SetLocalLeverPullOverride.
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
-	float GetInteriorLeftLeverAlpha() const { return FMath::Max(-DisplaySteering, 0.f); }
+	float GetInteriorLeftLeverAlpha() const { return DisplayLeftLever; }
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
-	float GetInteriorRightLeverAlpha() const { return FMath::Max(DisplaySteering, 0.f); }
+	float GetInteriorRightLeverAlpha() const { return DisplayRightLever; }
 
 	// Convenience rotators, so a Transform (Modify) Bone node can be fed directly instead of wiring a
 	// multiply per bone. The ANGLE is Blueprint data (below) because the travel differs per tank;
@@ -879,37 +881,49 @@ public:
 public:
 	// --- Manual (VR hand) driving: where the levers can be GRABBED ------------------------------
 	// A socket OR bone name on whichever skeletal mesh carries it - the interior mesh on the VK1602.
-	// Defaults are the lever bones. If the pivot is too far from where a hand naturally closes on the
-	// handle, add a socket at the handle in the skeleton and name it here - no code change.
-	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
-	FName LeftLeverGrabSocket = TEXT("b_L_Lever");
-
-	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
-	FName RightLeverGrabSocket = TEXT("b_R_Lever");
-
-	// How close, in cm, a closing hand must be to the grab point to take hold of the lever.
 	//
-	// 60, not a tidy 30, because of MEASURED geometry: on the VK1602 the default grab points are the
-	// lever PIVOT bones, which sit on the floor ~89cm below the driver's head (tank-local z 62 vs the
-	// DriverSeat's 151) and only ~5cm apart. A hand closed on the handle is roughly 40-60cm from the
-	// pivot, so 30 would demand reaching to the floor. Point LeftLeverGrabSocket/RightLeverGrabSocket
-	// at sockets placed on the handle tips and this can come back down to ~15.
-	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving", meta = (ClampMin = "1.0"))
-	float LeverGrabRadius = 60.f;
-
-	// Direction the hand moves to PULL a lever, in the tank's own space. Default is backwards, towards
-	// the driver. Tank space rather than world, so the pull does not change as the hull turns.
+	// Defaults are the HANDLE sockets on Tank_New_Skeleton (2026-09-10), placed at the centroid of the
+	// top 6cm of the vertices skinned to each lever bone - measured, not eyeballed. They ride their
+	// lever bone, so the grab point follows the animated lever. The bones themselves (b_L_Lever /
+	// b_R_Lever) are floor PIVOTS 69cm below the handles and are the wrong thing to reach for.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
-	FVector LeverPullAxisLocal = FVector(-1.f, 0.f, 0.f);
+	FName LeftLeverGrabSocket = TEXT("LeverHandle_L");
 
-	// Hand travel, in cm along LeverPullAxisLocal, that counts as a fully pulled lever.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
+	FName RightLeverGrabSocket = TEXT("LeverHandle_R");
+
+	// How close, in cm, the gripping hand must be to the handle socket to take hold of the lever.
+	// Was 60 while the grab points were the floor pivots; with sockets ON the handles a hand-sized
+	// sphere is right. The handles are only ~8cm apart, which is safe because each hand can only
+	// take its own side's lever.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving", meta = (ClampMin = "1.0"))
-	float LeverPullDistance = 20.f;
+	float LeverGrabRadius = 15.f;
+
+	// Direction the hand moves to work a lever, in the tank's own space (so it does not change as the
+	// hull turns). MEASURED from the authored pose pair: going rest -> "pulled" (roll +10) moves the
+	// handle 11.6cm along +X - FORWARD, away from the driver - so that is the direction the hand works
+	// it, and the lever stays under the hand 1:1. The rest pose already has the handle ~31cm from the
+	// driver's head, so a pull-back pose would drive it into the driver's chest. To make it a pull
+	// instead, re-author the pulled pose (roll -10) and flip this to -X.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
+	FVector LeverPullAxisLocal = FVector(1.f, 0.f, 0.f);
+
+	// Hand travel, in cm along LeverPullAxisLocal, that counts as a fully worked lever. 11.6 is the
+	// measured handle travel between the two poses, so a hand moving N cm moves the handle N cm.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving", meta = (ClampMin = "1.0"))
+	float LeverPullDistance = 11.6f;
 
 	// World location of a lever's grab point, from whichever skeletal mesh owns that socket/bone.
 	// False when no mesh on this tank has it - the lever simply cannot be grabbed then.
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior|Manual Driving")
 	bool GetLeverGrabLocation(bool bLeft, FVector& OutLocation) const;
+
+	// LOCAL ONLY, never replicated. While active, each interior lever shows the pull of the hand
+	// holding it instead of the net steering, unsmoothed. Two reasons it cannot come from the
+	// replicated CurrentDriveInput: steering is right-minus-left, so pulling both levers equally
+	// shows as zero and neither lever would move; and the round trip plus smoothing would leave the
+	// handle trailing the hand that is holding it. Other crew still see the steering-derived pose.
+	void SetLocalLeverPullOverride(bool bActive, float LeftPull, float RightPull);
 
 public:
 
@@ -1081,6 +1095,13 @@ private:
 	float DisplayThrottle = 0.f;
 	float DisplayBrake = 0.f;
 	float DisplaySteering = 0.f;
+	float DisplayLeftLever = 0.f;
+	float DisplayRightLever = 0.f;
+
+	// See SetLocalLeverPullOverride.
+	bool bLocalLeverOverride = false;
+	float LocalLeftLeverPull = 0.f;
+	float LocalRightLeverPull = 0.f;
 
 
 	FTimerHandle WeaponStopTimerHandle;
