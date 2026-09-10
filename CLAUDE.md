@@ -2749,7 +2749,12 @@ real brake input is added, repoint `GetInteriorBrakeAlpha`.
 Travel angles are `EditDefaultsOnly` per tank, because each interior is modelled differently - the
 defaults are placeholders, NOT measured values.
 
-### ⬜ HAND-OFF — the AnimGraph wiring is not done
+### ~~⬜ HAND-OFF — the AnimGraph wiring is not done~~ — DONE by script, CONFIRMED WORKING BY THE USER (2026-09-10)
+> **Superseded. Do not follow the node settings below.** They describe the earlier additive
+> "full travel" design, which was replaced by measured pose pairs. The live wiring is
+> **Replace Existing in Parent Bone Space**, plus TranslationMode Replace on `b_Gas` - see
+> *"The interior control AnimGraph, built by script and verified"* further down. The
+> `*FullTravel` properties named here no longer exist. Kept only as a record of the first design.
 **Why:** the accessors above are unread until `ABP_VK1602Leopard_Interior` calls them, so nothing
 moves yet.
 
