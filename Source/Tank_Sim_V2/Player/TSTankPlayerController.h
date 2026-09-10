@@ -12,6 +12,7 @@
 
 class ATSCrewPawn;
 class ATSTankPlayerState;
+class UTSCommanderScreenWidget;
 class UTSRoleDebugWidget;
 class UTSSessionSubsystem;
 class UTSUISubsystem;
@@ -150,6 +151,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Debug")
 	void ShowRoleDebugWidget(bool bShow);
 
+	// The Commander's instrument screen (radar + hull/turret attitude + periscope feed). Shown for a
+	// local Commander on a gameplay map, removed the moment they are no longer one.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|HUD")
+	void ShowCommanderScreen(bool bShow);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|HUD")
+	bool IsCommanderScreenVisible() const;
+
+	// The live Commander screen, or null when it is not up. Exposed so Blueprint (and a test probe)
+	// can reach the three instrument panels through it rather than rebuilding the lookup.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|HUD")
+	UTSCommanderScreenWidget* GetCommanderScreen() const { return CommanderScreenWidget; }
+
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Debug")
 	bool IsRoleDebugWidgetVisible() const;
 
@@ -256,6 +270,19 @@ public:
 	UFUNCTION(Exec)
 	void TSDriveMode(const FString& Mode);
 
+	// TSVision <day|night|thermal|cycle>. Switches the LOCAL crew station's periscope filter.
+	//
+	// Unlike every other TS* command this sends no RPC and asks no permission: the vision mode only
+	// changes post processing on this machine's own capture, and it reveals nothing the player's
+	// periscope was not already rendering. Keeping it local is what makes that true - route it
+	// through the server and it becomes shared state that could show one crew member another's view.
+	UFUNCTION(Exec)
+	void TSVision(const FString& Mode);
+
+	// Toggles the Commander screen regardless of seat, for testing it from any role.
+	UFUNCTION(Exec)
+	void TSCommanderScreen();
+
 	UFUNCTION(Exec)
 	void TSVRDiag();
 
@@ -336,6 +363,20 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
 	bool bShowRoleDebugWidgetOnGameplayMaps = true;
 
+	// Put the Commander's screen up automatically when this player is assigned the Commander seat.
+	// Off leaves it to the exec command TSCommanderScreen or to Blueprint.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|HUD")
+	bool bShowCommanderScreenForCommander = true;
+
+	// Optional Blueprint restyle. Left empty, the pure-C++ UTSCommanderScreenWidget is used, which
+	// needs no asset at all - it builds its own split layout and every panel paints itself.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|HUD")
+	TSubclassOf<UTSCommanderScreenWidget> CommanderScreenWidgetClass;
+
+	// Below the role debug panel deliberately, so the lobby console stays clickable on top of it.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|HUD")
+	int32 CommanderScreenZOrder = 10;
+
 	// Optional Blueprint restyle of the debug panel. Left empty, the pure-C++ UTSRoleDebugWidget is
 	// used, so no WBP asset is required.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
@@ -368,6 +409,14 @@ protected:
 
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Debug")
 	TObjectPtr<UTSRoleDebugWidget> RoleDebugWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTSCommanderScreenWidget> CommanderScreenWidget;
+
+	// Adds or removes the Commander screen to match the local player's current seat. Called from
+	// arrival on a gameplay map and from every assignment change, because either can be the one that
+	// makes this player a Commander.
+	void RefreshCommanderScreen();
 
 private:
 	ATSTankPlayerState* GetTankPlayerState() const;

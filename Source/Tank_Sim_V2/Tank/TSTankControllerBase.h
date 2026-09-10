@@ -954,6 +954,56 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View", meta = (ClampMin = "0.05"))
 	float CrewViewRoleRefreshSeconds = 0.25f;
 
+	// --- Vision modes (day / night vision / thermal) ----------------------------------------------
+	//
+	// A viewing filter on the LOCAL crew member's station capture, nothing more. It changes post
+	// processing on one SceneCaptureComponent2D on one machine, so it is deliberately NOT replicated
+	// and deliberately NOT server-validated: switching to thermal reveals nothing the player's own
+	// periscope was not already rendering.
+	//
+	// Two ways to author a mode, and they are not alternatives to each other:
+	//   * leave VisionModeMaterials empty and the built-in colour grading below is used. Works with
+	//     no assets at all, which is why it exists - a mode that needs a material nobody has authored
+	//     yet is a black screen.
+	//   * assign a post-process material for a mode and it is blended over the top instead. That is
+	//     the route to a real thermal ramp (inverted luminance through a gradient), which colour
+	//     grading alone cannot express.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew View")
+	void SetCrewViewVisionMode(ETSVisionMode NewMode);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew View")
+	ETSVisionMode GetCrewViewVisionMode() const { return CrewViewVisionMode; }
+
+	// Normal -> NightVision -> Thermal -> Normal. Returns the mode now in effect.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew View")
+	ETSVisionMode CycleCrewViewVisionMode();
+
+	// The render target the given station draws into, or null when that station has no capture or
+	// the capture has no TextureTarget assigned. A widget showing a periscope feed asks for this
+	// rather than hard-referencing RT_Gunner, so per-tank overrides work.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew View")
+	class UTextureRenderTarget2D* GetCrewViewRenderTarget(ETSCrewRole InCrewRole) const;
+
+	// Optional per-mode post-process material. Blueprint data (RULE 8) - no constructor load
+	// (RULE 2). A row left unset falls back to the built-in grading.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View")
+	TMap<ETSVisionMode, TObjectPtr<class UMaterialInterface>> VisionModeMaterials;
+
+	// Brightness multiplier for the built-in night vision look. This is a COLOUR GAIN, not an
+	// exposure bias, on purpose: ConfigureCrewViewCapture turns the EyeAdaptation show flag off, so
+	// an exposure bias would have nothing to bias.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View", meta = (ClampMin = "1.0"))
+	float NightVisionGain = 5.f;
+
+	// The phosphor tint night vision is graded towards.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View")
+	FLinearColor NightVisionTint = FLinearColor(0.14f, 1.f, 0.32f, 1.f);
+
+	// Contrast of the built-in white-hot thermal look. 1 is neutral; the point of thermal is that it
+	// is not.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View", meta = (ClampMin = "0.1"))
+	float ThermalContrast = 2.f;
+
 	// Silences every station capture on this tank. Called once, on every machine, so that a view
 	// only ever renders because the code below deliberately turned it on.
 	void InitialiseCrewViewCaptures();
@@ -1001,6 +1051,19 @@ private:
 	TObjectPtr<class USceneCaptureComponent2D> ActiveCrewViewCapture;
 
 	ETSCrewRole ActiveCrewViewRole = ETSCrewRole::None;
+
+	// Local-only viewing filter. See SetCrewViewVisionMode.
+	ETSVisionMode CrewViewVisionMode = ETSVisionMode::Normal;
+
+	// What the Blueprint authored on each station capture, snapshotted the first time that station
+	// is configured. Switching back to Normal restores THIS rather than an engine default, so a
+	// designer's own grading on a periscope is not quietly thrown away by using the mode switch.
+	UPROPERTY(Transient)
+	TMap<ETSCrewRole, FPostProcessSettings> AuthoredCrewViewPostProcess;
+
+	// Re-applies CrewViewVisionMode to whichever capture is currently live. Safe to call when none
+	// is - it does nothing.
+	void ApplyVisionModeToActiveCapture();
 
 	float CrewViewCaptureAccumulator = 0.f;
 	float CrewViewRoleRefreshAccumulator = 0.f;

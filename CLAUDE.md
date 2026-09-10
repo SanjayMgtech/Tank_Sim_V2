@@ -2880,3 +2880,220 @@ while the C++ getter returned `(0.000, 0.000)` **at the same instant**. Reflecti
 disagreed, so the injection proved nothing and nearly produced a false bug report against working
 code. Drive the real entry point instead - here, a `-game` client with `TSAutoDrive`, which showed
 `input=(1.00, -1.00) -> thr=1.000 steer=-1.000` immediately.
+
+---
+
+## 🖥 Commander screen - radar, attitude dial, vision modes (2026-09-09)
+
+Feature work, like the multiplayer and VR sections above: own commits, own test.
+
+Three instruments in one split panel: the periscope FEED on the left, the RADAR top right, the
+hull/turret ATTITUDE dial bottom right. `UTSCommanderScreenWidget` builds that split itself and
+`ATSTankPlayerController` puts it up for a local Commander on a gameplay map.
+
+### It is ALL C++, and no asset is required for any of it
+Every panel paints itself with `FSlateDrawElement` in `NativePaint`. No WBP, no textures, no
+materials, no render-target material - nothing to author, nothing to keep in sync, nothing to break
+on a fresh clone.
+
+That is a deliberate trade, not laziness. A radar is thirty lines of geometry plus a sweep angle; as
+a widget tree it needs art nobody has drawn, cannot scale to an arbitrary contact count, and cannot
+draw a moving sweep at all without a flipbook.
+
+**A WBP subclass still wins.** `RebuildWidget` only builds the default layout when
+`WidgetTree->RootWidget` is empty, and `BindPanelsFromWidgetTree` then finds the three panels **by
+class**, so a hand-authored tree binds exactly the same way. The default costs no asset; authoring
+one later costs no code change.
+
+| Class | File |
+|---|---|
+| `UTSCommanderScreenWidget` | `UI/TSCommanderScreenWidget.{h,cpp}` - the split; panel classes swappable |
+| `UTSRadarWidget` | `UI/TSRadarWidget.{h,cpp}` |
+| `UTSTankAttitudeWidget` | `UI/TSTankAttitudeWidget.{h,cpp}` |
+| `UTSVisionFeedWidget` | `UI/TSVisionFeedWidget.{h,cpp}` |
+
+### The radar reads REPLICATED intel, never the local world
+Contacts come from `UTSTankCommanderComponent`'s `FTSCommanderIntel`, which the server builds and
+`GetIntelFor` filters by the viewer's `RadarIntel` access level. Walking the local world for tanks
+would have been one line and would have handed every client a wallhack.
+
+Two changes were needed to make that source usable as a live instrument:
+- **`FTSRadarContact`** (new) carries position, hull heading, team, hostile and self flags. The old
+  `KnownEnemyPositions` / `TankPlacements` arrays are still populated - Blueprint graphs read them.
+- **`bAutoRefreshIntel` (default ON, `IntelRefreshHz` = 4)** puts intel on a server timer.
+  `TryRefreshIntel` was pull-only, so without this the blips sit wherever the last manual refresh
+  left them and the radar reads as broken. `TryRefreshIntel` keeps its permission gate; the timer
+  calls `RebuildIntel` directly, because a server timer has no requester to gate on.
+
+**`ContactId` must stay stable across refreshes** - it is the tank actor's `GetUniqueID()`. The
+widget keys its interpolation off it. Array position is NOT stable and cannot be used for this.
+
+Raising `IntelRefreshHz` buys accuracy, not smoothness: the widget interpolates between updates at
+frame rate regardless. It is a replicated array of positions for every tank in the match, so it is
+bandwidth.
+
+### Radar drawing notes
+- **The sweep is a fading trail of radial lines, not a wedge.** A filled wedge needs a triangle fan;
+  the trail gives the same afterglow out of line elements alone and reads correctly at any size.
+- **Blips fade over one revolution after the sweep crosses them.** That persistence is what makes the
+  sweep look like it is doing something rather than a decoration spinning over static dots.
+- **Out-of-range contacts are dropped, not clamped to the rim.** A clamped blip reads as a contact
+  sitting exactly at maximum range, which is a lie.
+- `bRotateWithHull` (default ON) is heading-up, so a bearing read off the scope is a bearing the
+  Driver can be given directly. The N/E/S/W marks then move as the hull turns - they are the only
+  thing left on the scope that says where north is.
+
+### The attitude dial - why the HULL is the static one
+Hull static and facing up, COMPASS behind it counter-rotating by hull yaw, LAUNCHER on top rotating
+by turret yaw **relative to the hull**. Rotate both and the eye cannot tell a 20 degree traverse from
+a 20 degree hull turn; pinning the hull is what makes the traverse readable.
+
+The turret angle comes from `GetMainGunAimRotation()` - the ACHIEVED aim, out of the same
+`TurretsRot`/`GunsRot` arrays the AnimBP draws the barrel from, so the dial cannot disagree with what
+the player sees on the tank.
+
+`CompassTexture` / `HullTexture` / `LauncherTexture` are optional and replace the vector shapes when
+set (authored facing UP = 0 degrees). That is a fallback so the panel is never empty, not a second
+way of authoring the same value.
+
+WARNING: **angle interpolation must go the short way round.** `FInterpTo` on raw degrees takes the
+long way every time the value crosses +/-180 and the dial spins backwards through a full turn. Use
+the `UnwindDegrees` delta form (`InterpAngleDegrees` in `TSTankAttitudeWidget.cpp`).
+
+### Vision modes - post process on the station capture, and LOCAL only
+`ETSVisionMode { Normal, NightVision, Thermal }`, applied by
+`ATSTankControllerBase::SetCrewViewVisionMode` to whichever station capture is currently live.
+
+Not replicated and not server-validated, on purpose: it changes post processing on one
+`SceneCaptureComponent2D` on one machine and reveals nothing the player's own periscope was not
+already rendering. Route it through the server and it becomes shared state that could show one crew
+member another crew member's view.
+
+**`AuthoredCrewViewPostProcess` snapshots each capture's settings at BeginPlay**, and every mode
+change restores that snapshot before applying the filter. Two reasons, both real: switching back to
+Normal must return the designer's own grading rather than an engine default, and layering one mode's
+grading on top of the previous one's is how a filter chain ends up permanently green.
+
+WARNING: **the built-in night vision brightens with COLOUR GAIN, not exposure bias.**
+`ConfigureCrewViewCapture` turns the EyeAdaptation show flag off (it makes the sight pump while
+traversing), so an `AutoExposureBias` would have nothing to bias. Bloom is likewise force-enabled for
+night vision only - it is off by default for cost, and an image intensifier without blooming
+highlights does not read as one.
+
+`VisionModeMaterials` (per-mode post-process material, Blueprint data) overrides the built-in look
+when set. **A real thermal ramp needs one** - inverted luminance through a gradient is not something
+colour grading can express, so the built-in Thermal is white-hot high-contrast mono, which is a
+decent approximation and not the real thing.
+
+### The feed always shows the LOCAL player's own seat, and that is not a limitation
+The tank deliberately runs exactly one capture per machine, for the seat the person at that machine
+occupies (that policy, and why the render targets being shared assets makes it a correctness
+requirement rather than an optimisation, is documented above). Pointing the widget at another station
+would display whatever stale frame that render target last held - a frozen image, which reads as a
+bug. So the widget offers no station selector.
+
+`GetCrewViewRenderTarget` returns null in three different ways - no tank, no seat, or no
+`TextureTarget` on that station's capture - and the panel names which one it hit rather than showing
+an identical black rectangle for all three. (`GunnerSceneCaptureComponent` shipped with no
+`TextureTarget`, so this is not hypothetical.)
+
+**The Commander station has NO capture component yet.** `CrewViewCaptureComponents` has no Commander
+row, so a Commander sees "NO FEED" with that reason printed. Adding one is Blueprint data, not code:
+a `SceneCaptureComponent2D` on the tank BP, a render target assigned to it, its name in
+`CrewViewCaptureComponents`, and its name in `TurretMountedSeatComponents` if the periscope should
+traverse with the turret. Left undone deliberately - where a commander's periscope sits is a
+placement decision (RULE 8), and `RT_Gunner` at 2000x2000 is the standing warning about sizing one
+carelessly.
+
+### Switching modes
+`TSVision <day|night|thermal|cycle>` (exec, local, sends no RPC - the only TS* command that does
+not), clicking the feed panel, or `UTSVisionFeedWidget::CycleVisionMode` from Blueprint. The click
+only works where the widget is hit-testable, which is why the other two routes exist.
+
+### WARNING: VR gets no commander screen, by the same rule as the role debug panel
+`RefreshCommanderScreen` skips it for a non-host with an HMD. A screen-space widget renders plastered
+across a headset view. The test is **HMD availability, not `IsVRModeActive()`** - `ApplyVRMode` is
+deferred a tick, so stereo is still off at that moment even for a player about to be in VR.
+
+The Commander's instruments belong on a world-space panel in the turret for VR. That does not exist,
+so in a headset the Commander has no screen rather than a broken one.
+
+### WARNING: `Slot` is a `UWidget` member - the Role/Mesh/PI trap again
+`if (UHorizontalBoxSlot* Slot = Box->AddChildToHorizontalBox(W))` is a hard error
+(`C4458: declaration of 'Slot' hides class member`, `UWidget::Slot`). Use `BoxSlot`. Add `Slot` to
+the list of short obvious names already taken - alongside `Role`, `Mesh` and `PI`.
+
+### WARNING: an anonymous-namespace helper is NOT file-local in a unity build
+Two widgets each defined `PolarToLocal` and `DrawCentredText` in an anonymous namespace - normally
+the correct way to keep a helper private to one `.cpp`. This module builds as a UNITY build, so
+those files become ONE translation unit and the two anonymous namespaces are the same namespace:
+```
+error C2084: function 'PolarToLocal' already has a body
+```
+**The trap is that it builds fine at first.** UBT's *adaptive* unity excludes recently-changed files
+from the blob, so the duplication compiles cleanly while you are working on those files and breaks
+on the next build, once they stop being "recently changed" - the failure lands nowhere near the
+edit that caused it, and the first line of the log names the innocent file.
+
+Fix: one definition in a NAMED namespace. `UI/TSWidgetPaintUtils.h` now holds the shared Slate
+painting helpers. The invariant to check is a grep, not a build: each helper must be defined exactly
+once across `Source/`.
+
+Related: **never name a helper `DrawText`.** `<windows.h>` defines it as a macro, so in a unity blob
+that pulls Windows headers in, every call site is silently rewritten to `DrawTextW`. The shared one
+is `DrawTextAt`.
+
+### WARNING: `FSlateColorBrush` cannot be a UCLASS member
+It has no default constructor and UHT generates one for the vtable helper:
+`error C2512: 'FSlateColorBrush': no appropriate default constructor available`, raised from the
+generated `.gen.cpp` rather than from your own file. Use a plain `FSlateBrush` with
+`DrawAs = ESlateBrushDrawType::Image` and no resource - it draws solid white, which every call then
+tints.
+
+### What IS verified, and the one thing that is NOT
+Verified in the editor, PIE on WarZone, `ok:true` with 0 errors / 0 warnings / 0 `Accessed None`
+across several runs:
+```
+[CmdScreen] NativeConstruct - radar=yes attitude=yes vision=yes    <- layout built, panels bound by class
+P1 panels radar=Radar attitude=Attitude vision=VisionFeed          <- the generated tree, found by class
+LIVE team=TEAM_A role=COMMANDER  screenVisible=True                <- RefreshCommanderScreen raised it
+                                                                      from the role assignment alone
+P7 intel contacts=1 placements=1                                   <- the server auto-refresh timer runs
+P2 cycle1=NIGHT_VISION cycle2=THERMAL cycle3=NORMAL                <- vision modes cycle on the live tank
+```
+The contact count of 1 is the player's own tank, which the radar deliberately draws at the centre
+rather than as a blip - so `radar contacts=0` is correct here, not a failure.
+
+### ⚠ NOT verified: the instruments never TICKED or PAINTED in an editor-driven session
+`GetTickCount()` stayed at **0** for the whole session, and the one-shot `first NativeTick` /
+`first NativePaint` log lines never appeared - while `NativeConstruct` did, and the editor's frame
+counter advanced ~450 frames past it. `IsInViewport()` was true throughout.
+
+So the dial readouts sitting at `hull=0.000 traverse=0.000` are **not** a data problem: the widget
+resolves its PlayerState and its assigned tank correctly in the same probe. Nothing is updating them.
+
+**A wrong turn worth recording.** This was first diagnosed as "child UUserWidgets are not reliably
+ticked inside a parent's tree", and the panels were restructured to be driven from the screen's own
+`NativeTick`. That restructure is kept (one clock, explicit ordering, works for a hand-authored WBP
+too) but it FIXED NOTHING - the screen does not tick either. The tell was there and was misread:
+the first diagnosis only checked the children.
+
+Two red herrings ruled out along the way, so nobody re-checks them:
+- `GetDesiredSize()` is `(0,0)` on every panel. **Expected** - these are paint-only widgets with no
+  child content. `AddToViewport` anchors to `(0,0,1,1)`, so the slot stretches them regardless.
+- Editor background throttling. The frame counter advanced normally; this is not a slow tick.
+
+**What is left to try**, cheapest first:
+1. Press Play by hand with the editor focused and look. If the panels animate, the whole thing is an
+   artefact of driving PIE over MCP from an unfocused editor, and only the harness note needs adding.
+2. If they do not animate, compare `GetCachedGeometry().to_tuple()` on the commander screen against
+   `UTSRoleDebugWidget`, which reaches the viewport through the identical `AddToViewport` path in the
+   same session. Cached geometry is written during paint, so a non-zero one there and a zero one here
+   localises the fault to this widget rather than the environment.
+
+The rest still owed:
+- a Commander sees the split panel; a Driver and a Gunner do not
+- the sweep animates; hostile blips are red and bracketed, friendlies green
+- driving turns the compass while the tank stays put; traversing swings the launcher
+- `TSVision night` / `thermal` visibly change the feed (needs a station with a render target)
+- two-window listen server: the client's blip moves on the host's radar and vice versa
