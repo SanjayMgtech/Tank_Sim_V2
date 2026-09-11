@@ -2,10 +2,14 @@
 
 #include "Engine/Engine.h"
 #include "Engine/LocalPlayer.h"
+#include "IPAddress.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/CommandLine.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
+#include "SocketSubsystem.h"
+#include "Tank_Sim_V2.h"
 
 namespace
 {
@@ -20,6 +24,77 @@ namespace
 		{
 			GEngine->AddOnScreenDebugMessage(-1, 6.0f, Color, Message);
 		}
+	}
+
+	// Docker Desktop's default bridge, WSL2's NAT network and Hyper-V's "Default Switch" all sit
+	// inside 172.16.0.0/12 on a Windows dev machine, and Windows' own outbound-routing probe (which
+	// GetLocalHostAddr() uses, see below) can be captured by whichever of those installed a route
+	// for it - that has nothing to do with which NIC is actually on the LAN the other machine is on.
+	// 169.254.0.0/16 is APIPA: an adapter with no DHCP lease, i.e. no real address at all. Both
+	// ranges are near-universally virtual/dead on a Windows box and essentially never a real
+	// home/office LAN, so excluding them is safe; see TryResolveLanAdvertiseAddress for the fallback
+	// when every candidate happens to be in one of them anyway.
+	bool IsLikelyVirtualOrDeadAddress(uint32 HostOrderIp)
+	{
+		const uint8 A = static_cast<uint8>(HostOrderIp >> 24);
+		const uint8 B = static_cast<uint8>(HostOrderIp >> 16);
+		return (A == 172 && B >= 16 && B <= 31) || (A == 169 && B == 254);
+	}
+
+	// See "Session hosted but the other machine can't travel to it" in CLAUDE.md. OnlineSubsystemNull
+	// advertises whatever ISocketSubsystem::GetLocalHostAddr() reports as this machine's address for
+	// BOTH the LAN session's connect string and the listen server's own bind address (both funnel
+	// through the same multihome check), and on a box with Docker/WSL2/Hyper-V installed that call
+	// can resolve to a virtualization NAT adapter instead of the real LAN NIC. OutDefaultAddress is
+	// always filled in (so the caller can log what the engine would have used regardless of outcome);
+	// the return value and OutBetterAddress are only set when that default looks wrong AND a
+	// better-looking "up" adapter address actually exists to replace it with.
+	bool TryResolveLanAdvertiseAddress(FString& OutDefaultAddress, FString& OutBetterAddress)
+	{
+		ISocketSubsystem* SocketSub = ISocketSubsystem::Get();
+		if (!SocketSub)
+		{
+			return false;
+		}
+
+		bool bCanBindAll = false;
+		const TSharedRef<FInternetAddr> DefaultAddr = SocketSub->GetLocalHostAddr(*GLog, bCanBindAll);
+		uint32 DefaultIp = 0;
+		DefaultAddr->GetIp(DefaultIp);
+		OutDefaultAddress = DefaultAddr->ToString(false);
+
+		if (!IsLikelyVirtualOrDeadAddress(DefaultIp))
+		{
+			// Whatever the engine would pick unassisted already looks like a real LAN address -
+			// nothing to second-guess, and overriding here could only make things worse.
+			return false;
+		}
+
+		TArray<TSharedPtr<FInternetAddr>> Adapters;
+		if (!SocketSub->GetLocalAdapterAddresses(Adapters))
+		{
+			return false;
+		}
+
+		for (const TSharedPtr<FInternetAddr>& Adapter : Adapters)
+		{
+			if (!Adapter.IsValid())
+			{
+				continue;
+			}
+
+			uint32 AdapterIp = 0;
+			Adapter->GetIp(AdapterIp);
+			if (AdapterIp != 0 && !IsLikelyVirtualOrDeadAddress(AdapterIp))
+			{
+				OutBetterAddress = Adapter->ToString(false);
+				return true;
+			}
+		}
+
+		// Every "up" adapter looked virtual (or there was only ever the one) - nothing better to
+		// offer, so leave the engine's own pick alone rather than guess.
+		return false;
 	}
 }
 
@@ -57,6 +132,39 @@ void UTSSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	if (GEngine)
 	{
 		NetworkFailureHandle = GEngine->OnNetworkFailure().AddUObject(this, &UTSSessionSubsystem::HandleNetworkFailure);
+	}
+
+	// Must run before any CreateSession/JoinSession call - both eventually call GetLocalHostAddr()
+	// via OnlineSubsystemNull, so the address needs to be fixed before that first happens, not after.
+	ApplyLanAddressWorkaroundIfNeeded();
+}
+
+void UTSSessionSubsystem::ApplyLanAddressWorkaroundIfNeeded()
+{
+	TCHAR Existing[256];
+	if (FParse::Value(FCommandLine::Get(), TEXT("MULTIHOME="), Existing, UE_ARRAY_COUNT(Existing)))
+	{
+		// Something (the user, a launch script, -multihome passed by hand) already picked an
+		// address deliberately - never second-guess an explicit override.
+		UE_LOG(LogTankSim, Log, TEXT("[Session] -multihome=%s already set on the command line; skipping LAN address auto-detection."), Existing);
+		return;
+	}
+
+	FString DefaultAddress, BetterAddress;
+	if (TryResolveLanAdvertiseAddress(DefaultAddress, BetterAddress))
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("[Session] Default local address (%s) looked like a Docker/WSL2/Hyper-V virtual adapter rather than the real LAN NIC. Forcing -multihome=%s so LAN sessions advertise (and bind to) an address other machines on the LAN can actually reach. If this guessed wrong for your setup, pass the correct -multihome=<ip> yourself to override it."), *DefaultAddress, *BetterAddress);
+		PrintOnScreen(FString::Printf(TEXT("[Session] Local address %s looked virtual; using %s for LAN hosting/joining instead."), *DefaultAddress, *BetterAddress), FColor::Yellow);
+		FCommandLine::Append(*FString::Printf(TEXT(" -multihome=%s"), *BetterAddress));
+	}
+	else
+	{
+		// Always logged, even when there's nothing to fix - this is the line to grep for on both
+		// machines next time a cross-machine session fails: if the two logs show different subnets
+		// (or one is 172.16-31.x.x with no override reported above), the address is the problem;
+		// if they're both plausible LAN addresses, look at Windows Firewall / router AP isolation
+		// instead (see CLAUDE.md).
+		UE_LOG(LogTankSim, Log, TEXT("[Session] LAN address auto-detection: using default local address %s (looks fine, no override applied)."), *DefaultAddress);
 	}
 }
 
