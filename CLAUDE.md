@@ -3192,3 +3192,63 @@ is something game code can reach into:
 
 Check both before re-opening the address investigation - they produce an identical symptom and
 neither leaves a trace in this project's own logs.
+
+## ⛔ A joining client resolves the host's port as 0 (found 2026-09-11, same-machine repro)
+
+Fixing the address above unblocked the connection attempt far enough to hit the NEXT bug, and it
+reproduces on ONE machine with two instances - no second physical PC needed:
+```
+LogNet: Error: ... ConnectionTimeout ... RemoteAddr: 192.168.0.102:0 ...
+```
+The address is correct. The port is **0**, and that is not a race - it happens every time this
+project creates a LAN session, because of exactly when `FOnlineSessionInfoNull::Init()` runs.
+
+### Root cause, traced the same way as the address bug
+`OnlineSessionInterfaceNull.cpp`, `Init()`:
+```cpp
+HostAddr = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetLocalHostAddr(*GLog, bCanBindAll);
+...
+HostAddr->SetPort(GetPortFromNetDriver(Subsystem.GetInstanceName()));   // <- the port comes from HERE
+```
+`GetPortFromNetDriver` (`OnlineSubsystemUtils.cpp`) looks up `GEngine->FindNamedNetDriver(World,
+NAME_GameNetDriver)` for the CURRENT world and returns 0 if there isn't one. `Init()` itself is
+called from `FOnlineSessionNull::CreateSession()`, **synchronously, before returning** -
+`CreateSession()` is literally the call this project makes from `UTSSessionSubsystem::CreateSession`
+while the host is still sitting on the MENU map. `ServerTravel("...?listen...")` only happens
+afterwards, from the `OnCreateSessionComplete` delegate
+(`UTSSessionSubsystem::HandleCreateSessionComplete`). So at the exact moment `Init()` runs, no
+`GameNetDriver` exists for this world yet - `GetPortFromNetDriver` can't find one, returns 0, and
+that 0 is what every LAN session this project ever creates advertises, permanently, not
+intermittently.
+
+**This was never exposed before now** because the address bug above always failed the connection
+first. Nobody had gotten far enough to notice the port was also wrong until the address was fixed.
+
+### The fix - client-side, not a host reorder
+`UTSSessionSubsystem::FixUpUnresolvedPort()` (`TSSessionSubsystem.cpp`), called from
+`HandleJoinSessionComplete` right after `GetResolvedConnectString`: if the resolved connect string's
+port is 0 (or missing), replace it with `FURL::UrlConfig.DefaultPort` - a no-op otherwise. Safe
+because this project **never** puts a custom `?Port=` on the travel URL (checked: `HostMapPath +
+"?listen?LobbyCode=..."` only), so the listen server always ends up bound to that same default
+regardless. Verified at runtime, not assumed - starting a direct `?listen` server on this exact
+packaged build logs:
+```
+LogNet: Name:GameNetDriver Def:GameNetDriver IpNetDriver_... IpNetDriver listening on port 7777
+```
+matching the engine's compiled-in default (no `[URL] Port=` override anywhere in `Config/`).
+
+**The real fix is reordering the host's create/travel sequence** so `CreateSession` (and therefore
+`Init()`) only runs after `ServerTravel(...?listen...)` has actually taken effect and a
+`GameNetDriver` exists - that would make the session advertise its real port from the start instead
+of needing a client-side correction. Deliberately NOT done here: it changes session-creation timing
+on both host and client, needs its own phase and its own test exactly like every other phase in this
+file, and the client-side substitution already produces a correct connect string with a change small
+enough to reason about completely. Revisit it as its own piece of work, not folded into either
+LAN-connectivity patch.
+
+### How to repro this one without a second machine
+Two instances of the packaged build on the SAME box, through the real session-browser UI (not the
+`TSAuto*` URL shortcuts - those bypass `CreateSession`/`JoinSession` entirely via a direct `?listen`
+URL, so they never exercise this code path and will not show the bug): host in one, Find + Join in
+the other. This is also how the address bug was originally reported, one message before this one -
+"this was not even on different laptops, it was the same laptop with 2 different builds."
