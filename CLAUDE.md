@@ -3503,3 +3503,22 @@ CLIENT  LogNet: Welcomed by server (Level: /Game/TankSimulation/Maps/WarZone, ..
   commands `TSHost` / `TSJoinFirst`, and `UTSSessionSubsystem::FindAndJoinFirstSession(Attempts)`
   (searches every 2s until it finds one). Cross-PC: run the packaged exe with the map URL as the first
   argument, e.g. `Tank_Sim_V2.exe "/Game/TankSimulation/Maps/MainMenu?TSAutoJoin=1"`.
+
+### ⚠ After the fix: the laptop still could not be FOUND - a corporate endpoint firewall (2026-09-11)
+With the listen-server fix in, the laptop (`MGTECHLPT222`) hosted correctly (`host=YES`, socket on
+7777, and its game owned UDP **14001**, the LAN beacon), and a **direct** join (`Tank_Sim_V2.exe
+192.168.1.11`) worked - yet every search from the desktop found 0. Isolated by replaying the game's
+own captured 32-byte LAN query at `192.168.1.11:14001` from Python: **no reply to unicast, subnet
+broadcast or limited broadcast.** Windows Firewall was OFF on all profiles; the laptop runs **Check
+Point Endpoint Security Firewall**, which lets 7777 through but drops inbound UDP 14001. Not
+fixable in game code. `-multihome` (the forum fix for multi-adapter hosts) changed nothing here.
+
+Options: host on the machine without the corporate firewall and search from the laptop (outbound
+query, stateful reply); have IT allow inbound UDP 14001 + 7777 for `Tank_Sim_V2.exe`; or join by IP
+(`open <ip>` in the console). `C:\Projects\Builds\LaptopNetDiag.bat` / `.ps1` (untracked) collects
+adapters, profiles, firewall products, who owns 7777/14001, and the session log lines on a remote PC.
+
+**Replaying a captured LAN query is the decisive test** for "host exists but search finds nothing":
+bind UDP 14001 locally, let a searching game broadcast, capture the bytes, and send them unicast to
+the host's IP:14001 - a reply means discovery is healthy and the broadcast path is at fault; silence
+means something on the host drops 14001.
