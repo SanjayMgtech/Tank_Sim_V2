@@ -27,6 +27,10 @@ class TANK_SIM_V2_API ATSTankControllerBase : public AWheeledVehiclePawn, public
 {
 	GENERATED_BODY()
 
+	// Automation tests (Tests/TSManualDrivingTests.cpp) drive the private input handlers and read
+	// private state through this, so they exercise the real code paths rather than a copy of them.
+	friend struct FTSManualDrivingTestAccess;
+
 public:
 	ATSTankControllerBase();
 
@@ -764,12 +768,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
 	float GetInteriorSteeringAlpha() const { return DisplaySteering; }
 
-	// 0..1 per lever, split out so the AnimBP needs no Select node per side.
+	// 0..1 per lever, split out so the AnimBP needs no Select node per side. Normally derived from the
+	// net steering; on the manual Driver's own machine each lever shows its OWN pull instead - see
+	// SetLocalLeverPullOverride.
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
-	float GetInteriorLeftLeverAlpha() const { return FMath::Max(-DisplaySteering, 0.f); }
+	float GetInteriorLeftLeverAlpha() const { return DisplayLeftLever; }
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
-	float GetInteriorRightLeverAlpha() const { return FMath::Max(DisplaySteering, 0.f); }
+	float GetInteriorRightLeverAlpha() const { return DisplayRightLever; }
 
 	// Convenience rotators, so a Transform (Modify) Bone node can be fed directly instead of wiring a
 	// multiply per bone. The ANGLE is Blueprint data (below) because the travel differs per tank;
@@ -801,58 +807,65 @@ public:
 	// NOTE the Details panel lists rotation as X/Y/Z = Roll/Pitch/Yaw. Typing into these properties
 	// in the editor uses that same order, so values can be copied across as-is; only C++ constructors
 	// take (Pitch, Yaw, Roll). That mismatch has already put a tank upside down once.
+	// DEFAULTS ARE THE MEASURED VK1602 POSES, deliberately, not zero. Stored as Blueprint overrides
+	// these were wiped THREE times - by the editor's reload-assets modal, by a binary merge conflict,
+	// and by another session re-saving BP_VK1602Leopard_Controller_Chaos from an older copy - and each
+	// time every control collapsed to a zero pose, which reads as "no rest pose and no animation", not
+	// as lost data. As C++ defaults they survive all three: a Blueprint that stores nothing still gets
+	// them. Another tank's interior overrides them in its own Blueprint; on a tank with no rigged
+	// interior they are simply never read.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator GasPedalRestRotation = FRotator::ZeroRotator;
+	FRotator GasPedalRestRotation = FRotator(-82.780956f, 76.474784f, -104.122554f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator GasPedalPressedRotation = FRotator::ZeroRotator;
+	FRotator GasPedalPressedRotation = FRotator(-82.780956f, 76.474784f, -104.122554f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator BrakePedalRestRotation = FRotator::ZeroRotator;
+	FRotator BrakePedalRestRotation = FRotator(-85.945284f, -33.590524f, 90.408865f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator BrakePedalPressedRotation = FRotator::ZeroRotator;
+	FRotator BrakePedalPressedRotation = FRotator(-85.945369f, -33.588752f, 110.407088f);
 
 	// Levers get their own pair each: they are mirrored geometry, so one pose pair mirrored in code
 	// would only be right if the rigger mirrored them exactly. Measuring both removes the guess.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator LeftLeverRestRotation = FRotator::ZeroRotator;
+	FRotator LeftLeverRestRotation = FRotator(-89.676731f, 100.339338f, -104.799808f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator LeftLeverPulledRotation = FRotator::ZeroRotator;
+	FRotator LeftLeverPulledRotation = FRotator(-89.676731f, 100.339338f, -94.799808f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator RightLeverRestRotation = FRotator::ZeroRotator;
+	FRotator RightLeverRestRotation = FRotator(-87.327567f, -63.007877f, 58.656313f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FRotator RightLeverPulledRotation = FRotator::ZeroRotator;
+	FRotator RightLeverPulledRotation = FRotator(-87.327567f, -63.007877f, 68.656313f);
 
 	// The controls TRANSLATE as well as rotate - the VK1602's gas pedal moves about 0.035 on X and
 	// 0.073 on Y between rest and pressed, which a rotation-only version silently dropped. Left at
 	// zero these are ignored, so a control that only pivots needs nothing set here.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector GasPedalRestLocation = FVector::ZeroVector;
+	FVector GasPedalRestLocation = FVector(1.525485f, -0.058008f, -0.348026f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector GasPedalPressedLocation = FVector::ZeroVector;
+	FVector GasPedalPressedLocation = FVector(1.455214f, -0.000887f, -0.343073f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector BrakePedalRestLocation = FVector::ZeroVector;
+	FVector BrakePedalRestLocation = FVector(1.128539f, -0.026828f, -0.623563f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector BrakePedalPressedLocation = FVector::ZeroVector;
+	FVector BrakePedalPressedLocation = FVector(1.128539f, -0.026828f, -0.623563f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector LeftLeverRestLocation = FVector::ZeroVector;
+	FVector LeftLeverRestLocation = FVector(1.269585f, -0.114225f, -0.468422f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector LeftLeverPulledLocation = FVector::ZeroVector;
+	FVector LeftLeverPulledLocation = FVector(1.269585f, -0.114225f, -0.468422f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector RightLeverRestLocation = FVector::ZeroVector;
+	FVector RightLeverRestLocation = FVector(1.286263f, -0.106559f, -0.422223f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Poses")
-	FVector RightLeverPulledLocation = FVector::ZeroVector;
+	FVector RightLeverPulledLocation = FVector(1.286263f, -0.106559f, -0.422223f);
 
 	// Paired with the rotation accessors; feed these into the same Transform (Modify) Bone node's
 	// Translation pin, also in Parent Bone Space with Translation Mode Replace Existing.
@@ -864,6 +877,55 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior")
 	FVector GetInteriorLeverLocation(bool bLeft) const;
+
+public:
+	// --- Manual (VR hand) driving: where the levers can be GRABBED ------------------------------
+	// A socket OR bone name on whichever skeletal mesh carries it - the interior mesh on the VK1602.
+	//
+	// Defaults are the HANDLE sockets on Tank_New_Skeleton (2026-09-10), placed at the centroid of the
+	// top 6cm of the vertices skinned to each lever bone - measured, not eyeballed. They ride their
+	// lever bone, so the grab point follows the animated lever. The bones themselves (b_L_Lever /
+	// b_R_Lever) are floor PIVOTS 69cm below the handles and are the wrong thing to reach for.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
+	FName LeftLeverGrabSocket = TEXT("LeverHandle_L");
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
+	FName RightLeverGrabSocket = TEXT("LeverHandle_R");
+
+	// How close, in cm, the gripping hand must be to the handle socket to take hold of the lever.
+	// Was 60 while the grab points were the floor pivots; with sockets ON the handles a hand-sized
+	// sphere is right. The handles are only ~8cm apart, which is safe because each hand can only
+	// take its own side's lever.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving", meta = (ClampMin = "1.0"))
+	float LeverGrabRadius = 15.f;
+
+	// Direction the hand moves to work a lever, in the tank's own space (so it does not change as the
+	// hull turns). MEASURED from the authored pose pair: going rest -> "pulled" (roll +10) moves the
+	// handle 11.6cm along +X - FORWARD, away from the driver - so that is the direction the hand works
+	// it, and the lever stays under the hand 1:1. The rest pose already has the handle ~31cm from the
+	// driver's head, so a pull-back pose would drive it into the driver's chest. To make it a pull
+	// instead, re-author the pulled pose (roll -10) and flip this to -X.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving")
+	FVector LeverPullAxisLocal = FVector(1.f, 0.f, 0.f);
+
+	// Hand travel, in cm along LeverPullAxisLocal, that counts as a fully worked lever. 11.6 is the
+	// measured handle travel between the two poses, so a hand moving N cm moves the handle N cm.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Interior|Manual Driving", meta = (ClampMin = "1.0"))
+	float LeverPullDistance = 11.6f;
+
+	// World location of a lever's grab point, from whichever skeletal mesh owns that socket/bone.
+	// False when no mesh on this tank has it - the lever simply cannot be grabbed then.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior|Manual Driving")
+	bool GetLeverGrabLocation(bool bLeft, FVector& OutLocation) const;
+
+	// LOCAL ONLY, never replicated. While active, each interior lever shows the pull of the hand
+	// holding it instead of the net steering, unsmoothed. Two reasons it cannot come from the
+	// replicated CurrentDriveInput: steering is right-minus-left, so pulling both levers equally
+	// shows as zero and neither lever would move; and the round trip plus smoothing would leave the
+	// handle trailing the hand that is holding it. Other crew still see the steering-derived pose.
+	void SetLocalLeverPullOverride(bool bActive, float LeftPull, float RightPull);
+
+public:
 
 	// How fast the controls chase the input, in units per second. Raw input is a STEP - a stick or a
 	// key goes 0 -> 1 in one frame - and a pedal that teleports reads as broken. 0 disables smoothing.
@@ -1033,6 +1095,13 @@ private:
 	float DisplayThrottle = 0.f;
 	float DisplayBrake = 0.f;
 	float DisplaySteering = 0.f;
+	float DisplayLeftLever = 0.f;
+	float DisplayRightLever = 0.f;
+
+	// See SetLocalLeverPullOverride.
+	bool bLocalLeverOverride = false;
+	float LocalLeftLeverPull = 0.f;
+	float LocalRightLeverPull = 0.f;
 
 
 	FTimerHandle WeaponStopTimerHandle;

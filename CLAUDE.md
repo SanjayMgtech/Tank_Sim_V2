@@ -3098,6 +3098,275 @@ The rest still owed:
 - `TSVision night` / `thermal` visibly change the feed (needs a station with a render target)
 - two-window listen server: the client's blip moves on the host's radar and vice versa
 
+
+## 🖐 Manual (VR hand) driving — pedals on the triggers, levers on the grips (2026-09-10)
+
+Fills the gap left by the Stick/Levers switch: `ETSDriveControlMode::Manual` used to mean only "the
+stick is off". It now drives the tank from the hands. Everything lives on `ATSCrewPawn` and is gated
+on `IsLocalManualDriver()` - local controller, Driver role, Manual mode - so no other seat or mode
+is affected.
+
+| Control | Binding (`IMC_Driver`) | Action |
+|---|---|---|
+| Gas pedal | `*_Right_Trigger_Axis` | `IA_DrivePedalGas` (Axis1D) |
+| Brake pedal | `*_Left_Trigger_Axis` | `IA_DrivePedalBrake` (Axis1D) |
+| Left lever | `OculusTouch/Vive_Left_Grip_Click`, `ValveIndex_Left_Grip_Force` | `IA_LeverGripLeft` (Bool) |
+| Right lever | same, right hand | `IA_LeverGripRight` (Bool) |
+
+**Pedals are on the triggers because a seated VR player has no feet on anything** - a stated design
+choice, not a limitation to route around. Analog triggers map naturally onto pedal pressure.
+
+**The grips are ALREADY bound in `IMC_Shared`** (left -> `IA_Grab`, right -> `IA_Interact`). The two
+lever-grip actions therefore have **`bConsumeInput = false`**; with the default `true`, the Driver
+context (priority 1) would silently swallow those shared actions for the driver.
+
+### The mapping
+`ComputeManualDriveInput(Gas, Brake, LeftPull, RightPull)` -> `(throttle = gas - brake,
+steering = right - left)`, clamped. Static and BlueprintPure specifically so it can be tested
+without a headset - 7/7 cases pass, including both levers cancelling and out-of-range clamping.
+A tracked vehicle turns towards the side whose lever is pulled, so the left lever alone gives
+negative steering - the same sign the stick and the interior lever animation already use.
+
+It then goes out through the **same `ServerSetDriveInput` the stick uses**, every frame while
+non-zero (the RPC is Unreliable and the server's dead-man switch releases after 0.5s), with one
+terminal `(0,0)` on the transition to idle. Because it lands in the replicated `CurrentDriveInput`,
+**the interior lever and pedal animation follows the hands for free** - the hand owns the input,
+the input owns the pose. That is how the "both cannot own the pose" conflict actually resolves.
+
+### How a lever is held
+Grip press -> `TryGrabLever`: the hand must be within `LeverGrabRadius` of the tank's
+`LeftLeverGrabSocket` / `RightLeverGrabSocket` (a socket OR bone name, found on whichever skeletal
+mesh has it). Left hand takes only the left lever, right hand only the right. The hand position is
+recorded in **tank space**, so driving along never reads as pulling. Pull =
+`dot(handDelta, LeverPullAxisLocal) / LeverPullDistance`, clamped 0..1. Release springs the lever
+back to rest. **Every grip press logs the measured distance**, grabbed or not:
+```
+[ManualDrive] Left grip: hand 42.3 cm from lever grab point (reach 60.0) -> GRABBED
+```
+
+### ⚠ Measured: the lever bones are PIVOTS on the floor, not handles
+```
+LEFT  grab point  tank-local (127.0, -46.8,  62.0)   93cm from DriverSeat
+RIGHT grab point  tank-local (128.6, -42.2,  61.3)   94cm from DriverSeat
+DriverSeat (head) tank-local (102.1, -40.9, 151.3)
+```
+`b_L_Lever` / `b_R_Lever` are ~89cm below the driver's head and ~5cm apart. The skeleton has no
+handle bone, so the handle position is mesh geometry, not skeleton data. The guessed 30cm radius
+would have required reaching to the floor; it is **60** as an interim. The precise fix is data, not
+code: place `LeverHandle_L` / `LeverHandle_R` sockets on the handle tips in `Tank_New_Skeleton` and
+point the two grab-socket properties at them, then drop the radius to ~15.
+
+### ⚠ Gate the Gunner's tick work when adding another tick user
+`Tick` used to be enabled only for a local Gunner, so it called `UpdateGunnerAim()` unconditionally
+- and that SENDS an aim point to the server. Enabling tick for a manual Driver without gating it
+would have had the Driver steering the turret. `Tick` now returns before the Gunner work unless
+`IsLocalGunner()`. Any future tick user needs the same care.
+
+### Leaving Manual cannot strand an input
+`UpdateAimTickEnabled` (re-run on every assignment change, mode changes included) calls
+`ResetManualDriving` whenever the player stops being a manual Driver while anything is held,
+sending the terminal STOP if a command was going out.
+
+### The interior poses are now C++ DEFAULTS
+They were wiped from `BP_VK1602Leopard_Controller_Chaos` three times - the reload-assets modal, a
+binary merge conflict, and another session re-saving the Blueprint from an older copy (`be83ca5`).
+Each time every control collapsed to a zero pose. As C++ defaults, a Blueprint that stores nothing
+still gets them; delta serialisation means the Blueprint only ever stores a value that DIFFERS from
+the default, so there is nothing left for a stale save to clobber. Verified: the VK Blueprint reads
+gas travel `0.090694` and brake roll delta `19.998` with no override of its own.
+
+### Verified vs owed
+Verified: build clean; T0 (21 descriptions, 0 problems) and T1 (54 XR keys, 0 mismatches) pass with
+the new actions; the four actions are assigned on `BP_TSVRPawn` and survive a package reload; the
+drive mapping is numerically correct; both lever grab points resolve on the real interior mesh.
+
+**Owed a headset test:** grab reach (60cm from the pivot is a measured-geometry estimate), the pull
+direction (`LeverPullAxisLocal` defaults to backwards, -X), and the Index grip, which has no
+`Grip_Click` and uses `Grip_Force` on a Boolean action exactly as `IMC_Shared` already does.
+
+### ⚠ Editor crashed at EXIT inside the Python plugin (2026-09-10) - keep script state local
+`EXCEPTION_ACCESS_VIOLATION` in `python311` / `UnrealEditor_PythonScriptPlugin`, logged AFTER
+`LogExit: Preparing to exit` - i.e. during shutdown, after every package had saved. Nothing was
+lost and the next launch showed no recovery modal. The dump carries module names only, no symbols,
+so the cause is **not proven**. Leading suspect: `run_python` calls had left module-level references
+to engine objects (CDO handles, and a bound UFUNCTION: `f = unreal.TSCrewPawn.compute_manual_drive_input`),
+which Python then touched after the engine had freed them. Cheap to avoid, so do: put `run_python`
+bodies inside a function and `del` it afterwards, and never park a PIE actor in `builtins` across
+PIE teardown.
+
+
+## 🧪 Automated VR tests — `TankSim.VR.*` (2026-09-10)
+
+**Run everything with one call** (in the running editor, no PIE, no headset, ~0.1s):
+```
+editor_query run_automation_tests  {"prefix": "TankSim"}      # 8 tests, all must pass
+```
+Source: `Source/Tank_Sim_V2/Tests/TSManualDrivingTests.cpp`. Run it after ANY change to VR input,
+an Input Action, an IMC, the crew pawn's input handling, or the interior control poses.
+
+| Test | Covers |
+|---|---|
+| `TankSim.VR.InputBindings` | The old T0/T1 checks, now C++: every IMC/Action description non-empty, **< 128 chars**, unique; every XR key's component type matches its action's ValueType (`*_2D` only on Axis2D); the four manual-driving actions exist with the right type, `bConsumeInput` (false on grips), 3 profile bindings each in `IMC_Driver`, and are assigned on `BP_TSVRPawn` |
+| `TankSim.VR.ManualDriving.Mapping` | pedals + levers -> (throttle, steering): 7 cases incl. cancelling and clamping |
+| `TankSim.VR.ManualDriving.LeverPull` | hand travel -> 0..1 pull: 9 cases incl. push-away, sideways, unnormalised and zero axis |
+| `TankSim.VR.ManualDriving.Pipeline` | the REAL VK1602 + GameMode: seat/mode gating, the GameMode's VR rule, pedals -> tank input, grab reach, grab -> pull -> RPC -> tank input, both levers + pedal together, the interior bone landing halfway between the measured poses, release, and leaving Manual sending the terminal STOP |
+
+### Why this approach, and not an XR simulator
+Researched: the **Meta XR Simulator** is a genuine fake OpenXR runtime with simulated controllers
+and record/replay automation (supported from UE Meta XR plugin v57). It is the right tool for a
+FULL end-to-end headless run, but it replaces the OpenXR runtime a real Quest Link session uses, so
+it is an opt-in install, not a default. **OpenXRSim** (github.com/sanky369/OpenXRSim) does similar;
+it is third-party and unvetted. These native tests cover every layer that does not need an XR
+runtime and name the ones they cannot reach - see the table at the top of the test file.
+
+### Techniques that made it possible - reuse them
+- **Hands can be placed directly.** `UMotionControllerComponent::TickComponent` only writes the
+  transform when the controller reports TRACKED, so with no XR runtime a placed hand stays placed.
+- **`APlayerController::SetAsLocalPlayerController()` is public.** It makes a controller local with
+  no `ULocalPlayer` - a transient test world has no viewport to attach one to, and every
+  manual-driving path is gated on `IsLocalController()`. No test seam needed on our controller.
+- **A Server RPC called on the authority in a standalone world runs locally**, so the pawn's real
+  `ServerSetDriveInput` call reaches the tank's control component exactly as in play.
+- **`friend struct FTSManualDrivingTestAccess`** on `ATSCrewPawn` and `ATSTankControllerBase` gives
+  the test the private handlers and state, so it drives the real code rather than a copy of it.
+- **Spawn the pawn BLUEPRINT, not the native class.** The native crew pawn carries no input assets
+  and rightly logs an ERROR saying so - and any logged error fails an automation test. The first
+  run failed on exactly that, with every assertion passing.
+- `ComputeLeverPull` was extracted from a lambda into a static so the pull maths is testable alone.
+
+### What these tests do NOT prove
+The key -> action layer is checked statically (types and bindings), not fired - input handlers are
+called directly because `InjectInputForAction` needs a `ULocalPlayer`. OpenXR accepting the bindings
+still needs a `-game -vr` run with `grep XR_ERROR`. And whether a 60cm reach and a backwards pull
+FEEL right is a human in the headset, last.
+
+**Expected warnings, not failures:** the Pipeline and Flow tests each log 3, all environmental in a
+transient world - no `TSTeamSpawn_TeamA` actor (there is no level, so the tank drops at the
+world-origin fallback), `UTSVoiceSubsystem` with no voice plugin loaded, and missing engine editor
+icons. A NEW warning class appearing here is worth reading; these three are not.
+
+### ⚠ A test world MUST be destroyed in TearDown — or the editor crashes minutes later, or at exit
+Two editor crashes on 2026-09-10 came from test worlds that were never destroyed. They showed up
+~25 minutes after a green run, or on closing the editor, so nothing pointed back at the tests:
+```
+Assertion failed: Vehicle != 0   ChaosVehicleManager.cpp:137          <- Pipeline test (real VK1602)
+Ensure: Tickable subsystem MassSignalSubsystem /Temp/Untitled_2 ... destroyed while still initialized
+  then EXCEPTION_ACCESS_VIOLATION in CoreUObject                      <- Flow test
+```
+**`UGameInstance::Shutdown()` does NOT destroy the world.** It only drops the WorldContext, so the
+world lives on until a later GC or engine exit, which tears it down out of order. Every fixture now
+ends with `GEngine->DestroyWorldContext(World); World->DestroyWorld(false);`. A fixture that spawns
+a Chaos vehicle also `Destroy()`s each `AWheeledVehiclePawn` FIRST, while its physics scene is still
+alive, because `FChaosVehicleManager` holds weak pointers and `check()`s them on the way out.
+
+**Check for a leak without waiting for a crash:** after `run_automation_tests`, every
+`Bringing World /Temp/Untitled_N` line in the log must be followed by a `CleanupWorld for Untitled`.
+A missing one is a leaked world. Verified after the fix: 4 of 4 cleaned up, 5 forced GCs, and a
+graceful editor close with no crash dir and 0 ensures.
+
+## 🖐 Visible VR hands on `BP_TSVRPawn` (2026-09-10)
+The crew pawn's `LeftHand` / `RightHand` are bare `MotionControllerComponent`s, and UE 5.7 motion
+controllers render nothing on their own, so the hands were **invisible** in the headset. Two
+`BP_MannequinsXR` components now ride them, with values copied verbatim from the VR template's
+`BP_XRPawn` (`HandLeft` / `HandRight`): `SKM_MannyXR_left/right`, `ABP_MannequinsXR`, offset
+`(-2.98, ∓3.5, 4.56)`, rotation `(P ∓25, Y -180/0, R 90)`, `bMirror` true on the left only. They are
+Blueprint data (RULE 8); C++ has no reference to them. They sit in the idle pose; closing the fingers
+on grip is not wired yet.
+
+Their variable names are the auto-generated `BP_MannequinsXR` / `BP_MannequinsXR1`, on purpose:
+
+### ⛔ Adding an SCS component under an INHERITED NATIVE parent - what crashed, what works
+- `blueprint_query add_component` with `parent: LeftHand` answers `Parent component not found` (it
+  only sees SCS parents, like `reparent_component`). **It still leaves a half-made template behind
+  in memory** under the name you asked for.
+- `SubobjectDataSubsystem.add_new_subobject(AddNewSubobjectParams(parent_handle=<native handle>,
+  new_class=..., blueprint_context=bp))` from Python **works** - it is what the Components panel
+  itself calls - and attaches correctly to the native parent (verified on a spawned instance).
+- **`rename_subobject` then CRASHED THE EDITOR**, a fatal assert rather than an error:
+  `Renaming an object (..._GEN_VARIABLE) on top of an existing object (HandMeshLeft_GEN_VARIABLE) is
+  not allowed` (`Obj.cpp:349`) - the leftover from the failed `add_component` held the name. Nothing
+  was saved, so nothing was lost, but it cost a crash and a relaunch.
+
+So: after ANY failed add, relaunch (or pick a name nothing has touched) before renaming. Renaming
+these two to `HandMeshLeft` / `HandMeshRight` is safe in the Components panel by hand.
+
+## ✋ Lever handles, grip feedback and firing haptics (2026-09-10)
+Asked for: "grip the TOP of the lever", "feedback that I am holding it", "a point showing where to
+hold", "haptics on shooting". All four done; test `TankSim.VR.ManualDriving.Feedback` covers what a
+transient world can see.
+
+### Grab points are now measured HANDLE sockets
+`LeverHandle_L` / `LeverHandle_R` on `Tank_New_Skeleton`, parented to `b_L_Lever` / `b_R_Lever`, are
+the new defaults of `LeftLeverGrabSocket` / `RightLeverGrabSocket`. Placed from the mesh, not by eye:
+GeometryScript `copy_mesh_from_skeletal_mesh` -> `get_largest_vertex_bone_weight` per vertex -> the
+388 vertices skinned to each lever -> centroid of the top 6cm of a 69cm rod -> into bone space.
+Verified on a spawned mesh at 0.00cm from the measured centroid. Reach is now 15cm (was 60 while the
+grab points were floor pivots).
+
+- Sockets go on via **`animation_query add_socket`**. Python cannot do it: `SkeletalMeshSocket.socket_name`
+  is read-only to `set_editor_property`.
+- These bones carry a **x100 scale** (bone-space units are metres), so socket offsets look tiny (0.666).
+
+### ⚠ The authored "pulled" lever pose moves the handle FORWARD
+Composing the C++ pose pair onto the parent bone: rest -> pulled (roll +10) moves the handle
+**11.6cm along +X, away from the driver**. The rest pose itself sits ~20° back from the mesh's bind
+pose, putting the handle ~31cm from the driver's head, so a pull-BACK pose would drive it into the
+chest. `LeverPullAxisLocal = +X`, `LeverPullDistance = 11.6`: the handle stays under the hand 1:1.
+To make it a pull instead: re-author the pulled pose at roll -10 and flip the axis to -X.
+
+### The held lever is drawn from the HAND on the driver's own machine
+`ATSTankControllerBase::SetLocalLeverPullOverride` - local, never replicated, unsmoothed. Needed
+because steering is right-minus-left: both levers pulled equally is zero steering, so the replicated
+pose would leave both levers at rest in the player's hands. Other crew still see the
+steering-derived pose. The crew pawn tracks which tank it overrides (`LeverOverrideTank`) so a seat
+change cannot strand the override on the old tank.
+
+### Feedback cues (all `ATSCrewPawn` properties, assets set on `BP_TSVRPawn` - RULE 2)
+| Cue | How |
+|---|---|
+| where to hold | glowing marker on each handle socket (`/Engine/BasicShapes/Sphere` + `M_SimpleGlow`, 4cm), amber; **green** when the hand is in reach; hidden while held; local Driver only |
+| in reach | light haptic tick on entering reach |
+| grabbed | full haptic pulse + hand closes (`PoseAlphaGrasp`=1) + **hand drawn on the handle** (hand mesh shifted by the controller-to-socket gap; the socket rides the animated bone) |
+| missed grip | hand half-closes (0.5), no haptic |
+| end of travel | haptic pulse when pull reaches 1, re-armed below 0.9 |
+| released | soft pulse, hand opens, hand back on its controller |
+| main cannon | full pulse on BOTH hands |
+| machine gun | light pulse on the left hand every 0.08s while held |
+
+- Haptics use **`PlayHapticEffect`** with the template's `/Game/XRFramework/Haptics/GrabHapticEffect`
+  (`HapticFeedbackEffect_Curve`), not `SetHapticsByValue`: OpenXR applies a by-value vibration for
+  ONE frame (`duration = CurrentDeltaTime`), so a pulse would need re-sending every tick.
+- `PoseAlphaGrasp` is set **by name through reflection** (`FDoubleProperty` - Blueprint floats are
+  doubles), because `ABP_MannequinsXR` is a Blueprint type. The VR template drives the same variable.
+- Firing haptics play on the INPUT, locally - immediate, but they also play for a shot the server
+  then refuses (reloading).
+
+Owed a headset: whether 15cm reach, the 4cm marker, and the haptic strengths feel right. All are
+`EditDefaultsOnly` on `BP_TSVRPawn` / the tank - tune in Class Defaults, no rebuild.
+
+## ⛔ VR Gunner turret SPUN - head aim from a turret-mounted seat is a feedback loop (2026-09-10)
+Headset report: "gunner have rotation problem ... it keeps on spinning". Structural, not a typo:
+`UpdateGunnerAim` traced along the HEAD's forward vector, and the Gunner's seat rides the turret.
+Look 10° right -> turret traverses right -> it carries the seat and the view right -> the head is
+still 10° right of centre -> the turret keeps going, until the player looks dead ahead. The stick
+slew (`VRSlewYaw`, an offset added to the head direction) made it worse: a constant offset meant the
+turret spun even with the head straight. The log showed the player fighting it with the stick
+(`IA_AimTurret` swinging to +/-0.93 over and over).
+
+The desktop path never had this because its command (`SeatViewYaw/Pitch`) is held in HULL space and
+never reads the camera. Fix: **`bVRGunnerStickAims` (default on)** routes the VR sticks into that
+same command - `IsGunnerMouseDrivingGun()` is now true in a headset too - at `VRStickSlewSpeed`
+deg/s, lead capped by the new `VRGunnerMaxAimLead` (10°, not the mouse's 45°, so a held stick stops
+about when released). The head only looks. `UpdateGunnerAimCommand` no longer zeroes the camera's
+relative rotation in a headset - there it IS the tracked head.
+
+**Generalise: never aim with the head from a seat the aim rotates.** Head aim needs a hull-fixed
+seat; a turret-mounted one must aim with something that is not the view. Turning the flag off
+restores head aim and the loop with it.
+
+Not automatable: `IsHeadTrackingActive()` is false in a transient world, so no test reaches the VR
+branch. Needs the headset.
+
 ---
 
 ## 🌐 Cross-machine session hosted but the other PC can't travel to it (2026-09-11)

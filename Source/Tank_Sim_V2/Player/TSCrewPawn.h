@@ -20,6 +20,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
 #include "Core/TSTypes.h"
+#include "InputCoreTypes.h"
 #include "TSCrewPawn.generated.h"
 
 class UCameraComponent;
@@ -34,6 +35,10 @@ class ATSCrewPawn : public APawn
 {
 	GENERATED_BODY()
 
+	// Automation tests (Tests/TSManualDrivingTests.cpp) drive the private input handlers and read
+	// private state through this, so they exercise the real code paths rather than a copy of them.
+	friend struct FTSManualDrivingTestAccess;
+
 public:
 	ATSCrewPawn();
 
@@ -47,6 +52,19 @@ public:
 	virtual void OnRep_PlayerState() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 	virtual void Tick(float DeltaSeconds) override;
+
+	// The Manual (VR hand) drive mapping, as a pure function so it can be tested without a headset:
+	// throttle = gas - brake, steering = right lever - left lever. A tracked vehicle turns towards the
+	// side whose lever is pulled, so the LEFT lever alone gives negative (left) steering - the same
+	// sign the stick and the interior lever animation already use.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Control")
+	static FVector2D ComputeManualDriveInput(float Gas, float Brake, float LeftPull, float RightPull);
+
+	// How far a held lever is pulled, 0..1: the hand's travel from where it took hold, projected onto
+	// the pull axis, over the distance that counts as a full pull. Only the along-axis component
+	// counts - pushing away or moving sideways is never a pull. Pure for the same reason as above.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Control")
+	static float ComputeLeverPull(const FVector& StartLocal, const FVector& NowLocal, const FVector& PullAxisLocal, float FullPullDistance);
 
 	// ---------------------------------------------------------------------
 	// Play mode - which of the two crew pawns this class IS.
@@ -148,6 +166,18 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	bool bGunnerMouseDrivesGun = true;
 
+	// VR Gunner: the STICKS aim the gun (right = traverse, left = elevation, VRStickSlewSpeed deg/s)
+	// through the same hull-relative command the desktop mouse drives, and the head only LOOKS.
+	//
+	// Head aim cannot work from this seat. The Gunner rides the turret, so looking 10 degrees right
+	// turns the turret, which turns the seat and the view with it - and the head is still 10 degrees
+	// right of centre, so the turret keeps going for as long as the player is not looking dead ahead.
+	// Found in the first headset test ("it keeps on spinning"). The stick slew made it worse: a
+	// constant offset on top of the head, so the turret spun even with the head straight.
+	// False restores head aim, which is only sane from a seat that does NOT ride the turret.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	bool bVRGunnerStickAims = true;
+
 	// How far the mouse command may run ahead of where the gun has actually got to, in degrees.
 	//
 	// Without a cap this winds up: a long mouse sweep against a slowly traversing turret banks the
@@ -155,6 +185,12 @@ public:
 	// mouse. Capping the lead keeps the gun responsive and makes it stop when the hand stops.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "1.0", ClampMax = "180.0"))
 	float MaxGunnerAimLead = 45.f;
+
+	// The same cap for the VR sticks, and much tighter. The stick is a RATE control held for seconds
+	// (60 deg/s against a far slower traverse), so a 45 degree lead would carry the turret on for
+	// seconds after the stick is released. 10 makes it stop about when the hand stops.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "1.0", ClampMax = "180.0"))
+	float VRGunnerMaxAimLead = 10.f;
 
 	UFUNCTION()
 	void ApplyRoleMappingContext_FromPlayerState();
@@ -308,6 +344,99 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputAction> IA_RequestIntel;
 
+	// --- Manual (VR hand) driving: active only for the local Driver in ETSDriveControlMode::Manual.
+	// Triggers are the PEDALS (a seated VR player has no feet on anything); grips take the LEVERS.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_DrivePedalGas;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_DrivePedalBrake;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_LeverGripLeft;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_LeverGripRight;
+
+	// --- Manual driving FEEDBACK: what tells the player they have hold of a lever ----------------
+	// Every asset here is Blueprint data (RULE 2 - nothing is loaded in C++); BP_TSVRPawn sets them.
+	// Leaving one unset simply turns that cue off.
+
+	// Played on the hand that reaches, takes, bottoms out or lets go of a lever. The VR template's
+	// /Game/XRFramework/Haptics/GrabHapticEffect is the intended asset.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	TObjectPtr<class UHapticFeedbackEffect_Base> LeverHapticEffect;
+
+	// Strength of each haptic cue, as PlayHapticEffect's Scale. 0 silences that cue.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float LeverGrabHapticScale = 1.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float LeverReleaseHapticScale = 0.35f;
+
+	// The lever hitting the end of its travel.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float LeverEndStopHapticScale = 0.6f;
+
+	// A light tick as the hand comes within reach of a handle - "you can grab here".
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float LeverInReachHapticScale = 0.2f;
+
+	// A marker drawn on each lever handle, for the local manual Driver only: where to hold. Hidden
+	// while that lever is held, since the hand is then on it.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	TObjectPtr<class UStaticMesh> LeverGrabIndicatorMesh;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	TObjectPtr<class UMaterialInterface> LeverGrabIndicatorMaterial;
+
+	// Vector parameter on that material that takes the colour below.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	FName LeverGrabIndicatorColorParameter = TEXT("Color");
+
+	// Marker size in cm, whatever the mesh's own size.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback", meta = (ClampMin = "0.1"))
+	float LeverGrabIndicatorSize = 4.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	FLinearColor LeverIndicatorIdleColor = FLinearColor(2.f, 0.9f, 0.1f);
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	FLinearColor LeverIndicatorInReachColor = FLinearColor(0.2f, 3.f, 0.4f);
+
+	// The float on the hand mesh's AnimBP that closes the fingers, set by NAME because the hand is a
+	// Blueprint type (ABP_MannequinsXR's PoseAlphaGrasp - the same variable the VR template drives
+	// from its grip). 1 = fist on a held lever; LeverMissGraspAlpha when the grip closed on nothing.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	FName HandGraspPoseVariable = TEXT("PoseAlphaGrasp");
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float LeverMissGraspAlpha = 0.5f;
+
+	// While a lever is held, draw the hand ON its handle rather than wherever the controller is.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	bool bSnapHandToHeldLever = true;
+
+	// --- Firing FEEDBACK ---------------------------------------------------------------------------
+	// Haptics on the Gunner's controllers when they fire. Played locally on the INPUT, so it is
+	// immediate rather than a network round trip late - which also means it plays for a shot the
+	// server then refuses (reloading, out of ammo). Unset = no firing haptics.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Weapons|Feedback")
+	TObjectPtr<class UHapticFeedbackEffect_Base> FireHapticEffect;
+
+	// Main cannon: BOTH hands, full strength - the whole tank kicks, not just the trigger finger.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Weapons|Feedback", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float MainCannonHapticScale = 1.f;
+
+	// Machine gun: a light buzz on its trigger hand (left, per IMC_Gunner) for as long as it fires.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Weapons|Feedback", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float MachineGunHapticScale = 0.35f;
+
+	// Seconds between machine-gun pulses while the trigger is held. IA_FireMachineGun is Triggered
+	// every frame; restarting the effect that often would just smear it into a flat hum.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Weapons|Feedback", meta = (ClampMin = "0.01"))
+	float MachineGunHapticInterval = 0.08f;
+
 	// Extension point for hand-interaction with cockpit levers/switches - not prescribed by the doc.
 	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|VR")
 	void OnInteractPressed();
@@ -417,8 +546,92 @@ private:
 	// True only for the local player who currently holds the Gunner seat.
 	bool IsLocalGunner() const;
 
+	// Local Driver in Manual mode - the only player the pedal/lever inputs apply to.
+	bool IsLocalManualDriver() const;
+
+	void Input_PedalGas(const FInputActionValue& Value);
+	void Input_PedalGasReleased(const FInputActionValue& Value);
+	void Input_PedalBrake(const FInputActionValue& Value);
+	void Input_PedalBrakeReleased(const FInputActionValue& Value);
+	void Input_LeverGripLeftPressed(const FInputActionValue& Value);
+	void Input_LeverGripLeftReleased(const FInputActionValue& Value);
+	void Input_LeverGripRightPressed(const FInputActionValue& Value);
+	void Input_LeverGripRightReleased(const FInputActionValue& Value);
+
+	// Take hold of a lever if the closing hand is within reach of its grab point. Logs the distance
+	// either way, so a first headset test says how far off the hands are rather than just "nothing".
+	// True when the lever was taken.
+	bool TryGrabLever(bool bLeft);
+	void ReleaseLever(bool bLeft);
+
+	// --- Manual driving feedback (see the Feedback properties above) ----------------------------
+	// Per tick while a local manual Driver: reach cue, end-stop cue, hand snap, handle markers.
+	void UpdateLeverFeedback();
+
+	// Closes/opens the visible hand. No-op on a pawn with no hand mesh (the desktop pawn).
+	void SetHandGrasp(bool bLeft, float Alpha);
+
+	// The visible hand riding a motion controller (BP_TSVRPawn's BP_MannequinsXR), or null.
+	class USkeletalMeshComponent* FindHandMesh(bool bLeft) const;
+
+	void PlayLeverHaptic(bool bLeft, float Scale) const;
+
+	// Plays Effect on one hand of the LOCAL controller. No-op for a null effect, a zero scale, or a
+	// pawn not controlled on this machine.
+	void PlayHaptic(class UHapticFeedbackEffect_Base* Effect, EControllerHand Hand, float Scale) const;
+
+	// World time of the last machine-gun pulse. See MachineGunHapticInterval.
+	double LastMachineGunHapticTime = -1.0;
+
+	// Opens both hands, puts snapped hands back on their controllers, hides the markers.
+	void ClearLeverFeedback();
+
+	bool bLeftHandInReach = false;
+	bool bRightHandInReach = false;
+	bool bLeftAtEndStop = false;
+	bool bRightAtEndStop = false;
+	bool bLeftHandSnapped = false;
+	bool bRightHandSnapped = false;
+	FVector LeftHandMeshRestRelative = FVector::ZeroVector;
+	FVector RightHandMeshRestRelative = FVector::ZeroVector;
+	bool bWarnedNoGraspVariable = false;
+
+	// The tank whose interior levers this pawn is currently overriding, so the override is released
+	// on the right tank even after a seat change.
+	TWeakObjectPtr<class ATSTankControllerBase> LeverOverrideTank;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UStaticMeshComponent> LeftLeverIndicator;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UStaticMeshComponent> RightLeverIndicator;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> LeftLeverIndicatorMID;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> RightLeverIndicatorMID;
+
+	// Per tick while a local manual Driver: turn held levers + pedals into a drive command.
+	void UpdateManualDriving();
+
+	// Clears every manual input and, if one was being sent, sends the terminal (0,0) - the same STOP
+	// the stick sends on release, and for the same reason.
+	void ResetManualDriving();
+
+	float PedalGas = 0.f;
+	float PedalBrake = 0.f;
+	bool bLeftLeverHeld = false;
+	bool bRightLeverHeld = false;
+	FVector LeftGrabStartLocal = FVector::ZeroVector;    // hand position in TANK space at grab
+	FVector RightGrabStartLocal = FVector::ZeroVector;
+	float LeftLeverPull = 0.f;
+	float RightLeverPull = 0.f;
+	bool bManualInputWasActive = false;
+
 	// --- Gunner aim command -----------------------------------------------------------------------
-	// True when this pawn's mouse should be steering the launcher instead of turning the view.
+	// True when this pawn's mouse - or in a headset its sticks (bVRGunnerStickAims) - steers the
+	// launcher through the hull-relative aim command, instead of the view being the aim.
 	bool IsGunnerMouseDrivingGun() const;
 
 	// Per-frame upkeep of the aim command: seed it from the gun the first time, then keep its lead

@@ -111,6 +111,11 @@ namespace
 			return PC ? PC->GetPlayerState<ATSTankPlayerState>() : nullptr;
 		}
 
+		// UGameInstance::Shutdown does NOT destroy the world - it only clears WorldContext. The old
+		// teardown stopped there, so every run leaked this world until editor EXIT, where its
+		// still-initialised world subsystems were torn down out of order:
+		//   Ensure: Tickable subsystem MassSignalSubsystem /Temp/Untitled_2 ... destroyed while still initialized
+		// followed by an EXCEPTION_ACCESS_VIOLATION in CoreUObject. Destroy it here, explicitly.
 		void TearDown()
 		{
 			if (GameInstance)
@@ -118,7 +123,12 @@ namespace
 				GameInstance->Shutdown();
 				GameInstance = nullptr;
 			}
-			World = nullptr;
+			if (World)
+			{
+				GEngine->DestroyWorldContext(World);
+				World->DestroyWorld(false);
+				World = nullptr;
+			}
 		}
 	};
 }
