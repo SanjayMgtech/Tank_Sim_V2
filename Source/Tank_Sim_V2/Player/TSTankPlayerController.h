@@ -286,6 +286,14 @@ public:
 	UFUNCTION(Exec)
 	void TSVRDiag();
 
+	// Session testing from the console, on the menu: host a LAN session / find one and join it.
+	// Same code path as the menu buttons.
+	UFUNCTION(Exec)
+	void TSHost();
+
+	UFUNCTION(Exec)
+	void TSJoinFirst();
+
 	// Periodic VR input heartbeat. Reads IA_Drive / IA_AimTurret straight off the player input, so it
 	// reports a value even when the BindAction callback never fires - which is the one distinction
 	// the existing Input_Drive log cannot make ("no value arrived" vs "value arrived, we ignored it").
@@ -306,6 +314,8 @@ public:
 	//   ...WarZone?listen?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1
 	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoDrive=1,0,8
 	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Gunner?TSAutoFire=cannon
+	//   /Game/TankSimulation/Maps/MainMenu?TSAutoHost=1      host a LAN session, like the menu button
+	//   /Game/TankSimulation/Maps/MainMenu?TSAutoJoin=1      find a LAN session and join the first one
 	// -ExecCmds cannot do this - it runs during engine init, long before a PlayerController or a
 	// PlayerState exists, so the exec silently routes nowhere. These fire on a short delay after
 	// BeginPlay instead, which is what makes an unattended listen-server test possible at all.
@@ -458,6 +468,10 @@ private:
 	FTimerHandle AutoAssignTimerHandle;
 	int32 AutoAssignStage = 0;
 	void TickAutoAssign();
+
+	// TSAutoHost / TSAutoJoin, run once shortly after BeginPlay on the menu.
+	FTimerHandle AutoSessionTimerHandle;
+	void RunAutoSession();
 
 	// Replicated to this player only. Both are server-assigned; a client never writes them.
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Tank Simulation|Crew", meta = (AllowPrivateAccess = "true"))

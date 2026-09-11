@@ -887,6 +887,14 @@ void ATSTankPlayerController::BeginPlay()
 		{
 			GetWorldTimerManager().SetTimer(AutoAssignTimerHandle, this, &ATSTankPlayerController::TickAutoAssign, 1.5f, true, 1.5f);
 		}
+
+		// Cannot loop: hosting opens the map with a fresh URL and joining travels absolute, so neither
+		// option survives into the next world.
+		if (GetWorld() && (FCString::Atoi(GetWorld()->URL.GetOption(TEXT("TSAutoHost="), TEXT("0"))) != 0
+			|| FCString::Atoi(GetWorld()->URL.GetOption(TEXT("TSAutoJoin="), TEXT("0"))) != 0))
+		{
+			GetWorldTimerManager().SetTimer(AutoSessionTimerHandle, this, &ATSTankPlayerController::RunAutoSession, 2.f, false);
+		}
 #endif
 	}
 }
@@ -956,6 +964,46 @@ void ATSTankPlayerController::TickAutoAssign()
 		GetWorldTimerManager().ClearTimer(AutoAssignTimerHandle);
 		UE_LOG(LogTankSim, Log, TEXT("TSAuto: sequence complete."));
 		break;
+	}
+#endif
+}
+
+void ATSTankPlayerController::RunAutoSession()
+{
+#if !UE_BUILD_SHIPPING
+	if (!GetWorld())
+	{
+		return;
+	}
+	if (FCString::Atoi(GetWorld()->URL.GetOption(TEXT("TSAutoHost="), TEXT("0"))) != 0)
+	{
+		TSHost();
+	}
+	else if (FCString::Atoi(GetWorld()->URL.GetOption(TEXT("TSAutoJoin="), TEXT("0"))) != 0)
+	{
+		TSJoinFirst();
+	}
+#endif
+}
+
+void ATSTankPlayerController::TSHost()
+{
+#if !UE_BUILD_SHIPPING
+	if (UTSSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UTSSessionSubsystem>() : nullptr)
+	{
+		UE_LOG(LogTankSim, Log, TEXT("TSHost: hosting a LAN session."));
+		Sessions->CreateSession(12, true, false);
+	}
+#endif
+}
+
+void ATSTankPlayerController::TSJoinFirst()
+{
+#if !UE_BUILD_SHIPPING
+	if (UTSSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UTSSessionSubsystem>() : nullptr)
+	{
+		UE_LOG(LogTankSim, Log, TEXT("TSJoinFirst: searching the LAN and joining the first session found."));
+		Sessions->FindAndJoinFirstSession(8);
 	}
 #endif
 }

@@ -6,6 +6,7 @@
 #include "CoreMinimal.h"
 #include "Core/TSTypes.h"
 #include "Engine/EngineBaseTypes.h"
+#include "Engine/TimerHandle.h"
 #include "Interfaces/OnlineSessionInterface.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "TSSessionSubsystem.generated.h"
@@ -58,6 +59,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
 	void DestroySession();
+
+	// LAN search that joins the first session it finds, searching again every 2s up to Attempts
+	// times. For unattended and cross-machine testing (TSAutoJoin / TSJoinFirst); the UI flow is the
+	// normal FindSessions + JoinSession pair.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Session")
+	void FindAndJoinFirstSession(int32 Attempts = 5);
 
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Lobby")
 	void CreateLobby(int32 MaxPlayers = 3);
@@ -128,6 +135,9 @@ private:
 	FString CurrentLobbyCode;
 	FString PendingJoinCode;
 	ETSSessionStatus CurrentStatus = ETSSessionStatus::Idle;
+
+	int32 AutoJoinAttemptsLeft = 0;
+	FTimerHandle AutoJoinRetryHandle;
 
 	bool bDestroyThenCreatePending = false;
 	int32 PendingMaxPlayers = 12;

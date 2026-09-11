@@ -3461,3 +3461,45 @@ is something game code can reach into:
 
 Check both before re-opening the address investigation - they produce an identical symptom and
 neither leaves a trace in this project's own logs.
+
+## ⛔ The real cross-PC blocker: the host never became a SERVER (2026-09-11, packaged build)
+First two-PC test of the packaged build: "I can't see any session", and "the host has no free-roam
+pawn". Both are one bug, and it is NOT the address/firewall/router list above. The host logs said it:
+after `ProcessServerTravel: .../WarZone?listen` there was **no** `Created socket for bind address:
+0.0.0.0:7777`, the travel went through `/Temp/Untitled_1` (the seamless transition map), and the host
+got `spawned ... crew pawn` instead of the host camera.
+
+**Seamless travel ignores `?listen`.** `ATSGameMode` sets `bUseSeamlessTravel = true` (to carry crews
+between maps), and the MENU uses that GameMode too, so `World->ServerTravel("WarZone?listen")` from
+the standalone menu was seamless. Seamless travel keeps the world's existing net driver - a
+standalone menu has none - so WarZone loaded **standalone**: no listen socket (nobody can ever join),
+and `ShouldDesignateAsHost` returns false in `NM_Standalone`, so no host and no free camera.
+**PIE never shows this**: Play in listen-server mode makes the menu world a server already. Only a
+packaged/`-game` run exposes it. (A comment in `ATSGameMode`'s constructor claimed the first hop was
+"non-seamless whatever this says" - wrong, now corrected.)
+
+Fix in `UTSSessionSubsystem::HandleCreateSessionComplete`: when `GetNetMode() == NM_Standalone`, open
+the map with `UGameplayStatics::OpenLevel(World, Map, true, "listen?LobbyCode=...")` (non-seamless,
+honours `listen`); `ServerTravel` stays for hops made by an existing server.
+
+Verified with two `-game` processes on one PC (host `MainMenu?TSAutoHost=1`, client
+`MainMenu?TSAutoJoin=1`):
+```
+HOST    [Session] Host opening /Game/TankSimulation/Maps/WarZone?listen as a listen server (non-seamless)...
+HOST    LogNet: Created socket for bind address: 0.0.0.0:7777
+HOST    ATSGameMode::PostLogin '...EA57' netmode=2 local=yes -> host=YES      (netmode 0 before the fix)
+HOST    ATSHostCameraPawn: host possessed the free-roam camera
+CLIENT  [Session]   result: host='...EA57...' address=192.168.1.5:7777 code= players=1/12 ping=13ms
+CLIENT  LogNet: Welcomed by server (Level: /Game/TankSimulation/Maps/WarZone, ...)
+```
+
+### Diagnostics added so the next two-PC test is readable from the logs alone
+- **Every `[Session]` message is now also logged** (`LogTankSim`). They were screen-only, so the
+  packaged logs from both PCs contained nothing about what the search or host did.
+- Each search result logs `host / address / lobby code / players / ping`.
+- `ATSGameMode::PostLogin` logs `netmode` (0 standalone, 1 dedicated, 2 listen, 3 client) and the
+  host decision - `netmode=0` on a hosted map IS this bug.
+- Test hooks (not Shipping): URL options `MainMenu?TSAutoHost=1` / `MainMenu?TSAutoJoin=1`, console
+  commands `TSHost` / `TSJoinFirst`, and `UTSSessionSubsystem::FindAndJoinFirstSession(Attempts)`
+  (searches every 2s until it finds one). Cross-PC: run the packaged exe with the map URL as the first
+  argument, e.g. `Tank_Sim_V2.exe "/Game/TankSimulation/Maps/MainMenu?TSAutoJoin=1"`.

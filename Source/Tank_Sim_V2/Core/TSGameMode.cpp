@@ -48,10 +48,14 @@ ATSGameMode::ATSGameMode()
 	HostCameraPawnClass = ATSHostCameraPawn::StaticClass();
 
 	// Carry PlayerControllers and PlayerStates across ServerTravel so the crews the host assigned in
-	// the lobby survive the trip to the battle map. Note the very first travel (menu -> hosted map)
-	// is still non-seamless whatever this says: that travel is what creates the server, and there is
-	// nothing to carry yet. No transition map is configured, which is fine - the engine spins up a
-	// blank one; set Project Settings > Maps & Modes > Transition Map if you want a loading screen.
+	// the lobby survive the trip to the battle map. No transition map is configured, which is fine -
+	// the engine spins up a blank one; set Project Settings > Maps & Modes > Transition Map if you
+	// want a loading screen.
+	//
+	// The first hop (standalone menu -> hosted map) must NOT go through here: seamless travel ignores
+	// ?listen, so the map would load standalone with no server at all. An earlier version of this
+	// comment claimed that hop is "non-seamless whatever this says" - it is not; packaged builds proved
+	// it. UTSSessionSubsystem::HandleCreateSessionComplete uses OpenLevel for that hop instead.
 	bUseSeamlessTravel = true;
 
 	// DefaultTankClass is deliberately left null here. It used to be filled by
@@ -206,6 +210,12 @@ void ATSGameMode::PostLogin(APlayerController* NewPlayer)
 		{
 			PS->SetIsHost(true);
 		}
+
+		// One line per arrival: whether this world is actually a server, and who became host. A host
+		// landing in a STANDALONE world (netmode 0) is the signature of the seamless-?listen bug.
+		UE_LOG(LogTankSim, Log, TEXT("ATSGameMode::PostLogin '%s' netmode=%d local=%s -> host=%s"),
+			*PS->GetPlayerName(), static_cast<int32>(GetNetMode()),
+			NewPlayer->IsLocalController() ? TEXT("yes") : TEXT("no"), PS->IsHost() ? TEXT("YES") : TEXT("no"));
 	}
 
 	Super::PostLogin(NewPlayer);

@@ -10,6 +10,7 @@
 #include "OnlineSubsystemUtils.h"
 #include "SocketSubsystem.h"
 #include "Tank_Sim_V2.h"
+#include "TimerManager.h"
 
 namespace
 {
@@ -18,8 +19,12 @@ namespace
 	// On-screen (not just log) confirmation of session lifecycle events - each PIE/game window prints
 	// only what happens in its own process, so running two windows side by side shows host vs. client
 	// activity separately without needing to dig through logs.
+	// ...and ALWAYS into the log too. Screen-only made a two-machine failure impossible to read after
+	// the fact: the 2026-09-11 packaged-build logs from both PCs held not one line of what the search
+	// or the host actually did, because every [Session] message had only ever gone to the screen.
 	void PrintOnScreen(const FString& Message, FColor Color)
 	{
+		UE_LOG(LogTankSim, Log, TEXT("%s"), *Message);
 		if (GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(-1, 6.0f, Color, Message);
@@ -354,8 +359,26 @@ void UTSSessionSubsystem::HandleCreateSessionComplete(FName SessionName, bool bW
 				? FString::Printf(TEXT("%s?listen?LobbyCode=%s"), *BaseMap, *CurrentLobbyCode)
 				: FString::Printf(TEXT("%s?listen"), *BaseMap);
 
-			PrintOnScreen(FString::Printf(TEXT("[Session] Host traveling to level %s ..."), *TravelUrl), FColor::Cyan);
-			World->ServerTravel(TravelUrl, false);
+			// From the STANDALONE menu the first hop must be a NON-seamless open, because that is the
+			// only kind of travel that honours ?listen. The GameMode has bUseSeamlessTravel on (to carry
+			// crews between gameplay maps), and seamless travel keeps whatever net driver the world
+			// already has - a standalone menu has none - so ServerTravel("...?listen") arrived on WarZone
+			// still STANDALONE: no socket on 7777, nobody could join, and ShouldDesignateAsHost refused
+			// to make anyone host, so the "host" got a crew pawn instead of the free camera. PIE never
+			// showed it: Play in listen-server mode means the menu world is already a server.
+			if (World->GetNetMode() == NM_Standalone)
+			{
+				const FString Options = !CurrentLobbyCode.IsEmpty()
+					? FString::Printf(TEXT("listen?LobbyCode=%s"), *CurrentLobbyCode)
+					: FString(TEXT("listen"));
+				PrintOnScreen(FString::Printf(TEXT("[Session] Host opening %s?%s as a listen server (non-seamless)..."), *BaseMap, *Options), FColor::Cyan);
+				UGameplayStatics::OpenLevel(World, FName(*BaseMap), true, Options);
+			}
+			else
+			{
+				PrintOnScreen(FString::Printf(TEXT("[Session] Host traveling to level %s ..."), *TravelUrl), FColor::Cyan);
+				World->ServerTravel(TravelUrl, false);
+			}
 		}
 	}
 	else
@@ -392,6 +415,7 @@ void UTSSessionSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 
 	if (bWasSuccessful && SessionSearch.IsValid())
 	{
+		IOnlineSessionPtr Sessions = GetSessionInterface();
 		for (const FOnlineSessionSearchResult& Result : SessionSearch->SearchResults)
 		{
 			FTSSessionSearchResult Entry;
@@ -400,6 +424,17 @@ void UTSSessionSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 			Entry.CurrentPlayers = Entry.MaxPlayers - Result.Session.NumOpenPublicConnections;
 			Entry.PingMs = Result.PingInMs;
 			Results.Add(Entry);
+
+			// The address the join would travel to - the one thing that tells "found but unreachable"
+			// apart from a real network fault without a second machine's log.
+			FString Address, Code;
+			if (Sessions)
+			{
+				Sessions->GetResolvedConnectString(Result, NAME_GamePort, Address);
+			}
+			Result.Session.SessionSettings.Get(LobbyCodeKey, Code);
+			UE_LOG(LogTankSim, Log, TEXT("[Session]   result: host='%s' address=%s code=%s players=%d/%d ping=%dms"),
+				*Entry.HostUserName, *Address, *Code, Entry.CurrentPlayers, Entry.MaxPlayers, Entry.PingMs);
 		}
 	}
 
@@ -427,6 +462,32 @@ void UTSSessionSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 		(bWasSuccessful && Results.Num() > 0) ? FColor::Green : FColor::Orange);
 
 	OnFindSessionsComplete.Broadcast(bWasSuccessful, Results);
+
+	// FindAndJoinFirstSession: join the first result, or search again while attempts remain.
+	if (AutoJoinAttemptsLeft > 0)
+	{
+		--AutoJoinAttemptsLeft;
+		if (bWasSuccessful && SessionSearch.IsValid() && SessionSearch->SearchResults.Num() > 0)
+		{
+			AutoJoinAttemptsLeft = 0;
+			JoinSession(0);
+		}
+		else if (AutoJoinAttemptsLeft > 0 && GetGameInstance())
+		{
+			PrintOnScreen(FString::Printf(TEXT("[Session] Nothing found yet - searching again (%d attempt(s) left)."), AutoJoinAttemptsLeft), FColor::Orange);
+			GetGameInstance()->GetTimerManager().SetTimer(AutoJoinRetryHandle, [this]() { FindSessions(true); }, 2.f, false);
+		}
+		else
+		{
+			PrintOnScreen(TEXT("[Session] Gave up: no session found on the LAN."), FColor::Red);
+		}
+	}
+}
+
+void UTSSessionSubsystem::FindAndJoinFirstSession(int32 Attempts)
+{
+	AutoJoinAttemptsLeft = FMath::Max(Attempts, 1);
+	FindSessions(true);
 }
 
 void UTSSessionSubsystem::JoinSession(int32 SearchResultIndex)
