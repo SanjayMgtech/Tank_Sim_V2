@@ -98,6 +98,15 @@ private:
 	void SetStatus(ETSSessionStatus NewStatus, const FString& Message);
 	FString GenerateLobbyCode() const;
 
+	// A LAN session (OnlineSubsystemNull) advertises whatever ISocketSubsystem::GetLocalHostAddr()
+	// reports as this machine's address. On a box with Docker Desktop, WSL2 or Hyper-V installed,
+	// that call can resolve to a virtualization NAT adapter instead of the real LAN NIC - the
+	// session still gets found (LAN discovery broadcasts fine) but nothing on another physical
+	// machine can ever reach the advertised address, while a second instance on the SAME machine
+	// still connects, because Windows always considers the local machine's own address reachable
+	// regardless of which adapter it nominally belongs to. See CLAUDE.md.
+	void ApplyLanAddressWorkaroundIfNeeded();
+
 	void HandleCreateSessionComplete(FName SessionName, bool bWasSuccessful);
 	void HandleFindSessionsComplete(bool bWasSuccessful);
 	void HandleJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result);

@@ -3097,3 +3097,98 @@ The rest still owed:
 - driving turns the compass while the tank stays put; traversing swings the launcher
 - `TSVision night` / `thermal` visibly change the feed (needs a station with a render target)
 - two-window listen server: the client's blip moves on the host's radar and vice versa
+
+---
+
+## 🌐 Cross-machine session hosted but the other PC can't travel to it (2026-09-11)
+
+Reported symptom: host creates a session, a second PC on the same LAN sees it in the browser, but
+`JoinSession` never results in a working connection - the client never lands on the host's map. Two
+processes on the HOST machine (host + join) work every time. This is the tell, not a red herring:
+Windows treats a connection back to your own machine's address as reachable no matter which adapter
+that address nominally belongs to, so a same-machine test passes even when the advertised address is
+wrong - only a genuinely different machine on the LAN exposes it.
+
+### Root cause traced into the engine, not guessed
+`UTSSessionSubsystem::JoinSession` (`Source/Tank_Sim_V2/Networking/TSSessionSubsystem.cpp`) calls
+`Sessions->GetResolvedConnectString(SessionName, ConnectString)` then
+`PC->ClientTravel(ConnectString, TRAVEL_Absolute)` - this project's OSS is `OnlineSubsystemNull`
+(`[OnlineSubsystem] DefaultPlatformService=Null`), so that connect string is whatever address the
+HOST embedded in its LAN broadcast reply at session-creation time, not anything the client itself
+measures. Traced in the installed engine
+(`Engine/Plugins/Online/OnlineSubsystemNull/Source/Private/OnlineSessionInterfaceNull.cpp:30`):
+```cpp
+void FOnlineSessionInfoNull::Init(const FOnlineSubsystemNull& Subsystem)
+{
+    HostAddr = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetLocalHostAddr(*GLog, bCanBindAll);
+    ...
+```
+`GetLocalHostAddr` (`Engine/Source/Runtime/Sockets/Private/BSDSockets/SocketSubsystemBSD.cpp:537`)
+first honours an explicit `-multihome=<ip>`, otherwise opens a UDP "connect" to the private address
+`172.31.255.255:256` purely to ask Windows' routing table which local adapter it would use - a
+common trick to find the "default route" NIC without actually sending a packet. **That probe
+address is itself inside `172.16.0.0/12`** - the exact range Docker Desktop's default bridge, WSL2's
+NAT network and Hyper-V's "Default Switch" occupy on a Windows dev machine. If any of those has
+installed a *more specific* route touching that block, Windows' routing table hands the probe to the
+virtual adapter instead of the real LAN NIC, and `GetResolvedConnectString` then advertises an
+address that only exists inside that machine's own virtual network - reachable from itself, invisible
+to anything else on the LAN. This is precisely the kind of dev machine most likely to be running this
+project (Hyper-V is enabled on the machine this was fixed on: `vEthernet (Default Switch)` at
+`172.28.176.0/20`), so treat it as the leading hypothesis on any Windows box with WSL2/Docker/Hyper-V
+installed, not an edge case.
+
+**Measured, not assumed - and it can look fine at the exact moment you check.** `Find-NetRoute
+-RemoteIPAddress 172.31.255.255` on the machine this was fixed on resolved correctly to the real
+Wi-Fi address, because that machine's specific Hyper-V subnet (`172.28.176.0/20`) happens not to
+contain `172.31.255.255`. The failure is about whichever virtual adapter's subnet is active *at the
+moment CreateSession runs*, which can differ by machine, by which containers/WSL distros are running,
+and over time - a clean measurement right now does not retroactively prove the bug never fired during
+an earlier test.
+
+### The fix: detect it and self-correct via the same `-multihome` mechanism
+`UTSSessionSubsystem::ApplyLanAddressWorkaroundIfNeeded()`, called once from `Initialize()` (so it
+runs before any `CreateSession`/`JoinSession`, on every game instance - host and client both):
+1. If `-multihome=` is already on the command line, do nothing - never fight an explicit override.
+2. Otherwise call `GetLocalHostAddr()` exactly as the engine would, and check whether the result
+   falls in `172.16.0.0/12` (the virtualization NAT ranges above) or `169.254.0.0/16` (APIPA - an
+   adapter with no DHCP lease, i.e. no real address at all).
+3. If it does, walk `GetLocalAdapterAddresses()` (already filtered by the engine to "up"
+   Ethernet/Wi-Fi adapters) for the first address that ISN'T in those ranges, and append
+   `-multihome=<that address>` to `FCommandLine` via `FCommandLine::Append` - `GetMultihomeAddress`
+   re-parses the command line on every call rather than caching it at boot, so this takes effect
+   for the very first `CreateSession`/`JoinSession` even though it runs deep into gameplay code, well
+   after engine init.
+4. If every "up" adapter looks virtual (or the default already looked fine), do nothing - fails safe
+   to the pre-existing behaviour rather than guessing.
+
+`-multihome` also governs the listen server's own bind address (`GetLocalBindAddresses()` in
+`Engine/Source/Runtime/Sockets/Private/SocketSubsystem.cpp` checks it first, same as
+`GetLocalHostAddr`), so the advertised address and the address the socket actually listens on always
+agree - the fix can't advertise one IP while binding another.
+
+**Always logged, override or not** (`LogTankSim`, tag `[Session] LAN address auto-detection`) - this
+is the line to grep on both machines next time a cross-machine session fails. If the two logs show
+different subnets, or either one shows `172.16-31.x.x` with no override reported, the address is the
+problem. If both machines report a plausible, matching-subnet LAN address and it still doesn't work,
+the address was never the problem - see the checklist below.
+
+### If the address fix doesn't fully resolve it - the two causes code cannot fix
+Neither of these can be verified from here (no second physical machine to test against), and neither
+is something game code can reach into:
+1. **Windows Firewall on the HOST**, separate from antivirus. A packaged, non-shipping `.exe` doesn't
+   always get the "Windows Defender Firewall has blocked some features" prompt reliably (silently
+   dismissed once, a `Public` network profile, or a previous "Block" click), and LAN *discovery* can
+   still work over UDP broadcast/reply while the actual inbound game-port connection is blocked -
+   which matches "session visible, travel fails" just as well as the address bug does. Check
+   `Get-NetConnectionProfile` (must be `Private`, not `Public`, for that network), and add an explicit
+   inbound rule for the packaged exe's game port (default 7777) if unsure:
+   `netsh advfirewall firewall add rule name="Tank_Sim_V2" dir=in action=allow program="<path to
+   packaged .exe>" protocol=UDP localport=7777`.
+2. **Router AP/client isolation.** Common on home Wi-Fi "guest" networks and some mesh systems:
+   broadcast/ARP traffic still gets relayed (so LAN discovery keeps working) while direct
+   device-to-device unicast is blocked (so the join handshake never completes) - the exact same
+   symptom split as cause 1, from the opposite end of the cable. Put both machines on the same wired
+   switch or the router's main (non-isolated) SSID to rule this out.
+
+Check both before re-opening the address investigation - they produce an identical symptom and
+neither leaves a trace in this project's own logs.

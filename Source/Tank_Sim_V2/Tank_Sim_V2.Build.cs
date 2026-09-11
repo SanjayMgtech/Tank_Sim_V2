@@ -19,6 +19,7 @@ public class Tank_Sim_V2 : ModuleRules
 			"Slate",
 			"SlateCore",
 			"UMG",
+			"Sockets",
 			"OnlineSubsystem",
 			"OnlineSubsystemUtils",
 			"HeadMountedDisplay",
