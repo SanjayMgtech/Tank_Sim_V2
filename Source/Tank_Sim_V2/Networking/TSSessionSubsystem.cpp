@@ -1,6 +1,7 @@
 #include "Networking/TSSessionSubsystem.h"
 
 #include "Engine/Engine.h"
+#include "Engine/EngineBaseTypes.h"
 #include "Engine/LocalPlayer.h"
 #include "IPAddress.h"
 #include "Kismet/GameplayStatics.h"
@@ -100,6 +101,35 @@ namespace
 		// Every "up" adapter looked virtual (or there was only ever the one) - nothing better to
 		// offer, so leave the engine's own pick alone rather than guess.
 		return false;
+	}
+
+	// OnlineSubsystemNull resolves a session's advertised port from the actual bound GameNetDriver
+	// (FOnlineSessionInfoNull::Init -> GetPortFromNetDriver), but that Init() runs synchronously
+	// inside CreateSession() - i.e. on the HOST, while still on the menu map, before the
+	// ServerTravel(...?listen...) that this project only issues from the CreateSession completion
+	// callback. There is no GameNetDriver yet at that point, so the session is permanently
+	// advertised with port 0 - not a transient race, every LAN session this project creates carries
+	// this same wrong port. GetResolvedConnectString then hands the client "<ip>:0", and 0 is never
+	// a real listen port, so ClientTravel times out no matter how correct the IP is. See CLAUDE.md.
+	//
+	// Fixed up here, client-side, rather than by reordering the host's create/travel sequence:
+	// this project never puts a custom "?Port=" in the travel URL (confirmed in
+	// UTSSessionSubsystem::HandleCreateSessionComplete), so the listen server always ends up bound
+	// to FURL::UrlConfig.DefaultPort regardless - substituting that in whenever the resolved port
+	// is 0 is a small, local, always-safe correction; reordering the host's flow to fix the root
+	// cause would touch session-creation timing on both host and client and needs its own phase.
+	FString FixUpUnresolvedPort(const FString& InConnectString)
+	{
+		const int32 ColonIndex = InConnectString.Find(TEXT(":"), ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+		const FString PortPart = ColonIndex != INDEX_NONE ? InConnectString.Mid(ColonIndex + 1) : FString();
+
+		if (ColonIndex == INDEX_NONE || PortPart.IsEmpty() || FCString::Atoi(*PortPart) == 0)
+		{
+			const FString HostPart = ColonIndex != INDEX_NONE ? InConnectString.Left(ColonIndex) : InConnectString;
+			return FString::Printf(TEXT("%s:%d"), *HostPart, FURL::UrlConfig.DefaultPort);
+		}
+
+		return InConnectString;
 	}
 }
 
@@ -537,6 +567,13 @@ void UTSSessionSubsystem::HandleJoinSessionComplete(FName SessionName, EOnJoinSe
 			FString ConnectString;
 			if (Sessions->GetResolvedConnectString(SessionName, ConnectString))
 			{
+				const FString FixedConnectString = FixUpUnresolvedPort(ConnectString);
+				if (FixedConnectString != ConnectString)
+				{
+					UE_LOG(LogTankSim, Warning, TEXT("[Session] Resolved connect string '%s' had an unresolved port (see CLAUDE.md - the host's session always advertises port 0); using '%s' instead."), *ConnectString, *FixedConnectString);
+				}
+				ConnectString = FixedConnectString;
+
 				if (APlayerController* PC = GetGameInstance() ? GetGameInstance()->GetFirstLocalPlayerController() : nullptr)
 				{
 					PrintOnScreen(FString::Printf(TEXT("[Session] Traveling to %s ..."), *ConnectString), FColor::Cyan);
