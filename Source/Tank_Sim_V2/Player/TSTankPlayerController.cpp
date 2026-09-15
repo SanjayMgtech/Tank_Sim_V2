@@ -70,7 +70,7 @@ void ATSTankPlayerController::ApplyLocalUIForCurrentMap()
 	// (it rebuilds the viewport, which is unsafe inside the possession call stack), so stereo is
 	// still off at this point even for a player who is about to be in VR. Asking "is a headset
 	// present and is this player eligible for it" is decidable now; asking "is stereo on" is not.
-	const bool bWillBeVR = UTSVRModeLibrary::IsHMDAvailable() && !IsMatchHost();
+	const bool bWillBeVR = WillPlayInVR();
 	if (bShowRoleDebugWidgetOnGameplayMaps && !bWillBeVR)
 	{
 		ShowRoleDebugWidget(true);
@@ -809,12 +809,25 @@ void ATSTankPlayerController::RefreshCommanderScreen()
 	//
 	// The Commander's instruments belong on a world-space panel inside the turret for VR. That does
 	// not exist yet, so in a headset the Commander simply has no screen rather than a broken one.
-	const bool bWillBeVR = UTSVRModeLibrary::IsHMDAvailable() && !IsMatchHost();
+	const bool bWillBeVR = WillPlayInVR();
 
 	const ATSTankPlayerState* PS = GetTankPlayerState();
 	const bool bIsCommander = PS && PS->GetCrewRole() == ETSCrewRole::Commander;
 
 	ShowCommanderScreen(bIsCommander && !bWillBeVR);
+}
+
+bool ATSTankPlayerController::WillPlayInVR() const
+{
+	// A connected headset is NOT enough. VR is opt-in per player (ETSPlayMode, Desktop by default),
+	// so a desktop player on a PC with a Quest on Link must still get their screen-space UI. Testing
+	// only IsHMDAvailable() hid the Commander screen from exactly that player.
+	//
+	// Still not IsVRModeActive(): stereo is switched on a tick late, so ask about the assignment.
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	return PS && !IsMatchHost()
+		&& PS->GetPlayMode() == ETSPlayMode::VR
+		&& UTSVRModeLibrary::IsHMDAvailable();
 }
 
 void ATSTankPlayerController::TSCommanderScreen()

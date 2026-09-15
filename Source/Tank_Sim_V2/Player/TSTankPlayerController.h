@@ -428,6 +428,10 @@ protected:
 	// makes this player a Commander.
 	void RefreshCommanderScreen();
 
+	// True when this player is about to render in a headset: assigned Play in VR, not the host, and a
+	// usable HMD present. Screen-space widgets must stay off in that case and only that case.
+	bool WillPlayInVR() const;
+
 private:
 	ATSTankPlayerState* GetTankPlayerState() const;
 
