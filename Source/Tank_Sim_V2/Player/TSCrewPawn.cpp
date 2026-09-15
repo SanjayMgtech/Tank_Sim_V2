@@ -63,6 +63,25 @@ ATSTankPlayerController* ATSCrewPawn::GetTankController() const
 	return Cast<ATSTankPlayerController>(GetController());
 }
 
+ATSTankPlayerState* ATSCrewPawn::GetCrewPlayerState() const
+{
+	// Controller first, then this pawn's own PlayerState. Both name the same player, but they
+	// replicate independently: on a client the pawn's can land while the controller's is still null.
+	// Reading only the controller's then made RefreshCrewBinding bail out without subscribing to the
+	// assignment delegate, and nothing retried - so when the host later seated the player as Driver,
+	// IMC_Driver was never added and the keys did nothing. Timing-dependent, which is why it showed up
+	// in a packaged Shipping client and not in the editor. APawn clears PlayerState on UnPossess, so a
+	// parked crew pawn still resolves to nobody here.
+	if (const AController* OwningController = GetController())
+	{
+		if (ATSTankPlayerState* PS = OwningController->GetPlayerState<ATSTankPlayerState>())
+		{
+			return PS;
+		}
+	}
+	return GetPlayerState<ATSTankPlayerState>();
+}
+
 void ATSCrewPawn::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -87,7 +106,7 @@ void ATSCrewPawn::OnRep_PlayerState()
 
 void ATSCrewPawn::RefreshCrewBinding()
 {
-	ATSTankPlayerState* PS = GetController() ? GetController()->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	ATSTankPlayerState* PS = GetCrewPlayerState();
 
 	// Drop a stale subscription first - on possession changes and seamless travel the pawn can be
 	// handed a different PlayerState, and leaving the old binding in place would keep firing this
@@ -135,7 +154,7 @@ void ATSCrewPawn::RefreshCrewBinding()
 
 void ATSCrewPawn::ApplyRoleMappingContext_FromPlayerState()
 {
-	if (const ATSTankPlayerState* PS = GetController() ? GetController()->GetPlayerState<ATSTankPlayerState>() : nullptr)
+	if (const ATSTankPlayerState* PS = GetCrewPlayerState())
 	{
 		ApplyRoleMappingContext(PS->GetCrewRole());
 	}

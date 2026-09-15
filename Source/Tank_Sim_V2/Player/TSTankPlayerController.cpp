@@ -1012,6 +1012,15 @@ void ATSTankPlayerController::OnRep_PlayerState()
 {
 	Super::OnRep_PlayerState();
 
+	// The possessed crew pawn binds its role input from NotifyControllerChanged and its own
+	// OnRep_PlayerState - and on a client both can run before THIS pointer replicates, leaving the pawn
+	// subscribed to nothing. Re-run it now that the PlayerState exists, or a seated Driver never gets
+	// IMC_Driver and cannot drive. Safe to repeat: RefreshCrewBinding is idempotent.
+	if (ATSCrewPawn* CrewPawn = Cast<ATSCrewPawn>(GetPawn()))
+	{
+		CrewPawn->RefreshCrewBinding();
+	}
+
 	if (ATSTankPlayerState* PS = GetTankPlayerState())
 	{
 		PS->OnAssignmentChanged.AddUniqueDynamic(this, &ATSTankPlayerController::HandleAssignmentChanged);

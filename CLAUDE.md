@@ -3582,3 +3582,51 @@ Two instances of the packaged build on the SAME box, through the real session-br
 URL, so they never exercise this code path and will not show the bug): host in one, Find + Join in
 the other. This is also how the address bug was originally reported, one message before this one -
 "this was not even on different laptops, it was the same laptop with 2 different builds."
+
+## ⛔ Packaged client could not drive - crew pawn read the PlayerState only via its controller (2026-09-15)
+
+Report: in the packaged build the host free-roams fine but a client seated as Driver cannot move the
+tank. PIE worked. **Reproduced in the user's own Shipping package on one machine** (host + client, joined
+through the menu, host seats the client as Driver, hold W): the seat showed correctly and nothing moved.
+
+### How it was isolated - every layer ruled out by a test, not by reading
+| Test | Result | Rules out |
+|---|---|---|
+| Cooked **Development** build, direct connect, `TSDrive` | drove (gear 0-2, ~1500uu) | cooking, replication, server sim |
+| Same, real W key via `keybd_event` | drove | the key -> IA_Drive layer |
+| Same, real **menu host/join session** flow | drove | session/travel code |
+| Shipping host, W held | free camera moved | key delivery to a Shipping window |
+| **Development host + Shipping client** | host logged `Host assign role ... (ok)` then **nothing**: no `BP_SetDriveInput`, no `drive DENIED` | server side. The Shipping client never sent the RPC |
+
+The Development client used the SAME cooked content as the Shipping package (staged with `-skipcook`), so
+Blueprint bytecode - including the Development-Only nodes that do exist in `BP_TankController_Chaos` - was
+not the difference. No Source/Config file was newer than the Shipping exe, so it was not stale code either.
+
+### Root cause
+`ATSCrewPawn` found its player with `GetController()->GetPlayerState()` everywhere. On a client the
+controller's `PlayerState` pointer and the pawn's own `PlayerState` replicate **independently**. If both of
+the pawn's triggers (`NotifyControllerChanged`, `OnRep_PlayerState`) run before the controller's pointer
+lands, `RefreshCrewBinding` finds nobody and returns **without subscribing to `OnAssignmentChanged`** - and
+nothing ever retries (`ATSTankPlayerController::OnRep_PlayerState` only refreshed its own UI). When the host
+later seats the player, `IMC_Driver` is never added on that client, so W maps to nothing. The seat still
+looks right because attachment replicates from the server. Timing-dependent, hence packaged-only.
+
+### Fix
+- `ATSCrewPawn::GetCrewPlayerState()` - controller's PlayerState, falling back to the pawn's own
+  (`APawn` clears it on UnPossess, so a parked crew pawn still resolves to nobody). Used by
+  `RefreshCrewBinding` and `ApplyRoleMappingContext_FromPlayerState`.
+- `ATSTankPlayerController::OnRep_PlayerState` re-runs `RefreshCrewBinding` on the possessed crew pawn
+  (now public). Idempotent, so the extra call is safe.
+
+Verified: rebuilt **Shipping**, re-staged against the same cook, identical menu flow - the client's
+periscope view moved forward and the tank drove into the host's view. One run; the unfixed build failed
+2/2 in the same flow.
+
+### Techniques worth reusing
+- **Shipping has no logs, so mix configs:** a Development host (logs) with the Shipping client, or the
+  reverse, splits "client never sent it" from "server dropped it" in one run.
+- **Shipping ignores a map URL on the command line** - both instances land on MainMenu, so drive the menu.
+- Window screenshots (`Graphics.CopyFromScreen` on the client rect) + `SetCursorPos`/`mouse_event` clicks +
+  `keybd_event` keys drive a Shipping build unattended. Watch for buttons that move when a list row appears
+  (Join First Result drops from y=60 to y=71 once a session is listed).
+- **Any pawn-side lookup of the player's state must not depend only on the controller's pointer.**

@@ -531,9 +531,18 @@ private:
 
 	class ATSTankPlayerController* GetTankController() const;
 
+public:
 	// Re-applies the role mapping context, re-subscribes to the PlayerState's assignment delegate and
 	// re-seats this pawn. Safe to call repeatedly - it unbinds the previous PlayerState first.
+	// Public because ATSTankPlayerController::OnRep_PlayerState must be able to re-run it: on a client
+	// the controller's PlayerState pointer can replicate AFTER both of this pawn's own triggers fired.
 	void RefreshCrewBinding();
+
+private:
+	// The player this pawn represents. The controller's PlayerState pointer and this pawn's own
+	// PlayerState replicate independently, so reading only the controller's can come back null on a
+	// client even though the pawn already knows its player - see the implementation.
+	class ATSTankPlayerState* GetCrewPlayerState() const;
 
 	// The PlayerState we currently hold an OnAssignmentChanged binding on. Weak so a PlayerState
 	// destroyed on travel or disconnect cannot be dereferenced while unbinding.
