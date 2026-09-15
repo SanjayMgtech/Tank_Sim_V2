@@ -74,4 +74,13 @@ private:
 	void HandleJoinClicked(int32 SessionIndex);
 
 	UTSSessionSubsystem* GetSessionSubsystem() const;
+
+	// "Loading..." text pinned to the bottom of the screen while a refresh or join is in flight. Added
+	// straight to the game viewport rather than the WBP's tree, so it shows regardless of how the
+	// designer laid WBP_SessionBrowser out.
+	void ShowLoadingText(const FString& Message);
+	void HideLoadingText();
+
+	TSharedPtr<SWidget> LoadingOverlay;
+	TSharedPtr<class STextBlock> LoadingTextBlock;
 };
