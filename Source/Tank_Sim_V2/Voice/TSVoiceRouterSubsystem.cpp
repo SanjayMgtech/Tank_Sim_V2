@@ -1,9 +1,11 @@
 #include "Voice/TSVoiceRouterSubsystem.h"
 
 #include "Engine/Engine.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerController.h"
+#include "Net/OnlineEngineInterface.h"
 #include "Player/TSTankPlayerState.h"
 #include "Tank_Sim_V2.h"
 #include "TimerManager.h"
@@ -180,6 +182,8 @@ void UTSVoiceRouterSubsystem::Deinitialize()
 		World->GetTimerManager().ClearTimer(MaintenanceTimerHandle);
 	}
 	LastTransmitReportTime.Empty();
+	LocalListenerMutedSpeakers.Empty();
+	LocalMuteRefusedSpeakers.Empty();
 
 	Super::Deinitialize();
 }
@@ -355,6 +359,16 @@ void UTSVoiceRouterSubsystem::Maintain()
 		}
 	}
 
+	// Drop listeners that have gone away, so the local mute cache cannot outlive a disconnect and
+	// then report a stale "already muted" for a recycled PlayerController.
+	for (auto It = LocalListenerMutedSpeakers.CreateIterator(); It; ++It)
+	{
+		if (!It.Key().IsValid())
+		{
+			It.RemoveCurrent();
+		}
+	}
+
 	EnforceChannelPolicy();
 
 	TimeSinceRebuild += Interval;
@@ -473,6 +487,36 @@ void UTSVoiceRouterSubsystem::ApplyPairDecision(APlayerController* ListenerContr
 
 	SpeakersMissingNetId.Remove(SpeakerState);
 
+	// ---------------------------------------------------------------------------------------------
+	// A LOCAL listener - the listen-server host - takes a completely different path, and must.
+	//
+	// THE BUG THIS AVOIDS (measured, see CLAUDE.md): routing a local listener through the gameplay
+	// mute list makes the host permanently deaf to anybody it has ever muted once.
+	//
+	//   GameplayMutePlayer   -> AddVoiceBlockReason(Gameplay), which on a transition calls
+	//                           ClientMutePlayer. On a LOCAL controller that Client RPC executes
+	//                           in-process and adds EVoiceBlockReasons::Muted to the SAME mute list.
+	//                           Flags are now Gameplay|Muted.
+	//   GameplayUnmutePlayer -> removes Gameplay, then calls ClientUnmutePlayer only if NO
+	//                           client-visible reason remains. Muted still does, so the unmute is
+	//                           never issued - and ClientUnmutePlayer is the only thing that clears
+	//                           Muted. The entry is stuck, for the rest of the session.
+	//
+	// On a remote listener the same two writes land on two DIFFERENT objects (server-side Gameplay,
+	// client-side Muted), which is why host -> commander worked perfectly while commander -> host
+	// never did.
+	//
+	// And the gameplay list buys a local listener nothing anyway: it is read by
+	// UNetConnection::ShouldReplicateVoicePacketFrom, and a listen server holds no NetConnection to
+	// itself. What actually gates local playback is FOnlineVoiceImpl::MuteList, checked in
+	// SerializeRemotePacket - so that is what we drive.
+	// ---------------------------------------------------------------------------------------------
+	if (ListenerController->IsLocalController())
+	{
+		ApplyLocalListenerDecision(ListenerController, SpeakerState, SpeakerId, bAudible);
+		return;
+	}
+
 	// Deliberately the GAMEPLAY mute reason and not the plain one. The two are separate flags on the
 	// same entry, so routing decisions here never clobber a mute the player set on somebody by hand,
 	// and a player un-muting somebody by hand cannot re-open a net the server closed.
@@ -483,6 +527,78 @@ void UTSVoiceRouterSubsystem::ApplyPairDecision(APlayerController* ListenerContr
 	else
 	{
 		ListenerController->GameplayMutePlayer(SpeakerId);
+	}
+}
+
+void UTSVoiceRouterSubsystem::ApplyLocalListenerDecision(APlayerController* ListenerController,
+	const ATSTankPlayerState* SpeakerState, const FUniqueNetIdRepl& SpeakerId, bool bAudible)
+{
+	const ULocalPlayer* LocalPlayer = Cast<ULocalPlayer>(ListenerController->Player);
+	UWorld* World = GetWorld();
+	if (!LocalPlayer || !World)
+	{
+		return;
+	}
+
+	TSet<TWeakObjectPtr<const ATSTankPlayerState>>& MutedForListener = LocalListenerMutedSpeakers.FindOrAdd(ListenerController);
+	const bool bCurrentlyMuted = MutedForListener.Contains(SpeakerState);
+	const bool bWantMuted = !bAudible;
+
+	if (bWantMuted == bCurrentlyMuted)
+	{
+		// Already in the state we want. Returning here is what keeps the engine's per-call Log lines
+		// from becoming two per pair per rebuild, twice a second, for the whole match.
+		return;
+	}
+
+	if (bAudible)
+	{
+		MutedForListener.Remove(SpeakerState);
+		LocalMuteRefusedSpeakers.Remove(SpeakerState);
+
+		// The return value is deliberately ignored: FOnlineVoiceImpl::UnmuteRemoteTalker never sets
+		// its success code on this path (the engine even marks it //-V547), so it always reports
+		// false. A failed unmute is harmless anyway - an unregistered talker is not muted either.
+		UOnlineEngineInterface::Get()->UnmuteRemoteTalker(World, LocalPlayer->GetControllerId(), SpeakerId, false);
+
+		// Log, not Verbose. These fire only on a transition, so they cost a couple of lines per
+		// channel change - and their ABSENCE is the signature of the bug this path exists to avoid.
+		UE_LOG(LogTankSim, Log, TEXT("[Voice] host can now HEAR '%s' (%s net)."),
+			*SpeakerState->GetPlayerName(), *UTSTypeUtils::VoiceChannelToString(SpeakerState->GetVoiceChannel()));
+		return;
+	}
+
+	// The mute is only RECORDED when the engine actually took it. It refuses for a talker it has not
+	// registered yet (a player still arriving), and recording it anyway would cache a mute that was
+	// never applied and then suppress the retry - leaving that player audible on a net they are not
+	// on. Left unrecorded, the next rebuild simply tries again, half a second later.
+	if (UOnlineEngineInterface::Get()->MuteRemoteTalker(World, LocalPlayer->GetControllerId(), SpeakerId, false))
+	{
+		MutedForListener.Add(SpeakerState);
+		LocalMuteRefusedSpeakers.Remove(SpeakerState);
+
+		UE_LOG(LogTankSim, Log, TEXT("[Voice] host can no longer hear '%s' (%s net)."),
+			*SpeakerState->GetPlayerName(), *UTSTypeUtils::VoiceChannelToString(SpeakerState->GetVoiceChannel()));
+		return;
+	}
+
+	// The voice interface refused. It does that for a talker it has not registered, and it registers
+	// nobody unless an online SESSION is active - so a direct "?listen" / "open <ip>" connect, which
+	// creates no session, leaves this layer inert for the whole match.
+	//
+	// The consequence is fail-open: the host hears that player whatever net they are on. Worth one
+	// line, because it is otherwise completely silent and looks exactly like working voice until
+	// somebody notices they can hear a crew they should not. Not a Warning: it is normal for the
+	// moment between a player connecting and being registered, and the next rebuild retries.
+	if (!LocalMuteRefusedSpeakers.Contains(SpeakerState))
+	{
+		LocalMuteRefusedSpeakers.Add(SpeakerState);
+		UE_LOG(LogTankSim, Log,
+			TEXT("[Voice] the voice interface would not mute '%s' yet, so the host can still hear them. ")
+			TEXT("Normal for a moment while they connect - the next rebuild retries. Persistent means no ")
+			TEXT("online session is active on this host, which a direct ?listen or 'open <ip>' connect ")
+			TEXT("never creates."),
+			*SpeakerState->GetPlayerName());
 	}
 }
 
@@ -588,6 +704,21 @@ FString UTSVoiceRouterSubsystem::BuildVoiceDebugString() const
 	const UWorld* World = GetWorld();
 	FString Out = FString::Printf(TEXT("[Voice] netmode=%d roster=%d\n"),
 		World ? static_cast<int32>(World->GetNetMode()) : -1, GetVoiceRoster().Num());
+
+	for (const auto& ListenerPair : LocalListenerMutedSpeakers)
+	{
+		FString MutedNames;
+		for (const TWeakObjectPtr<const ATSTankPlayerState>& Muted : ListenerPair.Value)
+		{
+			if (const ATSTankPlayerState* MutedState = Muted.Get())
+			{
+				MutedNames += MutedState->GetPlayerName() + TEXT(" ");
+			}
+		}
+		Out += FString::Printf(TEXT("  local listener %-24s cannot hear: [%s]\n"),
+			ListenerPair.Key.IsValid() ? *ListenerPair.Key->GetName() : TEXT("<gone>"),
+			MutedNames.IsEmpty() ? TEXT("nobody") : *MutedNames.TrimEnd());
+	}
 
 	for (const ATSTankPlayerState* PlayerState : GetVoiceRoster())
 	{

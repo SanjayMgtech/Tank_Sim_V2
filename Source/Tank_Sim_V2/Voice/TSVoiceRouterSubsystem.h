@@ -208,10 +208,14 @@ private:
 	// Driver, a player cleared back to unassigned) onto the channel their seat does permit.
 	void EnforceChannelPolicy();
 
-	// Applies one (listener, speaker) decision to the engine's gameplay mute list. Both engine calls
-	// are idempotent - they only act on a transition, and re-asserting a state already held does
-	// nothing - so this is safe to run every rebuild without tracking deltas of our own.
+	// Applies one (listener, speaker) decision. Two completely different mechanisms, chosen by
+	// whether the listener is local - see the implementation for why that is not an optimisation.
 	void ApplyPairDecision(APlayerController* ListenerController, const ATSTankPlayerState* SpeakerState, bool bAudible);
+
+	// The listen-server host. Drives the voice interface's own mute list directly instead of the
+	// gameplay one, because for a local listener the gameplay list gates NOTHING and poisons itself.
+	void ApplyLocalListenerDecision(APlayerController* ListenerController, const ATSTankPlayerState* SpeakerState,
+		const FUniqueNetIdRepl& SpeakerId, bool bAudible);
 
 	static ATSTankPlayerState* GetTankPlayerState(const APlayerController* Player);
 
@@ -227,6 +231,18 @@ private:
 	// const element type: the only caller holds the speaker as a const pointer, and a
 	// TWeakObjectPtr<ATSTankPlayerState> will not construct from one.
 	TSet<TWeakObjectPtr<const ATSTankPlayerState>> SpeakersMissingNetId;
+
+	// Per LOCAL listener, who this machine currently has muted in the voice interface.
+	//
+	// Tracked here rather than read back from the engine because IOnlineVoice has no "is this talker
+	// muted" accessor, and because MuteRemoteTalker / UnmuteRemoteTalker log at Log level on EVERY
+	// call - re-asserting a state already held would print two lines per pair per rebuild, twice a
+	// second, for the whole match.
+	TMap<TWeakObjectPtr<APlayerController>, TSet<TWeakObjectPtr<const ATSTankPlayerState>>> LocalListenerMutedSpeakers;
+
+	// Speakers the voice interface has already refused to mute once, so that explanation is printed
+	// a single time per player instead of twice a second.
+	TSet<TWeakObjectPtr<const ATSTankPlayerState>> LocalMuteRefusedSpeakers;
 
 	FTimerHandle MaintenanceTimerHandle;
 };

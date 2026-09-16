@@ -421,6 +421,9 @@ public:
 	//   ...WarZone?listen?TSAutoTeam=A?TSAutoRole=Driver?TSAutoStart=1
 	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Driver?TSAutoDrive=1,0,8
 	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Gunner?TSAutoFire=cannon
+	//   127.0.0.1?TSAutoTeam=A?TSAutoRole=Commander?TSAutoVoiceChannel=host?TSAutoVoiceTalk=3
+	//        ^ the unattended voice test: seat a Commander, move them onto the host net, key the
+	//          microphone. The host log should then show the router unmuting them.
 	//   /Game/TankSimulation/Maps/MainMenu?TSAutoHost=1      host a LAN session, like the menu button
 	//   /Game/TankSimulation/Maps/MainMenu?TSAutoJoin=1      find a LAN session and join the first one
 	// -ExecCmds cannot do this - it runs during engine init, long before a PlayerController or a

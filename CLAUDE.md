@@ -3681,6 +3681,97 @@ does gets completely silent voice with no error, no warning and no log line anyw
 `ATSGameMode::PostLogin` now calls it for every arrival. If voice ever goes silent across the board,
 check that line before checking anything else.
 
+### ⛔ THE HOST WENT PERMANENTLY DEAF - a local listener must NOT use the gameplay mute list (2026-09-16)
+Reported as "the host is able to talk to the commander but the commander is not able to talk to the
+host". Structural, and exactly one-directional.
+
+**The log names it in one line** - the host muted the other player once, and never unmuted them:
+```
+06.25.58  Muting remote talker (DESKTOP-...-65199D5C...)     <- the crew player, muted for the host
+          ...and NO "Unmuting remote talker (...65199D5C...)" anywhere in the session, ever
+06.26.45  Unmuting remote talker (DESKTOP-...-C9A2EF75...)   <- the HOST, unmuted fine on the client
+```
+Note the timestamp: the mute landed at 06.25.58, **before that player had even been given a seat**.
+An unassigned player is correctly inaudible - but from that moment the host could never hear them
+again, whatever seat or channel they took.
+
+### Why it only broke one direction
+`GameplayMutePlayer` calls `ClientMutePlayer` on a transition. On a **local** PlayerController that
+Client RPC executes **in-process**, and `ClientMutePlayer_Implementation` adds
+`EVoiceBlockReasons::Muted` to *the very same* `FPlayerMuteList` the router just wrote `Gameplay`
+into. Flags become `Gameplay|Muted`. Then:
+```cpp
+// FPlayerMuteList::GameplayUnmutePlayer
+if (RemoveVoiceBlockReason(UnmuteId, Gameplay))   // old=Gameplay|Muted, new=Muted
+{                                                  // new still has a client-visible reason
+    OwningPC->ClientUnmutePlayer(UnmuteId);        // -> returns FALSE, so this NEVER RUNS
+}
+```
+and `ClientUnmutePlayer` is the only thing that clears `Muted`. **Deadlock: the host can mute
+somebody once and can never unmute them again.**
+
+On a REMOTE listener the same two writes land on two DIFFERENT objects - `Gameplay` on the server's
+copy, `Muted` on the client's own - so the server-side transition logic stays clean. That is the
+whole asymmetry: host -> commander worked perfectly, commander -> host never did.
+
+### The fix: for a LOCAL listener, drive the voice interface directly
+`UTSVoiceRouterSubsystem::ApplyLocalListenerDecision` takes over when
+`ListenerController->IsLocalController()`, calling
+`UOnlineEngineInterface::MuteRemoteTalker` / `UnmuteRemoteTalker` and tracking the transition itself.
+
+This is not a workaround, it is the correct layer. The gameplay mute list is read by
+`UNetConnection::ShouldReplicateVoicePacketFrom`, and **a listen server holds no NetConnection to
+itself** - so for the host that list gates nothing at all. What actually gates local playback is
+`FOnlineVoiceImpl::MuteList`, checked in `SerializeRemotePacket`. That is what the host must write.
+
+Two details that matter:
+- **Track the transition yourself.** `MuteRemoteTalker` / `UnmuteRemoteTalker` log at Log level on
+  EVERY call, not just on a change - re-asserting each rebuild would print two lines per pair twice
+  a second for the whole match.
+- **Only RECORD a mute the engine actually accepted.** It refuses for a talker it has not registered,
+  and caching a mute that never applied would suppress the retry and leave that player audible.
+
+### ⚠ The engine's mute layer is INERT without an online session - and fails OPEN
+`MuteRemoteTalker`, `UnmuteRemoteTalker` and `RegisterRemoteTalker` all begin with
+`if (SessionInt && SessionInt->GetNumSessions() > 0 && VoiceEngine.IsValid())`. A direct
+`?listen` / `open <ip>` connect creates **no session**, so none of them do anything and the host
+hears everyone regardless of channel. It used to be completely silent; the router now says so once
+per player:
+```
+[Voice] the voice interface would not mute 'X' yet, so the host can still hear them. ... Persistent
+means no online session is active on this host, which a direct ?listen or 'open <ip>' connect never
+creates.
+```
+**Consequence for testing:** the standard two-`-game`-process harness cannot exercise voice routing,
+because neither side has a session. Host through the MENU instead - see below.
+
+### The unattended voice test (this is what proved the fix)
+`TSAutoVoiceChannel=<crew|host|toggle>` and `TSAutoVoiceTalk=<seconds>` were added to the `TSAuto*`
+family for this. The host must go through the menu so a session exists; the client can connect
+directly, because only the HOST's voice interface is under test.
+```bash
+# HOST - via the menu, so CreateSession runs and remote talkers can be registered
+"...\UnrealEditor.exe" "<uproject>" "/Game/TankSimulation/Maps/MainMenu?TSAutoHost=1" -game -nohmd ...
+
+# CLIENT - direct connect keeps the TSAuto options, which a menu join would lose
+"...\UnrealEditor.exe" "<uproject>" "127.0.0.1?TSAutoTeam=A?TSAutoRole=Commander?TSAutoVoiceChannel=host?TSAutoStart=1" -game -nohmd ...
+```
+Then `grep -a "\[Voice\]\|remote talker" <host log>`. The passing signature - the last two lines
+are the ones that did not exist before the fix:
+```
+[761] Muting remote talker (...401A...)
+[761] [Voice] host can no longer hear 'DESKTOP-...-401A' (OFF net).
+[801] [Voice] '...401A' moved to the CREW net to match their seat (Commander).
+[805] [Voice] '...401A' (Commander) is now on the HOST net.
+[805] Unmuting remote talker (...401A...)
+[805] [Voice] host can now HEAR 'DESKTOP-...-401A' (HOST net).
+```
+0 errors and 0 `Accessed None` on both processes.
+
+**`TankSim.Voice.*` cannot catch this class of bug** - the matrix was right the whole time; the fault
+was entirely in how the decision was pushed into the engine. Read that as a limit of those tests,
+not as coverage.
+
 ### How routing is actually enforced - and why it is not a client-side mixer
 The server decides, per receiving connection, whether a speaker's packets are forwarded at all:
 ```

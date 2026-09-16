@@ -917,7 +917,8 @@ void ATSTankPlayerController::BeginPlay()
 		// PlayerState and the team's tank each have to replicate in before the next step can succeed.
 		const bool bAnyAutoOption = GetWorld()
 			&& (!FString(GetWorld()->URL.GetOption(TEXT("TSAutoTeam="), TEXT(""))).IsEmpty()
-				|| !FString(GetWorld()->URL.GetOption(TEXT("TSAutoPlayMode="), TEXT(""))).IsEmpty());
+				|| !FString(GetWorld()->URL.GetOption(TEXT("TSAutoPlayMode="), TEXT(""))).IsEmpty()
+				|| !FString(GetWorld()->URL.GetOption(TEXT("TSAutoVoiceChannel="), TEXT(""))).IsEmpty());
 		if (bAnyAutoOption)
 		{
 			GetWorldTimerManager().SetTimer(AutoAssignTimerHandle, this, &ATSTankPlayerController::TickAutoAssign, 1.5f, true, 1.5f);
@@ -951,6 +952,12 @@ void ATSTankPlayerController::TickAutoAssign()
 	// TSAutoDrive=<throttle>,<steering>,<seconds>
 	const FString AutoDrive = FString(World->URL.GetOption(TEXT("TSAutoDrive="), TEXT("")));
 
+	// Voice, for the unattended listen-server test. The channel has to be requested AFTER the seat,
+	// because the server refuses a net the seat is not entitled to - a Commander is only a Commander
+	// once TSAutoRole has round-tripped.
+	const FString AutoVoiceChannel = FString(World->URL.GetOption(TEXT("TSAutoVoiceChannel="), TEXT("")));
+	const FString AutoVoiceTalk = FString(World->URL.GetOption(TEXT("TSAutoVoiceTalk="), TEXT("")));
+
 	switch (AutoAssignStage++)
 	{
 	case 0:
@@ -965,9 +972,12 @@ void ATSTankPlayerController::TickAutoAssign()
 		if (!AutoRole.IsEmpty()) { TSRole(AutoRole); }
 		break;
 	case 3:
-		if (!AutoStart.IsEmpty() && AutoStart != TEXT("0")) { TSStartMatch(); }
+		if (!AutoVoiceChannel.IsEmpty()) { TSVoiceChannel(AutoVoiceChannel); }
 		break;
 	case 4:
+		if (!AutoStart.IsEmpty() && AutoStart != TEXT("0")) { TSStartMatch(); }
+		break;
+	case 5:
 		// Baseline BEFORE any input: on a sloped map the tank is already rolling, so the after
 		// reading only means something next to this one.
 		UE_LOG(LogTankSim, Log, TEXT("TSAuto: --- before drive ---"));
@@ -982,15 +992,24 @@ void ATSTankPlayerController::TickAutoAssign()
 			TSDrive(Throttle, Steering, Seconds);
 		}
 		break;
-	case 5:
 	case 6:
 	case 7:
+	case 8:
 	{
 		const FString AutoFire = FString(World->URL.GetOption(TEXT("TSAutoFire="), TEXT("")));
 		if (!AutoFire.IsEmpty())
 		{
 			TSFire(AutoFire);
 		}
+
+		// Only on the first of the three, so a 3s key does not get re-triggered twice on top of
+		// itself and report a hold far longer than asked for.
+		if (AutoAssignStage == 7 && !AutoVoiceTalk.IsEmpty())
+		{
+			TSVoiceTalk(FCString::Atof(*AutoVoiceTalk));
+			TSVoiceStatus();
+		}
+
 		UE_LOG(LogTankSim, Log, TEXT("TSAuto: --- during drive/fire ---"));
 		TSTankStatus();
 		break;
