@@ -1,5 +1,7 @@
 #include "Core/TSGameMode.h"
 
+#include "Voice/TSVoiceRouterSubsystem.h"
+
 #include "Core/TSGameState.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -163,6 +165,16 @@ void ATSGameMode::HandleSeamlessTravelPlayer(AController*& C)
 		return;
 	}
 
+	// Seamless travel does not call PostLogin, so the voice handshake has to be re-asserted here or
+	// this player's connection forwards no voice packets on the new map (see the PostLogin comment).
+	// Deliberately before the early returns below: an unassigned arrival still needs it, because the
+	// host may seat them a moment later and nothing would run this again.
+	UpdateGameplayMuteList(PC);
+	if (UTSVoiceRouterSubsystem* VoiceRouter = UTSVoiceRouterSubsystem::Get(this))
+	{
+		VoiceRouter->RequestRebuild();
+	}
+
 	if (ATSGameState* GS = GetGameState<ATSGameState>())
 	{
 		if (GS->GetMatchState() == ETSMatchState::WaitingForPlayers)
@@ -237,6 +249,21 @@ void ATSGameMode::PostLogin(APlayerController* NewPlayer)
 		{
 			GS->SetMatchState(ETSMatchState::TeamAndRoleSelection);
 		}
+	}
+
+	// WITHOUT THIS LINE NO VOICE PACKET EVER MOVES. UNetConnection::ShouldReplicateVoicePacketFrom
+	// refuses to forward anything until MuteList.bHasVoiceHandshakeCompleted is set on the receiving
+	// connection's controller, and AGameModeBase::UpdateGameplayMuteList is the only thing that sets
+	// it. Nothing in the engine calls it for you - the game is expected to, and a project that never
+	// does gets silent voice with no error anywhere.
+	UpdateGameplayMuteList(NewPlayer);
+
+	// A new arrival changes who can hear whom for everybody, not just for them: the default state of
+	// a fresh connection is "hears everyone", so the routing has to be asserted rather than waited
+	// for. RequestRebuild coalesces this with the burst of assignment changes that usually follows.
+	if (UTSVoiceRouterSubsystem* VoiceRouter = UTSVoiceRouterSubsystem::Get(this))
+	{
+		VoiceRouter->RequestRebuild();
 	}
 }
 
@@ -802,6 +829,13 @@ bool ATSGameMode::TryAssignRole(APlayerController* Player, ETSCrewRole Requested
 	PS->SetCrewRole(RequestedRole);
 	PS->SetAssignedTank(Tank);
 
+	// A seat change is a voice change: it decides which intercom this player is on, and whether they
+	// are the Commander who may choose a net at all. The router re-derives both.
+	if (UTSVoiceRouterSubsystem* VoiceRouter = UTSVoiceRouterSubsystem::Get(this))
+	{
+		VoiceRouter->RequestRebuild();
+	}
+
 	if (ATSGameState* GS = GetGameState<ATSGameState>())
 	{
 		if (GS->GetMatchState() != ETSMatchState::InProgress && AreAllActiveTeamsFullyCrewed())
@@ -832,6 +866,14 @@ void ATSGameMode::ClearAssignment(APlayerController* Player)
 	PS->SetAssignedTank(nullptr);
 	PS->SetCrewRole(ETSCrewRole::None);
 	PS->SetTeamId(ETSTeamId::None);
+
+	// Drops them off every net. EnforceChannelPolicy would catch this within a maintenance tick
+	// anyway, but a player who has just been removed from a crew should not still be on its
+	// intercom for the next fraction of a second.
+	if (UTSVoiceRouterSubsystem* VoiceRouter = UTSVoiceRouterSubsystem::Get(this))
+	{
+		VoiceRouter->RequestRebuild();
+	}
 }
 
 APawn* ATSGameMode::GetTankForTeam(ETSTeamId Team) const

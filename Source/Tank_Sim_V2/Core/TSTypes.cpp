@@ -84,3 +84,13 @@ FString UTSTypeUtils::PlayModeDenialToString(ETSPlayModeDenial Denial)
 {
 	return EnumDisplayName(Denial);
 }
+
+FString UTSTypeUtils::VoiceChannelToString(ETSVoiceChannel Channel)
+{
+	switch (Channel)
+	{
+	case ETSVoiceChannel::Crew:		return TEXT("CREW");
+	case ETSVoiceChannel::Command:	return TEXT("HOST");
+	default:						return TEXT("OFF");
+	}
+}

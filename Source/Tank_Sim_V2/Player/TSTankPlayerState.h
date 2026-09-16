@@ -9,6 +9,12 @@
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTSOnAssignmentChanged);
 
+// Separate from OnAssignmentChanged on purpose. Voice state changes every time somebody keys a
+// microphone, which on an open-mic crew is several times a second; the assignment delegate is
+// listened to by pawn possession, seat attachment and input-context code that must not be woken up
+// by a transmit light blinking.
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTSOnVoiceStateChanged);
+
 UCLASS()
 class ATSTankPlayerState : public APlayerState
 {
@@ -63,6 +69,42 @@ public:
 	ETSDriveControlMode GetDriveControlMode() const { return DriveControlMode; }
 	void SetDriveControlMode(ETSDriveControlMode NewMode);
 
+	// --- Voice ------------------------------------------------------------------------------------
+	// All three fields are server-assigned (UTSVoiceRouterSubsystem is the only writer) and replicate
+	// to everyone: a crew member has to be able to see that their Commander has left the intercom,
+	// and a Commander has to be able to see that the host is addressing them.
+
+	// Which net this player's microphone is patched into. See ETSVoiceChannel for why the Commander
+	// is the only seat that gets a choice.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	ETSVoiceChannel GetVoiceChannel() const { return VoiceChannel; }
+
+	// True while this player is keying their microphone - push-to-talk held, or (for an open-mic
+	// seat) the audio backend reporting voice activity. The owning client is the only thing that can
+	// know this, so it reports it up; this is the server's replicated copy, and it is what every TX
+	// and RX lamp in the UI is derived from.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	bool IsVoiceTransmitting() const { return bVoiceTransmitting; }
+
+	// HOST ONLY: which teams' Commanders the host is currently addressing. Keyed by team rather than
+	// by player because there is exactly one Commander seat per team, and a seat outlives the person
+	// sitting in it - a Commander being swapped out mid-match must not silently drop the host's
+	// selection along with them.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	const TArray<ETSTeamId>& GetCommandVoiceTargets() const { return CommandVoiceTargets; }
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	bool IsAddressingTeam(ETSTeamId Team) const { return Team != ETSTeamId::None && CommandVoiceTargets.Contains(Team); }
+
+	// Server only. UTSVoiceRouterSubsystem is the only caller - it owns the policy for who may sit on
+	// which net, and a setter reachable from anywhere else would route around it.
+	void SetVoiceChannel(ETSVoiceChannel NewChannel);
+	void SetVoiceTransmitting(bool bTransmitting);
+	void SetCommandVoiceTargets(const TArray<ETSTeamId>& NewTargets);
+
+	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation|Voice")
+	FTSOnVoiceStateChanged OnVoiceStateChanged;
+
 	// Broadcast on both server and clients whenever TeamId, CrewRole or AssignedTank changes, so UI
 	// (Section 11 widgets) can refresh without polling.
 	UPROPERTY(BlueprintAssignable, Category = "Tank Simulation")
@@ -96,6 +138,20 @@ protected:
 	// heard from yet cannot be put into VR.
 	UPROPERTY(ReplicatedUsing = OnRep_Assignment, BlueprintReadOnly, Category = "Tank Simulation")
 	bool bHeadsetConnected = false;
+
+	// Crew seats are put on the intercom the moment they are seated, so Crew is the right resting
+	// value for everyone except the host (forced to Command) and the unassigned (moved to None).
+	UPROPERTY(ReplicatedUsing = OnRep_Voice, BlueprintReadOnly, Category = "Tank Simulation|Voice")
+	ETSVoiceChannel VoiceChannel = ETSVoiceChannel::None;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Voice, BlueprintReadOnly, Category = "Tank Simulation|Voice")
+	bool bVoiceTransmitting = false;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Voice, BlueprintReadOnly, Category = "Tank Simulation|Voice")
+	TArray<ETSTeamId> CommandVoiceTargets;
+
+	UFUNCTION()
+	void OnRep_Voice();
 
 	UFUNCTION()
 	void OnRep_Assignment();

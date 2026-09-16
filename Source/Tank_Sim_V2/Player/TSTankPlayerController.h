@@ -13,6 +13,9 @@
 class ATSCrewPawn;
 class ATSTankPlayerState;
 class UTSCommanderScreenWidget;
+class UTSHostVoicePanelWidget;
+class UTSVoiceRouterSubsystem;
+class UTSVoiceSubsystem;
 class UTSRoleDebugWidget;
 class UTSSessionSubsystem;
 class UTSUISubsystem;
@@ -112,6 +115,110 @@ public:
 	// TSPlayMode <vr|desktop> (or 0-1). Switches THIS player, through the same self-serve RPC.
 	UFUNCTION(Exec)
 	void TSPlayMode(const FString& Mode);
+
+	// --- Voice -----------------------------------------------------------------------------------
+	// This controller is the client end of the voice system: it owns the push-to-talk key, decides
+	// whether this seat is push-to-talk or open mic, and is (as ever in this framework) the only actor
+	// with a real NetConnection and therefore the only place the Server RPCs can live.
+	//
+	// It owns no policy. Every request below lands on UTSVoiceRouterSubsystem, which re-checks it on
+	// the server - a Server RPC's HasAuthority() is trivially true, so the rule that a Driver cannot
+	// join the command net has to be enforced there, not by this client politely not asking.
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	ETSVoiceChannel GetVoiceChannel() const;
+
+	// True only for a Commander: the one seat with a choice of nets. Gates the channel buttons.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	bool CanChooseVoiceChannel() const;
+
+	// Driver and Gunner: no channel UI, microphone simply open while they hold the seat.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	bool IsOpenMicSeat() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Voice")
+	void SetVoiceChannel(ETSVoiceChannel NewChannel);
+
+	// Crew <-> Command. The Commander's most common action, so it gets a one-call entry point.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Voice")
+	void ToggleVoiceChannel();
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Voice")
+	void ServerSetVoiceChannel(ETSVoiceChannel NewChannel);
+
+	// --- Host: who am I addressing ---------------------------------------------------------------
+	// Keyed by team, because there is one Commander seat per team and the seat outlives the person in
+	// it. Sent as the WHOLE selection rather than as toggles: a toggle that is lost leaves the host's
+	// panel and the server disagreeing about who is on the net, and nothing would ever correct it.
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	bool IsAddressingTeam(ETSTeamId Team) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Voice")
+	void ToggleCommandVoiceTarget(ETSTeamId Team);
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Voice")
+	void SetCommandVoiceTargets(const TArray<ETSTeamId>& Teams);
+
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Voice")
+	void ServerSetCommandVoiceTargets(const TArray<ETSTeamId>& Teams);
+
+	// --- Keying the microphone -------------------------------------------------------------------
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Voice")
+	void StartVoiceTransmit();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Voice")
+	void StopVoiceTransmit();
+
+	// This machine's own view of whether it is keyed. The replicated, match-wide truth is
+	// ATSTankPlayerState::IsVoiceTransmitting - use that for anything another player can see.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	bool IsLocallyTransmitting() const { return bVoiceKeyHeld || bReportedTransmitting; }
+
+	// Unreliable and refreshed while held, cleared by the router's dead-man timeout. See
+	// UTSVoiceRouterSubsystem::NotifyTransmitting for why a terminal release cannot be trusted to
+	// arrive, and why making this Reliable would be the wrong fix.
+	UFUNCTION(Server, Unreliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Voice")
+	void ServerSetVoiceTransmitting(bool bTransmitting);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	UTSVoiceRouterSubsystem* GetVoiceRouter() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	UTSVoiceSubsystem* GetVoiceSubsystem() const;
+
+	// The host's transmit panel: one selectable row per team commander, with TX/RX lamps. Shown for a
+	// local host on a gameplay map, the same way the Commander screen is shown for a Commander.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Voice")
+	void ShowHostVoicePanel(bool bShow);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	bool IsHostVoicePanelVisible() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	UTSHostVoicePanelWidget* GetHostVoicePanel() const { return HostVoicePanelWidget; }
+
+	// TSVoiceChannel <crew|host|toggle>. Commander only; the server refuses anyone else.
+	UFUNCTION(Exec)
+	void TSVoiceChannel(const FString& Channel);
+
+	// TSVoiceTarget <A|B|C|D|all|none>. Host only.
+	UFUNCTION(Exec)
+	void TSVoiceTarget(const FString& Team);
+
+	// TSVoiceTalk <seconds>. Keys the microphone for a fixed time, so the whole chain can be driven
+	// from an unattended -game process with nobody holding a key down.
+	UFUNCTION(Exec)
+	void TSVoiceTalk(float Seconds);
+
+	UFUNCTION(Exec)
+	void TSVoiceStatus();
+
+	// The push-to-talk key as a readable name, for the hint line on the voice panels. An accessor
+	// rather than making the key public: a widget needs to DISPLAY it, not to change it.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Voice")
+	FString PushToTalkKeyDisplayName() const;
 
 	// --- UI Management --------------------------------------------------------------------------
 
@@ -387,6 +494,43 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|HUD")
 	int32 CommanderScreenZOrder = 10;
 
+	// --- Voice ------------------------------------------------------------------------------------
+
+	// Push to talk. A raw FKey rather than an Enhanced Input action for the same reason the lobby and
+	// play-mode keys are: it must work from the host camera pawn and from either crew pawn, and those
+	// three share no mapping context. A VR seat reaches the same behaviour by calling
+	// StartVoiceTransmit / StopVoiceTransmit from a motion-controller action.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Voice")
+	FKey PushToTalkKey = EKeys::V;
+
+	// Driver and Gunner run an open microphone: no key to hold, no channel to choose. Turn this off to
+	// put every seat on push-to-talk, which is the right setting for a noisy room.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Voice")
+	bool bOpenMicForCrewSeats = true;
+
+	// How often a held key is re-reported to the server. Must be comfortably shorter than the router's
+	// TransmitTimeoutSeconds, or a held microphone releases itself.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Voice", meta = (ClampMin = "0.05"))
+	float VoiceTransmitRefreshSeconds = 0.25f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Voice")
+	bool bShowHostVoicePanelForHost = true;
+
+	// Optional Blueprint restyle. Left empty, the pure-C++ panel is used and no asset is needed.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Voice")
+	TSubclassOf<UTSHostVoicePanelWidget> HostVoicePanelWidgetClass;
+
+	// Above the Commander screen, below the lobby console.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Voice")
+	int32 HostVoicePanelZOrder = 20;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTSHostVoicePanelWidget> HostVoicePanelWidget;
+
+	// Adds or removes the host voice panel to match this player's current standing, for the same
+	// reasons and at the same moments as RefreshCommanderScreen.
+	void RefreshHostVoicePanel();
+
 	// Optional Blueprint restyle of the debug panel. Left empty, the pure-C++ UTSRoleDebugWidget is
 	// used, so no WBP asset is required.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
@@ -454,6 +598,22 @@ private:
 	void HandleAssignmentChanged();
 
 	bool bLobbyConsoleFocused = false;
+
+	// --- Voice, local state -----------------------------------------------------------------------
+	// Recomputed every PlayerTick and reported up on a change, plus a slow refresh while held.
+
+	void VoiceKeyPressed();
+	void VoiceKeyReleased();
+	void UpdateVoiceTransmitState(float DeltaTime);
+	void StopTimedVoiceTransmit();
+
+	bool bVoiceKeyHeld = false;
+	bool bReportedTransmitting = false;
+	float VoiceReportTimer = 0.f;
+
+	// TSVoiceTalk: releases the key after a fixed time so an unattended process can exercise voice.
+	FTimerHandle TimedVoiceTransmitHandle;
+
 
 	// Last headset state this client told the server about, so the report only goes up on a change.
 	// Starts unset so the first measurement always reports, including the common "false" case.

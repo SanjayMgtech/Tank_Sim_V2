@@ -56,6 +56,37 @@ enum class ETSDriveControlMode : uint8
 	Manual	UMETA(DisplayName = "Manual controls (VR hands)")
 };
 
+// Which voice net a player's microphone is patched into.
+//
+// This is a RADIO NET selector, not a mute button: it decides both where a player's voice goes and
+// which net they monitor. The three crew seats are deliberately not symmetric -
+//
+//   Driver / Gunner  always Crew. They have an open mic on the tank intercom and no channel UI;
+//                    the enum value exists for them only so routing has one rule to read.
+//   Commander        chooses. On Crew they are the third voice in the tank; on Command they have
+//                    left the intercom and are on the net with the host, which is exactly why the
+//                    Driver and Gunner are then talking only to each other.
+//   Host             always Command, and cannot change it. The host is a match admin with no seat,
+//                    so there is no crew net for them to join.
+//
+// One asymmetry is deliberate and worth stating, because it is the thing that makes the host's
+// multi-select meaningful: a Commander sitting on Crew still RECEIVES the host. The channel decides
+// where the Commander transmits and whether they hear the intercom; it never lets a crew member
+// tune out the person running the match. See UTSVoiceRouterSubsystem::CanHear, which is the single
+// place that whole matrix lives.
+UENUM(BlueprintType)
+enum class ETSVoiceChannel : uint8
+{
+	// No net. Only ever the resting state of a player with no seat and no host flag.
+	None	UMETA(DisplayName = "Off"),
+
+	// The tank intercom - this player's own crew.
+	Crew	UMETA(DisplayName = "Crew (intercom)"),
+
+	// The command net - host and commanders.
+	Command	UMETA(DisplayName = "Command (host)")
+};
+
 // Why a play-mode request was refused. Returned by ATSGameMode::GetPlayModeDenialReason and sent
 // back to the asking client, because "the VR button did nothing" is otherwise indistinguishable
 // from a bug - and the honest answer is usually "you have no headset plugged in".
@@ -246,4 +277,7 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
 	static FString PlayModeDenialToString(ETSPlayModeDenial Denial);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
+	static FString VoiceChannelToString(ETSVoiceChannel Channel);
 };

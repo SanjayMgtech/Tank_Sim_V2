@@ -9,6 +9,7 @@
 #include "UI/TSRadarWidget.h"
 #include "UI/TSTankAttitudeWidget.h"
 #include "UI/TSVisionFeedWidget.h"
+#include "UI/TSVoiceChannelPanelWidget.h"
 
 UTSCommanderScreenWidget::UTSCommanderScreenWidget()
 {
@@ -17,6 +18,7 @@ UTSCommanderScreenWidget::UTSCommanderScreenWidget()
 	VisionFeedWidgetClass = UTSVisionFeedWidget::StaticClass();
 	RadarWidgetClass = UTSRadarWidget::StaticClass();
 	AttitudeWidgetClass = UTSTankAttitudeWidget::StaticClass();
+	VoicePanelWidgetClass = UTSVoiceChannelPanelWidget::StaticClass();
 }
 
 TSharedRef<SWidget> UTSCommanderScreenWidget::RebuildWidget()
@@ -35,10 +37,11 @@ void UTSCommanderScreenWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 
-	UE_LOG(LogTankSim, Log, TEXT("[CmdScreen] NativeConstruct - radar=%s attitude=%s vision=%s"),
+	UE_LOG(LogTankSim, Log, TEXT("[CmdScreen] NativeConstruct - radar=%s attitude=%s vision=%s voice=%s"),
 		RadarWidget ? TEXT("yes") : TEXT("NO"),
 		AttitudeWidget ? TEXT("yes") : TEXT("NO"),
-		VisionFeedWidget ? TEXT("yes") : TEXT("NO"));
+		VisionFeedWidget ? TEXT("yes") : TEXT("NO"),
+		VoicePanelWidget ? TEXT("yes") : TEXT("NO"));
 }
 
 int32 UTSCommanderScreenWidget::NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
@@ -80,6 +83,14 @@ void UTSCommanderScreenWidget::NativeTick(const FGeometry& MyGeometry, float InD
 	if (VisionFeedWidget)
 	{
 		VisionFeedWidget->RefreshInstrument(InDeltaTime);
+	}
+
+	// Driven from here like the other three. The panel also ticks itself when used standalone, and
+	// that double call is deliberately harmless - RefreshPanel is idempotent and takes its pulse
+	// from a clock rather than from an accumulated delta.
+	if (VoicePanelWidget)
+	{
+		VoicePanelWidget->RefreshPanel();
 	}
 }
 
@@ -144,6 +155,22 @@ void UTSCommanderScreenWidget::BuildDefaultLayout()
 			BoxSlot->SetVerticalAlignment(VAlign_Fill);
 		}
 	}
+
+	if (bShowVoicePanel && VoicePanelWidgetClass)
+	{
+		UTSVoiceChannelPanelWidget* VoicePanel =
+			WidgetTree->ConstructWidget<UTSVoiceChannelPanelWidget>(VoicePanelWidgetClass, TEXT("VoicePanel"));
+
+		if (UVerticalBoxSlot* BoxSlot = Column->AddChildToVerticalBox(VoicePanel))
+		{
+			// Auto, not Fill: two rows of buttons have a natural height, and a fill weight would
+			// stretch them over the instruments they sit beneath.
+			BoxSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+			BoxSlot->SetPadding(PanelPadding);
+			BoxSlot->SetHorizontalAlignment(HAlign_Fill);
+			BoxSlot->SetVerticalAlignment(VAlign_Bottom);
+		}
+	}
 }
 
 void UTSCommanderScreenWidget::BindPanelsFromWidgetTree()
@@ -151,6 +178,7 @@ void UTSCommanderScreenWidget::BindPanelsFromWidgetTree()
 	RadarWidget = nullptr;
 	AttitudeWidget = nullptr;
 	VisionFeedWidget = nullptr;
+	VoicePanelWidget = nullptr;
 
 	if (!WidgetTree)
 	{
@@ -171,6 +199,10 @@ void UTSCommanderScreenWidget::BindPanelsFromWidgetTree()
 		if (!VisionFeedWidget)
 		{
 			VisionFeedWidget = Cast<UTSVisionFeedWidget>(Widget);
+		}
+		if (!VoicePanelWidget)
+		{
+			VoicePanelWidget = Cast<UTSVoiceChannelPanelWidget>(Widget);
 		}
 	});
 }

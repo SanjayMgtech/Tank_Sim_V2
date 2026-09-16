@@ -18,6 +18,7 @@
 class UTSRadarWidget;
 class UTSTankAttitudeWidget;
 class UTSVisionFeedWidget;
+class UTSVoiceChannelPanelWidget;
 
 UCLASS()
 class UTSCommanderScreenWidget : public UTSCommanderHUDWidget
@@ -54,6 +55,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Commander Screen")
 	UTSVisionFeedWidget* GetVisionFeedWidget() const { return VisionFeedWidget; }
 
+	// The Commander's radio, sitting under the attitude dial in the instrument column. Put here
+	// rather than in a panel of its own because this screen is already where the Commander is
+	// looking, and a channel selector they have to look away to find is one they will not use
+	// mid-contact.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Commander Screen")
+	UTSVoiceChannelPanelWidget* GetVoicePanelWidget() const { return VoicePanelWidget; }
+
 	// Which classes the default layout instantiates. Swapping one for a subclass is how a project
 	// customises a panel without re-authoring the split.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander Screen")
@@ -64,6 +72,11 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander Screen")
 	TSubclassOf<UTSTankAttitudeWidget> AttitudeWidgetClass;
+
+	// Left settable so a project can drop the radio (set to none) or restyle it, exactly like the
+	// other three panels.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander Screen")
+	TSubclassOf<UTSVoiceChannelPanelWidget> VoicePanelWidgetClass;
 
 	// Relative widths of the vision feed and of the instrument column beside it.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander Screen", meta = (ClampMin = "0.05"))
@@ -79,6 +92,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander Screen", meta = (ClampMin = "0.05"))
 	float AttitudeFill = 1.f;
 
+	// Auto-sized rather than a fill weight: the radio is a fixed-height strip of two rows, and
+	// giving it a share of the column would stretch two buttons over a third of the screen.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander Screen")
+	bool bShowVoicePanel = true;
+
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander Screen")
 	FMargin PanelPadding = FMargin(4.f);
 
@@ -93,6 +111,9 @@ protected:
 
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Commander Screen")
 	TObjectPtr<UTSVisionFeedWidget> VisionFeedWidget;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Commander Screen")
+	TObjectPtr<UTSVoiceChannelPanelWidget> VoicePanelWidget;
 
 	virtual void NativeConstruct() override;
 

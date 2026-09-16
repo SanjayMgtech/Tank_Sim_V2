@@ -3630,3 +3630,212 @@ periscope view moved forward and the tank drove into the host's view. One run; t
   `keybd_event` keys drive a Shipping build unattended. Watch for buttons that move when a list row appears
   (Join First Result drops from y=60 to y=71 once a session is listed).
 - **Any pawn-side lookup of the player's state must not depend only on the controller's pointer.**
+
+---
+
+## 🎙 Voice: crew intercom and command net (2026-09-16)
+
+Feature work, like the multiplayer and VR sections above: own branch (`voice-communication-system`),
+own commits, own test. Nothing here is port repair.
+
+### The model — one function decides everything
+`UTSVoiceRouterSubsystem::CanHear(Listener, Speaker)` is the whole design. Every other piece is
+plumbing around it.
+
+| Speaker | Listener | Heard when |
+|---|---|---|
+| Driver / Gunner | same-team crew | always. Open mic, no channel UI, no key to hold |
+| Commander on **Crew** | same-team crew | always - they are the third voice in the tank |
+| Commander on **Command** | the host | always, *regardless of the host's selection* |
+| Host | a Commander | only when that Commander's **team** is in the host's selection |
+| Commander | another Commander | **never**, in either direction |
+
+`ETSVoiceChannel` is `None / Crew / Command`. Only the Commander gets a choice; the Driver and
+Gunner are pinned to Crew and the host to Command. `IsChannelAllowedFor` is checked **on the
+server** before any request is honoured - a Server RPC's `HasAuthority()` is trivially true, so a
+greyed-out button is not a security boundary.
+
+**Three asymmetries that look like bugs and are not:**
+- **`CanHear(A,B)` and `CanHear(B,A)` can differ.** That is how a radio net with a broadcasting
+  controller behaves, and it is deliberate.
+- **A Commander sitting on CREW still hears the host.** The channel selector says where the
+  Commander *transmits* and whether they hear the intercom; it is not a way to tune the host out.
+  Without this the host's multi-select would be pointing at people who may not be listening, and
+  "the host needs to talk to all the teams' commanders" would not hold.
+- **The host hears a Commander who is not selected.** The selection governs the host's own outgoing
+  audio only. A Commander calling for orders that the host is silently not receiving is
+  indistinguishable from a broken microphone.
+
+"If the Commander is talking to the host, the Driver and Gunner talk to each other" needs **no
+special case** - it falls out of the Commander leaving the intercom. That is the reason the model is
+shaped this way rather than as a set of mute rules.
+
+### ⛔ THE ONE THAT WILL COST YOU A DAY - `UpdateGameplayMuteList` is never called by the engine
+`UNetConnection::ShouldReplicateVoicePacketFrom` (`NetConnection.cpp:5387`) refuses to forward ANY
+voice packet until `PlayerController->MuteList.bHasVoiceHandshakeCompleted` is true on the
+**receiving** connection. The only thing in the engine that sets it is
+`AGameModeBase::UpdateGameplayMuteList`, and **nothing in the engine calls that** - grep it: the
+function exists and has zero callers. The game is expected to call it, and a project that never
+does gets completely silent voice with no error, no warning and no log line anywhere.
+
+`ATSGameMode::PostLogin` now calls it for every arrival. If voice ever goes silent across the board,
+check that line before checking anything else.
+
+### How routing is actually enforced - and why it is not a client-side mixer
+The server decides, per receiving connection, whether a speaker's packets are forwarded at all:
+```
+UNetConnection::ShouldReplicateVoicePacketFrom(Sender)
+  -> PlayerController->IsPlayerMuted(Sender)
+  -> FPlayerMuteList::VoicePacketFilterMap        <- written by GameplayMutePlayer / GameplayUnmutePlayer
+```
+`UTSVoiceRouterSubsystem::RebuildRouting` walks every (listener, speaker) pair and asserts that bit.
+**A modified client cannot make itself heard on a net the server has not put it on, because the
+packets never leave the server.** Compare a client-side mixer, where everyone receives everything
+and is merely asked politely not to play it.
+
+Two engine details that make this cheap:
+- `AddVoiceBlockReason` / `RemoveVoiceBlockReason` only act on a *transition*, so re-asserting a
+  state already held is free. The rebuild therefore needs no delta tracking of its own.
+- The **Gameplay** reason is a separate flag from the plain mute reason, so routing never clobbers a
+  mute a player set by hand, and a player un-muting somebody by hand cannot re-open a net the server
+  closed.
+
+Rebuilds are driven by a 0.1s maintenance timer: dirty-flag coalescing for the burst of changes that
+follows an assignment, plus a 0.5s safety-net rebuild so correctness does **not** depend on having
+hooked every mutation site. 12 players is 132 pairs of a map lookup twice a second - measurably
+nothing, and far more robust than trying to catch every path that can change a seat.
+
+### Config - BOTH keys are required
+```ini
+[OnlineSubsystem]
+bHasVoiceEnabled=True      ; without this FOnlineVoiceImpl never creates a voice interface
+MaxLocalTalkers=1
+MaxRemoteTalkers=16
+[Voice]
+bEnabled=True              ; the capture/encode MODULE - a separate switch
+```
+Miss either and every microphone gate is inert. The channel model, the routing and the entire UI
+still work - they are simply driving silence. `TSVoiceStatus` prints which of the two layers is
+present, because "the lamps light but nobody can hear me" and "the lamps do not light" are
+completely different faults and are otherwise indistinguishable.
+
+### Why the engine's VoIP and not `IVoiceChat`
+`UTSVoiceSubsystem` already wrapped `IVoiceChat` and had been logging *"no IVoiceChat implementation
+is loaded - voice will be a no-op"* since the framework scaffold. That path needs a hosted backend
+(EOS Voice Chat: product ID, client credentials, an online service). This project ships on
+**OnlineSubsystemNull over LAN**, so it would never have carried a byte.
+
+The engine's own VoIP rides the game NetDriver, which this project already has and already depends
+on. That path is now transport 1. **The `IVoiceChat` wrapper is kept intact, not deleted** - adopting
+a hosted backend later should be a configuration job, not a port. Note that it would move routing
+INTO the backend's channels and the gameplay mute list would stop being the thing that decides who
+hears whom.
+
+### Transmit state is GAMEPLAY state, not a probe of the audio engine
+`ATSTankPlayerState::bVoiceTransmitting` is replicated and is what every TX/RX lamp reads. It is
+derived on the owning client (only that machine can know whether a key is held or a microphone has
+sound in it), reported up, and held by the server.
+
+This is what makes the whole UI demonstrable and testable **with no audio backend at all**, and it
+is why `TankSim.Voice.*` can assert on the model without a microphone.
+
+**The report reuses the drive-input pattern verbatim, and must**: Unreliable RPC, refreshed every
+0.25s while held, cleared by a **server-side dead-man timeout** at 0.75s. A terminal release on an
+Unreliable channel that is dropped would otherwise leave a lamp lit and a microphone open for the
+rest of the match. Making the RPC Reliable is the wrong fix - a reliable stop can still be overtaken
+by a late unreliable non-zero packet and re-latch. Same reasoning as
+`UTSTankControlComponent::DriveInputTimeoutSeconds`.
+
+### ⚠ Open mic without a voice backend reports nothing - by construction
+A Driver's lamp must not be lit from the moment they sit down until they leave; that tells nobody
+anything, and it would leave the Commander's "your crew is talking" symbol permanently on. So an
+open-mic seat reports transmit only while the backend's **voice-activity detection**
+(`IOnlineVoice::OnPlayerTalkingStateChanged`) says sound is actually arriving.
+
+With no backend that delegate never fires, so **open-mic seats report nothing**. That is a real
+limitation, not a design choice. Push-to-talk is therefore left available to *every* seat as a
+manual override, which is what makes the whole chain demonstrable before voice hardware is in the
+picture. Hold **V** (`PushToTalkKey`), or use `TSVoiceTalk <seconds>` from an unattended process.
+
+### The UI
+| Widget | Who sees it | What it shows |
+|---|---|---|
+| `UTSVoiceChannelPanelWidget` | Commander | CREW / HOST rows, each with TX + RX lamps |
+| `UTSHostVoicePanelWidget` | host | one selectable row per team commander, ALL / NONE, per-row RX |
+| `UTSVoiceIndicatorWidget` | both | the lamps themselves |
+
+The Commander's panel is **inside `UTSCommanderScreenWidget`**, under the attitude dial - that screen
+is already where the Commander is looking, and a channel selector they have to look away to find is
+one they will not use mid-contact. All three are built entirely in C++, so there is no WBP asset to
+author; a Blueprint subclass that provides its own tree still wins, and the panels bind by class.
+
+The host's panel deliberately says which net each commander is currently sitting on, because a
+commander on CREW will still *hear* the host but is listening to their tank and may not answer at
+once. That is worth knowing before wondering why.
+
+### ⚠ A VR Commander gets no voice panel - same rule as the Commander screen
+The Commander panel lives inside `UTSCommanderScreenWidget`, and `RefreshCommanderScreen` already
+skips that whole screen for a non-host player with a headset, because a screen-space widget renders
+plastered across a headset view. So a VR Commander can still be *routed* correctly and can still
+switch nets with `TSVoiceChannel` or a Blueprint call - they simply have no lamps to look at.
+
+That is the existing, documented VR gap widening by one panel, not a new one. The fix is the same
+one already owed for the radar and attitude dial: a world-space panel in the turret. The host is
+never in VR by design, so the host panel is unaffected.
+
+### ⚠ A paint-only UUserWidget has ZERO desired size
+`UTSVoiceIndicatorWidget` draws in `NativePaint` and builds no widget tree, so it collapses to
+nothing inside a box. Its parents wrap it in a `USizeBox` with explicit overrides. Putting that in
+the parent is correct - how big a lamp should be is a layout question - but it is invisible when
+forgotten: no error, just a row with no lamps. `NativePaint` early-outs on a degenerate rect so the
+failure is "nothing drawn" rather than a smear.
+
+### ⚠ The lamps do not tick themselves; the panels do not accumulate time
+Both panels' `RefreshPanel()` is **idempotent** and takes its pulse from `GetRealTimeSeconds()`
+rather than an accumulated delta. That is load-bearing: `UTSCommanderScreenWidget` drives its panels
+explicitly (one clock, explicit ordering) AND the panel ticks itself when used standalone, so it is
+refreshed twice in a frame. With an accumulator that would double the pulse rate; with a clock it
+changes nothing. It also sidesteps the still-open question in this file about whether a nested
+`UUserWidget` is reliably ticked.
+
+### ⚠ `Slot` again, and a lambda trap
+- `if (UHorizontalBoxSlot* Slot = ...)` is a hard error - `UWidget::Slot`. Use `BoxSlot`. This is the
+  same list as `Role`, `Mesh`, `PI`.
+- A row-building lambda taking `UButton*&` **will not bind** to a `TObjectPtr<UButton>` member. Take
+  `TObjectPtr<UButton>&`.
+
+### Console commands (not Shipping)
+```
+TSVoiceChannel <crew|host|toggle>    Commander only - the server refuses anyone else
+TSVoiceTarget  <A|B|C|D|all|none>    host only, toggles one team or sets the whole selection
+TSVoiceTalk    <seconds>             keys the microphone for a fixed time, for unattended runs
+TSVoiceStatus                        both transport layers, this seat, and the whole roster
+```
+
+### Tests
+```
+editor_query run_automation_tests  {"prefix": "TankSim.Voice"}
+```
+`TankSim.Voice.Routing` covers the matrix exhaustively (including the headline
+"Driver and Gunner keep talking while the Commander is on the host net", the cross-team seal, and the
+no-commander-to-commander-leak rule). `TankSim.Voice.ChannelPolicy` covers the seat policy, and
+asserts the invariant that every seat's **resting** channel is one that seat is **allowed** to hold -
+without it `EnforceChannelPolicy` would fight itself every maintenance tick.
+
+Both are pure static functions of plain data, which is exactly why `FTSVoiceParticipant` is a
+flattened snapshot rather than the rules walking live actors: no world, no NetDriver, no microphone.
+
+### ⬜ STILL OWED A HUMAN TEST - nothing here has carried real audio
+Every layer above the audio device is verified; **no sound has been through this system.** A green
+test run must not be read as "voice works". What is owed:
+1. Two machines (or two `-game` processes), real microphones. Host + a Commander + a Driver + a
+   Gunner is the minimum that exercises every rule.
+2. Commander on CREW: crew hear each other, all three ways.
+3. Commander switches to HOST: Driver and Gunner still hear each other, neither hears the Commander,
+   and the Commander's CREW lamp still lights when they talk.
+4. Host selects one commander, then two: only the selected ones hear him.
+5. A commander on CREW that the host has selected still hears the host.
+6. Kill the client mid-transmission: the server's lamp clears within `TransmitTimeoutSeconds`.
+
+The pawn changes add `UPROPERTY`s and several new `UCLASS`es, so **Live Coding cannot carry them** -
+close the editor and rebuild before testing.

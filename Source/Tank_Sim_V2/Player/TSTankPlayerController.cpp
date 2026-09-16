@@ -17,6 +17,9 @@
 #include "Tank_Sim_V2.h"
 #include "TimerManager.h"
 #include "UI/TSCommanderScreenWidget.h"
+#include "UI/TSHostVoicePanelWidget.h"
+#include "Voice/TSVoiceRouterSubsystem.h"
+#include "Voice/TSVoiceSubsystem.h"
 #include "UI/TSRoleDebugWidget.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/WidgetComponent.h"
@@ -41,9 +44,15 @@ ATSTankPlayerController::ATSTankPlayerController()
 void ATSTankPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(HeadsetPollTimerHandle);
+	GetWorldTimerManager().ClearTimer(TimedVoiceTransmitHandle);
+
+	// Close the microphone on the way out. A controller torn down mid-transmission would otherwise
+	// leave the local voice engine keyed, and on a seamless travel the same controller comes back.
+	StopVoiceTransmit();
 
 	ShowRoleDebugWidget(false);
 	ShowCommanderScreen(false);
+	ShowHostVoicePanel(false);
 
 	Super::EndPlay(EndPlayReason);
 }
@@ -83,6 +92,7 @@ void ATSTankPlayerController::ApplyLocalUIForCurrentMap()
 	}
 
 	RefreshCommanderScreen();
+	RefreshHostVoicePanel();
 
 	// The host arrives needing to assign crews; everyone else arrives needing to play.
 	SetLobbyConsoleFocused(bFocusLobbyConsoleOnArrivalForHost && IsMatchHost());
@@ -104,6 +114,18 @@ void ATSTankPlayerController::SetupInputComponent()
 	{
 		FInputKeyBinding& Binding = InputComponent->BindKey(PlayModeToggleKey, IE_Pressed, this, &ATSTankPlayerController::TogglePlayMode);
 		Binding.bConsumeInput = false;
+	}
+
+	if (InputComponent && PushToTalkKey.IsValid())
+	{
+		// BOTH edges. A press-only binding is how a latched state ends up stuck on - the same trap
+		// IA_Drive hit, where ETriggerEvent::Triggered fires only while actuated and the release
+		// reached nobody. Here the release is what closes the microphone.
+		FInputKeyBinding& PressBinding = InputComponent->BindKey(PushToTalkKey, IE_Pressed, this, &ATSTankPlayerController::VoiceKeyPressed);
+		PressBinding.bConsumeInput = false;
+
+		FInputKeyBinding& ReleaseBinding = InputComponent->BindKey(PushToTalkKey, IE_Released, this, &ATSTankPlayerController::VoiceKeyReleased);
+		ReleaseBinding.bConsumeInput = false;
 	}
 }
 
@@ -1045,6 +1067,7 @@ void ATSTankPlayerController::HandleAssignmentChanged()
 {
 	RefreshSelectionUI();
 	RefreshCommanderScreen();
+	RefreshHostVoicePanel();
 }
 
 void ATSTankPlayerController::RefreshSelectionUI()
@@ -1628,6 +1651,7 @@ void ATSTankPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
 	LogVRInputHeartbeat(DeltaTime);
+	UpdateVoiceTransmitState(DeltaTime);
 }
 
 void ATSTankPlayerController::LogVRInputHeartbeat(float DeltaTime)
@@ -1705,5 +1729,409 @@ void ATSTankPlayerController::LogVRInputHeartbeat(float DeltaTime)
 		Drive.X, Drive.Y, Aim.X, Aim.Y,
 		bNonZero ? TEXT("INPUT ARRIVING") : TEXT("nothing arriving"),
 		*TankState);
+#endif
+}
+
+// ---------------------------------------------------------------------------------------------
+// Voice
+//
+// The client end. Policy lives on the server in UTSVoiceRouterSubsystem; what happens here is
+// deciding whether THIS machine's microphone is open, and telling the server about it.
+// ---------------------------------------------------------------------------------------------
+
+FString ATSTankPlayerController::PushToTalkKeyDisplayName() const
+{
+	return PushToTalkKey.IsValid() ? PushToTalkKey.GetDisplayName(false).ToString() : TEXT("(unbound)");
+}
+
+UTSVoiceRouterSubsystem* ATSTankPlayerController::GetVoiceRouter() const
+{
+	return UTSVoiceRouterSubsystem::Get(this);
+}
+
+UTSVoiceSubsystem* ATSTankPlayerController::GetVoiceSubsystem() const
+{
+	return GetGameInstance() ? GetGameInstance()->GetSubsystem<UTSVoiceSubsystem>() : nullptr;
+}
+
+ETSVoiceChannel ATSTankPlayerController::GetVoiceChannel() const
+{
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	return PS ? PS->GetVoiceChannel() : ETSVoiceChannel::None;
+}
+
+bool ATSTankPlayerController::CanChooseVoiceChannel() const
+{
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	return PS && UTSVoiceRouterSubsystem::CanChooseChannel(PS->IsHost(), PS->GetCrewRole());
+}
+
+bool ATSTankPlayerController::IsOpenMicSeat() const
+{
+	if (!bOpenMicForCrewSeats)
+	{
+		return false;
+	}
+
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	if (!PS || PS->IsHost())
+	{
+		return false;
+	}
+
+	const ETSCrewRole Seat = PS->GetCrewRole();
+	return Seat == ETSCrewRole::Driver || Seat == ETSCrewRole::Gunner;
+}
+
+void ATSTankPlayerController::SetVoiceChannel(ETSVoiceChannel NewChannel)
+{
+	// Sent up even when this client believes it is not allowed. The server is the authority on the
+	// seat, and a client whose PlayerState has not caught up would otherwise refuse its own valid
+	// request - a silent failure indistinguishable from a broken button.
+	ServerSetVoiceChannel(NewChannel);
+}
+
+void ATSTankPlayerController::ToggleVoiceChannel()
+{
+	SetVoiceChannel(GetVoiceChannel() == ETSVoiceChannel::Command ? ETSVoiceChannel::Crew : ETSVoiceChannel::Command);
+}
+
+bool ATSTankPlayerController::ServerSetVoiceChannel_Validate(ETSVoiceChannel NewChannel)
+{
+	return true;
+}
+
+void ATSTankPlayerController::ServerSetVoiceChannel_Implementation(ETSVoiceChannel NewChannel)
+{
+	if (UTSVoiceRouterSubsystem* Router = GetVoiceRouter())
+	{
+		Router->TrySetVoiceChannel(this, NewChannel);
+	}
+}
+
+bool ATSTankPlayerController::IsAddressingTeam(ETSTeamId Team) const
+{
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	return PS && PS->IsAddressingTeam(Team);
+}
+
+void ATSTankPlayerController::ToggleCommandVoiceTarget(ETSTeamId Team)
+{
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	if (!PS || Team == ETSTeamId::None)
+	{
+		return;
+	}
+
+	// Built from the replicated selection and sent whole, so the server ends up with a set rather
+	// than applying a toggle to whatever it happens to be holding. If this client's view is stale
+	// the worst case is one wrong set that the next replication corrects; a lost toggle would leave
+	// the two permanently out of step with nothing to resynchronise them.
+	TArray<ETSTeamId> Targets = PS->GetCommandVoiceTargets();
+	if (Targets.Contains(Team))
+	{
+		Targets.Remove(Team);
+	}
+	else
+	{
+		Targets.AddUnique(Team);
+	}
+	SetCommandVoiceTargets(Targets);
+}
+
+void ATSTankPlayerController::SetCommandVoiceTargets(const TArray<ETSTeamId>& Teams)
+{
+	ServerSetCommandVoiceTargets(Teams);
+}
+
+bool ATSTankPlayerController::ServerSetCommandVoiceTargets_Validate(const TArray<ETSTeamId>& Teams)
+{
+	// There are at most four teams, so anything larger is a malformed or hostile call. Validation
+	// failure disconnects the caller, which is the right response to a client sending a payload the
+	// game could never produce.
+	return Teams.Num() <= 8;
+}
+
+void ATSTankPlayerController::ServerSetCommandVoiceTargets_Implementation(const TArray<ETSTeamId>& Teams)
+{
+	if (UTSVoiceRouterSubsystem* Router = GetVoiceRouter())
+	{
+		Router->TrySetCommandVoiceTargets(this, Teams);
+	}
+}
+
+// --- Keying the microphone --------------------------------------------------------------------
+
+void ATSTankPlayerController::VoiceKeyPressed()
+{
+	StartVoiceTransmit();
+}
+
+void ATSTankPlayerController::VoiceKeyReleased()
+{
+	StopVoiceTransmit();
+}
+
+void ATSTankPlayerController::StartVoiceTransmit()
+{
+	bVoiceKeyHeld = true;
+
+	// Applied immediately rather than waiting for the next PlayerTick. A key press is the one moment
+	// where latency is audible - the first syllable is lost if the gate opens a frame late.
+	UpdateVoiceTransmitState(0.f);
+}
+
+void ATSTankPlayerController::StopVoiceTransmit()
+{
+	if (!bVoiceKeyHeld)
+	{
+		return;
+	}
+	bVoiceKeyHeld = false;
+	GetWorldTimerManager().ClearTimer(TimedVoiceTransmitHandle);
+	UpdateVoiceTransmitState(0.f);
+}
+
+void ATSTankPlayerController::StopTimedVoiceTransmit()
+{
+	StopVoiceTransmit();
+}
+
+void ATSTankPlayerController::UpdateVoiceTransmitState(float DeltaTime)
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	const bool bHasNet = PS && PS->GetVoiceChannel() != ETSVoiceChannel::None;
+	const bool bOpenMic = IsOpenMicSeat();
+
+	// The LOCAL gate: whether this machine produces voice packets at all. Held key, or an open-mic
+	// seat that currently has a net to talk on.
+	UTSVoiceSubsystem* Voice = GetVoiceSubsystem();
+	if (Voice)
+	{
+		Voice->SetLocalTransmitting(bHasNet && (bVoiceKeyHeld || bOpenMic));
+	}
+
+	// What the rest of the match is TOLD, which is a different question. A held key is an explicit
+	// statement of intent and always counts. An open microphone counts only while the audio backend
+	// reports sound actually arriving - otherwise a Driver's lamp would be lit from the moment they
+	// sat down until they left, and the Commander's "your crew is talking" symbol with it, which
+	// would make both useless.
+	//
+	// With no audio backend present IsLocalPlayerSpeaking is always false, so an open-mic seat
+	// reports nothing and the push-to-talk key remains the way to demonstrate the whole chain. That
+	// is a real limitation, not a design choice - see TSVoiceSubsystem.h.
+	const bool bWantReport = bHasNet && (bVoiceKeyHeld || (bOpenMic && Voice && Voice->IsLocalPlayerSpeaking()));
+
+	VoiceReportTimer += DeltaTime;
+
+	if (bWantReport != bReportedTransmitting)
+	{
+		bReportedTransmitting = bWantReport;
+		VoiceReportTimer = 0.f;
+		ServerSetVoiceTransmitting(bWantReport);
+		return;
+	}
+
+	// Refreshed while held, because the report rides an Unreliable RPC and the server releases a
+	// microphone it has stopped hearing from. See UTSVoiceRouterSubsystem::NotifyTransmitting.
+	if (bWantReport && VoiceReportTimer >= VoiceTransmitRefreshSeconds)
+	{
+		VoiceReportTimer = 0.f;
+		ServerSetVoiceTransmitting(true);
+	}
+}
+
+bool ATSTankPlayerController::ServerSetVoiceTransmitting_Validate(bool bTransmitting)
+{
+	return true;
+}
+
+void ATSTankPlayerController::ServerSetVoiceTransmitting_Implementation(bool bTransmitting)
+{
+	if (UTSVoiceRouterSubsystem* Router = GetVoiceRouter())
+	{
+		Router->NotifyTransmitting(this, bTransmitting);
+	}
+}
+
+// --- The host's transmit panel ------------------------------------------------------------------
+
+void ATSTankPlayerController::ShowHostVoicePanel(bool bShow)
+{
+	if (!bShow)
+	{
+		if (HostVoicePanelWidget)
+		{
+			HostVoicePanelWidget->RemoveFromParent();
+			HostVoicePanelWidget = nullptr;
+		}
+		return;
+	}
+
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	// Same seamless-travel guard as the Commander screen: a reused PlayerController still points at
+	// the widget built for the world just left.
+	if (HostVoicePanelWidget && HostVoicePanelWidget->GetWorld() != GetWorld())
+	{
+		HostVoicePanelWidget->RemoveFromParent();
+		HostVoicePanelWidget = nullptr;
+	}
+
+	if (!HostVoicePanelWidget)
+	{
+		TSubclassOf<UTSHostVoicePanelWidget> WidgetClass = HostVoicePanelWidgetClass;
+		if (!WidgetClass)
+		{
+			WidgetClass = UTSHostVoicePanelWidget::StaticClass();
+		}
+		HostVoicePanelWidget = CreateWidget<UTSHostVoicePanelWidget>(this, WidgetClass);
+	}
+
+	if (HostVoicePanelWidget && !HostVoicePanelWidget->IsInViewport())
+	{
+		HostVoicePanelWidget->AddToViewport(HostVoicePanelZOrder);
+	}
+}
+
+bool ATSTankPlayerController::IsHostVoicePanelVisible() const
+{
+	return HostVoicePanelWidget && HostVoicePanelWidget->IsInViewport();
+}
+
+void ATSTankPlayerController::RefreshHostVoicePanel()
+{
+	if (!IsLocalController() || !bShowHostVoicePanelForHost)
+	{
+		return;
+	}
+
+	const UTSUISubsystem* UI = GetUISubsystem();
+	if (UI && UI->IsCurrentMapMenuMap())
+	{
+		ShowHostVoicePanel(false);
+		return;
+	}
+
+	// No VR guard is needed and none is written: the host is never in VR by design (TryAssignTeam
+	// and TryAssignRole refuse a host a seat, and ATSHostCameraPawn forces stereo off), so a panel
+	// shown only to the host cannot end up plastered across a headset view.
+	ShowHostVoicePanel(IsMatchHost());
+}
+
+// --- Console commands ---------------------------------------------------------------------------
+
+void ATSTankPlayerController::TSVoiceChannel(const FString& Channel)
+{
+#if !UE_BUILD_SHIPPING
+	const FString Wanted = Channel.TrimStartAndEnd().ToLower();
+
+	if (Wanted == TEXT("toggle") || Wanted.IsEmpty())
+	{
+		ToggleVoiceChannel();
+	}
+	else if (Wanted == TEXT("crew") || Wanted == TEXT("team") || Wanted == TEXT("1"))
+	{
+		SetVoiceChannel(ETSVoiceChannel::Crew);
+	}
+	else if (Wanted == TEXT("host") || Wanted == TEXT("command") || Wanted == TEXT("2"))
+	{
+		SetVoiceChannel(ETSVoiceChannel::Command);
+	}
+	else
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSVoiceChannel: expected crew|host|toggle, got '%s'."), *Channel);
+		return;
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("TSVoiceChannel: requested '%s' (the server decides - a Driver or Gunner is refused)."), *Channel);
+#endif
+}
+
+void ATSTankPlayerController::TSVoiceTarget(const FString& Team)
+{
+#if !UE_BUILD_SHIPPING
+	const FString Wanted = Team.TrimStartAndEnd().ToLower();
+
+	if (Wanted == TEXT("none") || Wanted == TEXT("clear"))
+	{
+		SetCommandVoiceTargets(TArray<ETSTeamId>());
+		UE_LOG(LogTankSim, Log, TEXT("TSVoiceTarget: cleared the command net selection."));
+		return;
+	}
+
+	if (Wanted == TEXT("all"))
+	{
+		SetCommandVoiceTargets({ ETSTeamId::TeamA, ETSTeamId::TeamB, ETSTeamId::TeamC, ETSTeamId::TeamD });
+		UE_LOG(LogTankSim, Log, TEXT("TSVoiceTarget: addressing every team's commander."));
+		return;
+	}
+
+	ETSTeamId Target = ETSTeamId::None;
+	if (Wanted == TEXT("a") || Wanted == TEXT("0")) { Target = ETSTeamId::TeamA; }
+	else if (Wanted == TEXT("b") || Wanted == TEXT("1")) { Target = ETSTeamId::TeamB; }
+	else if (Wanted == TEXT("c") || Wanted == TEXT("2")) { Target = ETSTeamId::TeamC; }
+	else if (Wanted == TEXT("d") || Wanted == TEXT("3")) { Target = ETSTeamId::TeamD; }
+
+	if (Target == ETSTeamId::None)
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSVoiceTarget: expected A|B|C|D|all|none, got '%s'."), *Team);
+		return;
+	}
+
+	ToggleCommandVoiceTarget(Target);
+	UE_LOG(LogTankSim, Log, TEXT("TSVoiceTarget: toggled %s (host only - the server refuses anyone else)."),
+		*UTSTypeUtils::TeamIdToString(Target));
+#endif
+}
+
+void ATSTankPlayerController::TSVoiceTalk(float Seconds)
+{
+#if !UE_BUILD_SHIPPING
+	const float HoldFor = Seconds > 0.f ? Seconds : 3.f;
+
+	StartVoiceTransmit();
+	GetWorldTimerManager().SetTimer(TimedVoiceTransmitHandle, this,
+		&ATSTankPlayerController::StopTimedVoiceTransmit, HoldFor, false);
+
+	UE_LOG(LogTankSim, Log, TEXT("TSVoiceTalk: microphone keyed for %.1fs on the %s net."),
+		HoldFor, *UTSTypeUtils::VoiceChannelToString(GetVoiceChannel()));
+#endif
+}
+
+void ATSTankPlayerController::TSVoiceStatus()
+{
+#if !UE_BUILD_SHIPPING
+	const UTSVoiceSubsystem* Voice = GetVoiceSubsystem();
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+
+	UE_LOG(LogTankSim, Log, TEXT("===== TSVoiceStatus ====="));
+	UE_LOG(LogTankSim, Log, TEXT("  engine VoIP available : %s   (false means nothing carries audio - the UI still works)"),
+		Voice && Voice->IsEngineVoiceAvailable() ? TEXT("YES") : TEXT("no"));
+	UE_LOG(LogTankSim, Log, TEXT("  IVoiceChat backend    : %s"),
+		Voice && Voice->IsVoiceChatAvailable() ? TEXT("YES") : TEXT("no"));
+	UE_LOG(LogTankSim, Log, TEXT("  local mic open        : %s   key held=%s  backend hears speech=%s"),
+		Voice && Voice->IsLocalTransmitting() ? TEXT("YES") : TEXT("no"),
+		bVoiceKeyHeld ? TEXT("yes") : TEXT("no"),
+		Voice && Voice->IsLocalPlayerSpeaking() ? TEXT("yes") : TEXT("no"));
+	UE_LOG(LogTankSim, Log, TEXT("  my seat               : %s on team %s, net %s, open-mic=%s"),
+		PS ? *UTSTypeUtils::CrewRoleToString(PS->GetCrewRole()) : TEXT("<no playerstate>"),
+		PS ? *UTSTypeUtils::TeamIdToString(PS->GetTeamId()) : TEXT("-"),
+		*UTSTypeUtils::VoiceChannelToString(GetVoiceChannel()),
+		IsOpenMicSeat() ? TEXT("yes") : TEXT("no"));
+
+	if (const UTSVoiceRouterSubsystem* Router = GetVoiceRouter())
+	{
+		UE_LOG(LogTankSim, Log, TEXT("%s"), *Router->BuildVoiceDebugString());
+	}
+	UE_LOG(LogTankSim, Log, TEXT("===== end TSVoiceStatus ====="));
 #endif
 }
