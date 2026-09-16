@@ -17,6 +17,10 @@ namespace
 {
 	const FName LobbyCodeKey = TEXT("LOBBY_CODE");
 
+	// Advertised display name of the host. Session.OwningUserName comes from the online identity
+	// (the PC name under OnlineSubsystemNull), so the browser reads this instead.
+	const FName HostDisplayNameKey = TEXT("TSHOSTNAME");
+
 	// On-screen (not just log) confirmation of session lifecycle events - each PIE/game window prints
 	// only what happens in its own process, so running two windows side by side shows host vs. client
 	// activity separately without needing to dig through logs.
@@ -274,6 +278,8 @@ void UTSSessionSubsystem::CreateLobby(int32 MaxPlayers)
 	SessionSettings.bUsesPresence = true;
 	SessionSettings.bUseLobbiesIfAvailable = true;
 	SessionSettings.Set(LobbyCodeKey, CurrentLobbyCode, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+	// ULocalPlayer::GetNickname is overridden by UTSLocalPlayer to return the login-screen name.
+	SessionSettings.Set(HostDisplayNameKey, LocalPlayer->GetNickname(), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 
 	SessionSettings.NumPublicConnections = FMath::Max(MaxPlayers, 3);
 	if (IOnlineSubsystem* OnlineSubsystem = Online::GetSubsystem(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr))
@@ -362,6 +368,8 @@ void UTSSessionSubsystem::CreateSession(int32 MaxPlayers, bool bIsLAN, bool bIsP
 	// OnlineSubsystemNull has no lobby backend - forcing this true does nothing but risks the
 	// engine's lobby-vs-session branching for a subsystem that only ever implements the latter.
 	SessionSettings.bUseLobbiesIfAvailable = false;
+	// ULocalPlayer::GetNickname is overridden by UTSLocalPlayer to return the login-screen name.
+	SessionSettings.Set(HostDisplayNameKey, LocalPlayer->GetNickname(), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 
 	PrintOnScreen(FString::Printf(TEXT("[Session] Hosting session (MaxPlayers=%d, LAN=%s)..."), MaxPlayers, bIsLAN ? TEXT("true") : TEXT("false")), FColor::Yellow);
 	Sessions->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, SessionSettings);
@@ -449,7 +457,10 @@ void UTSSessionSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 		for (const FOnlineSessionSearchResult& Result : SessionSearch->SearchResults)
 		{
 			FTSSessionSearchResult Entry;
-			Entry.HostUserName = Result.Session.OwningUserName;
+			if (!Result.Session.SessionSettings.Get(HostDisplayNameKey, Entry.HostUserName) || Entry.HostUserName.IsEmpty())
+			{
+				Entry.HostUserName = Result.Session.OwningUserName;
+			}
 			Entry.MaxPlayers = Result.Session.SessionSettings.NumPublicConnections;
 			Entry.CurrentPlayers = Entry.MaxPlayers - Result.Session.NumOpenPublicConnections;
 			Entry.PingMs = Result.PingInMs;
