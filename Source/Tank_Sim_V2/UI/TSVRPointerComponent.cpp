@@ -153,26 +153,46 @@ void UTSVRPointerComponent::UpdateCustomHit()
 
 	const FVector End = Start + Direction * InteractionDistance;
 
-	// No ignore list at all. That is the whole point of this class - the stock trace's ignore list
-	// would contain the panel we are trying to hit.
+	// No ignore list to start with. That is the whole point of this class - the stock trace's ignore
+	// list would contain the panel we are trying to hit.
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(TSVRPointerTrace), /*bTraceComplex=*/false);
 
-	TArray<FHitResult> Hits;
-	World->LineTraceMultiByChannel(Hits, Start, End, TraceChannel, Params);
-
-	for (const FHitResult& Hit : Hits)
+	// A multi trace still STOPS at the first blocking hit. Crew sit inside the hull, and the Commander's
+	// camera is inside VehicleMesh's turret body - measured: every ray was blocked at distance 0 and never
+	// reached the screen. So when only widgets count, ignore whatever non-widget primitive blocked the
+	// ray and trace again. Bounded, because each pass adds one component to the ignore list.
+	static constexpr int32 MaxPasses = 16;
+	for (int32 Pass = 0; Pass < MaxPasses; ++Pass)
 	{
-		if (!bOnlyHitWidgetComponents)
+		TArray<FHitResult> Hits;
+		World->LineTraceMultiByChannel(Hits, Start, End, TraceChannel, Params);
+
+		UPrimitiveComponent* Blocker = nullptr;
+		for (const FHitResult& Hit : Hits)
 		{
-			CustomHitResult = Hit;
-			return;
+			if (!bOnlyHitWidgetComponents)
+			{
+				CustomHitResult = Hit;
+				return;
+			}
+
+			if (Cast<UWidgetComponent>(Hit.GetComponent()))
+			{
+				CustomHitResult = Hit;
+				return;
+			}
+
+			if (Hit.bBlockingHit)
+			{
+				Blocker = Hit.GetComponent();
+			}
 		}
 
-		if (Cast<UWidgetComponent>(Hit.GetComponent()))
+		if (!Blocker)
 		{
-			CustomHitResult = Hit;
 			return;
 		}
+		Params.AddIgnoredComponent(Blocker);
 	}
 }
 
