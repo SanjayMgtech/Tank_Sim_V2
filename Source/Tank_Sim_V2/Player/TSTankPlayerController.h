@@ -483,10 +483,12 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
 	bool bShowRoleDebugWidgetOnGameplayMaps = true;
 
-	// Put the Commander's screen up automatically when this player is assigned the Commander seat.
-	// Off leaves it to the exec command TSCommanderScreen or to Blueprint.
+	// Put the Commander's screen up in the viewport automatically when this player is assigned the
+	// Commander seat. Off by default: the screen lives on a WidgetComponent inside the tank
+	// (BP_VK1602Leopard_Controller_Chaos), so a viewport copy would only double it up. The exec
+	// command TSCommanderScreen still toggles a viewport copy for testing.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|HUD")
-	bool bShowCommanderScreenForCommander = true;
+	bool bShowCommanderScreenForCommander = false;
 
 	// Optional Blueprint restyle. Left empty, the pure-C++ UTSCommanderScreenWidget is used, which
 	// needs no asset at all - it builds its own split layout and every panel paints itself.
