@@ -17,8 +17,8 @@ what each class does, the RPC table, the permission matrix) and
 [Tank_Simulation_Framework_Documentation.md](Tank_Simulation_Framework_Documentation.md) (the original
 design doc). This document is the *order* to do things in; that one is *what things are*.
 
-**Before you start:** build the C++ once (`Engine\Build\BatchFiles\Build.bat Tank_Sim_V2Editor Win64
-Development -project="<path>\Tank_Sim_V2.uproject"`) so every class below shows up in the Editor's
+**Before you start:** build the C++ once (`Engine\Build\BatchFiles\Build.bat VAGANAMEditor Win64
+Development -project="<path>\VAGANAM.uproject"`) so every class below shows up in the Editor's
 class pickers. It already builds clean as of this writing.
 
 ---

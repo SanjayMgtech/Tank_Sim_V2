@@ -3,9 +3,9 @@
 using UnrealBuildTool;
 using System.Collections.Generic;
 
-public class Tank_Sim_V2Target : TargetRules
+public class VAGANAMTarget : TargetRules
 {
-	public Tank_Sim_V2Target(TargetInfo Target) : base(Target)
+	public VAGANAMTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Game;
 		DefaultBuildSettings = BuildSettingsVersion.V6;

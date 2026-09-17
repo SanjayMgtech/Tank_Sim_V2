@@ -48,7 +48,7 @@ Module/config changes:
 - [Tank_Sim_V2.Build.cs](../Source/Tank_Sim_V2/Tank_Sim_V2.Build.cs) — added `Slate`, `SlateCore`,
   `UMG`, `OnlineSubsystem`, `OnlineSubsystemUtils`, `HeadMountedDisplay` as link dependencies, and
   `VoiceChat` as an include-path-only dependency (it's a header-only interface module — see §8).
-- [Tank_Sim_V2.uproject](../Tank_Sim_V2.uproject) — enabled the `EnhancedInput`, `OpenXR`, and
+- [VAGANAM.uproject](../VAGANAM.uproject) — enabled the `EnhancedInput`, `OpenXR`, and
   `OnlineSubsystemNull` plugins.
 - [DefaultEngine.ini](../Config/DefaultEngine.ini) — added `[OnlineSubsystem] DefaultPlatformService=Null`
   and `[OnlineSubsystemNull] bEnabled=True`, additively (the existing Steam net driver config was left
@@ -59,7 +59,7 @@ Module/config changes:
 Confirmed compiling and linking clean (`Result: Succeeded`) against the installed UE 5.7 toolchain via:
 
 ```
-Engine\Build\BatchFiles\Build.bat Tank_Sim_V2Editor Win64 Development -project="<path to>\Tank_Sim_V2.uproject"
+Engine\Build\BatchFiles\Build.bat VAGANAMEditor Win64 Development -project="<path to>\VAGANAM.uproject"
 ```
 
 Two things fixed along the way that are worth knowing about if you add more files under `Source/Tank_Sim_V2/<Subfolder>/`:
