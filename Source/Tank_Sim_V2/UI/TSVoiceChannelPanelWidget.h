@@ -64,31 +64,34 @@ public:
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
-	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Voice")
+	// BindWidgetOptional: a WBP subclass that authors its own tree gets these bound by NAME (CrewButton,
+	// HostButton, CrewIndicator, ...). Any it leaves out simply stay null and that part of the panel
+	// is not updated - nothing here requires all of them.
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Voice", meta = (BindWidgetOptional))
 	TObjectPtr<UButton> CrewButton;
 
-	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Voice")
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Voice", meta = (BindWidgetOptional))
 	TObjectPtr<UButton> HostButton;
 
-	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Voice")
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Voice", meta = (BindWidgetOptional))
 	TObjectPtr<UTSVoiceIndicatorWidget> CrewIndicator;
 
-	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Voice")
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Voice", meta = (BindWidgetOptional))
 	TObjectPtr<UTSVoiceIndicatorWidget> HostIndicator;
 
-	UPROPERTY(Transient)
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> HeaderText;
 
-	UPROPERTY(Transient)
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> CrewLabel;
 
-	UPROPERTY(Transient)
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> HostLabel;
 
-	UPROPERTY(Transient)
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> FooterText;
 
-	UPROPERTY(Transient)
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UBorder> RootBorder;
 
 private:

@@ -129,15 +129,17 @@ TSharedRef<SWidget> UTSVoiceChannelPanelWidget::RebuildWidget()
 
 		FooterText = MakeText(TEXT(""), FontSize - 2, DimColour);
 		Column->AddChildToVerticalBox(FooterText);
+	}
 
-		if (CrewButton)
-		{
-			CrewButton->OnClicked.AddUniqueDynamic(this, &UTSVoiceChannelPanelWidget::OnCrewChannelClicked);
-		}
-		if (HostButton)
-		{
-			HostButton->OnClicked.AddUniqueDynamic(this, &UTSVoiceChannelPanelWidget::OnHostChannelClicked);
-		}
+	// Outside the build branch: a WBP-authored tree binds its buttons through BindWidgetOptional and
+	// still needs the click handlers. AddUnique makes a repeat RebuildWidget harmless.
+	if (CrewButton)
+	{
+		CrewButton->OnClicked.AddUniqueDynamic(this, &UTSVoiceChannelPanelWidget::OnCrewChannelClicked);
+	}
+	if (HostButton)
+	{
+		HostButton->OnClicked.AddUniqueDynamic(this, &UTSVoiceChannelPanelWidget::OnHostChannelClicked);
 	}
 
 	return Super::RebuildWidget();
