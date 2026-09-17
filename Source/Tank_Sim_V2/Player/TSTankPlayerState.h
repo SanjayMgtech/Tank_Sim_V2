@@ -69,6 +69,13 @@ public:
 	ETSDriveControlMode GetDriveControlMode() const { return DriveControlMode; }
 	void SetDriveControlMode(ETSDriveControlMode NewMode);
 
+	// Which of the Commander's two seats this player is at. Only meaningful for a Commander.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew")
+	ETSCommanderStation GetCommanderStation() const { return CommanderStation; }
+
+	// Server only - ATSTankPlayerController::ServerSetCommanderStation is the caller.
+	void SetCommanderStation(ETSCommanderStation NewStation);
+
 	// --- Voice ------------------------------------------------------------------------------------
 	// All three fields are server-assigned (UTSVoiceRouterSubsystem is the only writer) and replicate
 	// to everyone: a crew member has to be able to see that their Commander has left the intercom,
@@ -133,6 +140,12 @@ protected:
 	// interior. Defaulting to Manual would leave a desktop driver with nothing to drive with.
 	UPROPERTY(ReplicatedUsing = OnRep_Assignment, BlueprintReadOnly, Category = "Tank Simulation")
 	ETSDriveControlMode DriveControlMode = ETSDriveControlMode::Analog;
+
+	// Replicated with the rest of the assignment because it decides which seat the crew pawn is
+	// attached to, and attachment is done on the server. A client-only toggle would be snapped straight
+	// back by the replicated attachment.
+	UPROPERTY(ReplicatedUsing = OnRep_Assignment, BlueprintReadOnly, Category = "Tank Simulation")
+	ETSCommanderStation CommanderStation = ETSCommanderStation::Scope;
 
 	// False until the owning client says otherwise, which is the safe default: a player nobody has
 	// heard from yet cannot be put into VR.

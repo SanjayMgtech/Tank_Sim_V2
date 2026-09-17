@@ -380,7 +380,8 @@ void ATSTankPlayerController::ApplyInputModeForLocalState()
 	bool bWantCursor = IsOnMenuMap()
 		|| bLobbyConsoleFocused
 		|| ActiveTeamSelectionWidget != nullptr
-		|| ActiveRoleSelectionWidget != nullptr;
+		|| ActiveRoleSelectionWidget != nullptr
+		|| WantsCommanderScreenCursor();
 
 	// Never in VR. There is no OS cursor in a headset, so bShowMouseCursor shows nothing - but
 	// FInputModeGameAndUI still CAPTURES input, which makes this a silent input sink that looks
@@ -1087,6 +1088,79 @@ void ATSTankPlayerController::HandleAssignmentChanged()
 	RefreshSelectionUI();
 	RefreshCommanderScreen();
 	RefreshHostVoicePanel();
+
+	// A Commander changing station (or losing the seat) changes whether the cursor should be up.
+	ApplyInputModeForLocalState();
+}
+
+ETSCommanderStation ATSTankPlayerController::GetCommanderStation() const
+{
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	return PS ? PS->GetCommanderStation() : ETSCommanderStation::Scope;
+}
+
+bool ATSTankPlayerController::IsLocalCommander() const
+{
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	return IsLocalController() && PS && !PS->IsHost() && PS->GetCrewRole() == ETSCrewRole::Commander;
+}
+
+void ATSTankPlayerController::ToggleCommanderStation()
+{
+	SetCommanderStation(GetCommanderStation() == ETSCommanderStation::Screen
+		? ETSCommanderStation::Scope : ETSCommanderStation::Screen);
+}
+
+void ATSTankPlayerController::SetCommanderStation(ETSCommanderStation NewStation)
+{
+	if (!IsLocalCommander())
+	{
+		UE_LOG(LogTankSim, Log, TEXT("SetCommanderStation: ignored - this player is not a Commander."));
+		return;
+	}
+	ServerSetCommanderStation(NewStation);
+}
+
+bool ATSTankPlayerController::ServerSetCommanderStation_Validate(ETSCommanderStation NewStation)
+{
+	return true;
+}
+
+void ATSTankPlayerController::ServerSetCommanderStation_Implementation(ETSCommanderStation NewStation)
+{
+	// Re-checked here: the client's own check is a courtesy, a Server RPC's HasAuthority is not.
+	ATSTankPlayerState* PS = GetTankPlayerState();
+	if (!PS || PS->IsHost() || PS->GetCrewRole() != ETSCrewRole::Commander)
+	{
+		UE_LOG(LogTankSim, Log, TEXT("ServerSetCommanderStation: refused for '%s' - not a Commander."),
+			*GetNameSafe(PlayerState));
+		return;
+	}
+
+	PS->SetCommanderStation(NewStation);
+	UE_LOG(LogTankSim, Log, TEXT("ServerSetCommanderStation: '%s' -> %s"), *GetNameSafe(PlayerState),
+		NewStation == ETSCommanderStation::Screen ? TEXT("SCREEN") : TEXT("SCOPE"));
+}
+
+void ATSTankPlayerController::TSCommanderStation(const FString& Station)
+{
+	if (Station.Equals(TEXT("screen"), ESearchCase::IgnoreCase))
+	{
+		SetCommanderStation(ETSCommanderStation::Screen);
+	}
+	else if (Station.Equals(TEXT("scope"), ESearchCase::IgnoreCase))
+	{
+		SetCommanderStation(ETSCommanderStation::Scope);
+	}
+	else
+	{
+		ToggleCommanderStation();
+	}
+}
+
+bool ATSTankPlayerController::WantsCommanderScreenCursor() const
+{
+	return IsLocalCommander() && GetCommanderStation() == ETSCommanderStation::Screen;
 }
 
 void ATSTankPlayerController::RefreshSelectionUI()

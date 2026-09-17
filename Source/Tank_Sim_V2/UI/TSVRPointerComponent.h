@@ -69,6 +69,13 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|VR UI")
 	bool bOnlyHitWidgetComponents = true;
 
+public:
+	// Aim the ray through the desktop MOUSE CURSOR instead of along this component's forward vector.
+	// The same Custom-hit reasoning as the laser applies: the stock Mouse source ignores everything under
+	// the pawn's attachment root, which is the tank the screen is mounted on.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|VR UI")
+	bool bFollowMouseCursor = false;
+
 private:
 	void UpdateCustomHit();
 	void BindClickAction();

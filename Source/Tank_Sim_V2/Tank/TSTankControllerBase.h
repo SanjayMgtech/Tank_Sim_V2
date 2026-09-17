@@ -1040,6 +1040,26 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew View")
 	ETSVisionMode CycleCrewViewVisionMode();
 
+	// --- Commander view filter (M_Commander_View) --------------------------------------------------
+	//
+	// The Commander's periscope is a mesh (CommanderView) wearing M_Commander_View. Its filter lives IN
+	// the material: a scalar parameter (VisionMode: 0 day, 1 night vision, 2 heatmap) drives a Custom
+	// node. This sets that parameter on a dynamic instance of every material slot of the component.
+	// Local only, like SetCrewViewVisionMode - it changes one mesh on one machine.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew View")
+	void SetCommanderViewVisionMode(ETSVisionMode NewMode);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew View")
+	ETSVisionMode GetCommanderViewVisionMode() const { return CommanderViewVisionMode; }
+
+	// Name of the mesh component showing the Commander's view. Blueprint data (RULE 8).
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View")
+	FName CommanderViewComponentName = TEXT("CommanderView");
+
+	// The scalar parameter in the view material that selects the filter.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View")
+	FName CommanderViewVisionParameter = TEXT("VisionMode");
+
 	// The render target the given station draws into, or null when that station has no capture or
 	// the capture has no TextureTarget assigned. A widget showing a periscope feed asks for this
 	// rather than hard-referencing RT_Gunner, so per-tank overrides work.
@@ -1123,6 +1143,8 @@ private:
 
 	// Local-only viewing filter. See SetCrewViewVisionMode.
 	ETSVisionMode CrewViewVisionMode = ETSVisionMode::Normal;
+
+	ETSVisionMode CommanderViewVisionMode = ETSVisionMode::Normal;
 
 	// What the Blueprint authored on each station capture, snapshotted the first time that station
 	// is configured. Switching back to Normal restores THIS rather than an engine default, so a

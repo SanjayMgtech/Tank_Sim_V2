@@ -227,8 +227,18 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
 	FName GunnerSeatFallbackComponent = TEXT("GunnerSeat");
 
+	// Fallback for a tank that has not had the two Commander stations below authored yet.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
 	FName CommanderSeatComponent = TEXT("CommanderSeat");
+
+	// The Commander's two stations (ETSCommanderStation), switched with C / the VR button / the button
+	// on the Commander screen. Both are scene components on the tank Blueprint; the VK1602 parents them
+	// to the turret basket bone so they traverse with the turret.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
+	FName CommanderScopeSeatComponent = TEXT("CommanderScoopScene");
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew Station")
+	FName CommanderScreenSeatComponent = TEXT("CommanderScreenScene");
 
 	// Server-authoritative. Attaches this pawn to its assigned tank at the station for
 	// its crew role, or detaches when it no longer has one.
@@ -280,6 +290,11 @@ protected:
 	// beam through the cockpit. SetVRWidgetInteractionEnabled turns it on when a widget appears.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank Simulation|VR")
 	TObjectPtr<UWidgetInteractionComponent> WidgetInteraction;
+
+	// Desktop mouse pointer for in-world screens (the Commander screen). Ray goes through the mouse
+	// cursor; left mouse (IA_Primary) clicks. Active only for a desktop Commander at the SCREEN station.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank Simulation|Commander")
+	TObjectPtr<class UTSVRPointerComponent> MousePointer;
 
 	// --- Enhanced Input assets - assign in a Blueprint subclass or the C++ defaults (Section 12) ---
 
@@ -343,6 +358,11 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputAction> IA_RequestIntel;
+
+	// Commander: switch between the scope and the screen station. C on a keyboard, a face button in VR
+	// (both mapped in IMC_Commander).
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_SwitchCommanderStation;
 
 	// --- Manual (VR hand) driving: active only for the local Driver in ETSDriveControlMode::Manual.
 	// Triggers are the PEDALS (a seated VR player has no feet on anything); grips take the LEVERS.
@@ -510,6 +530,15 @@ private:
 	void Input_Interact(const FInputActionValue& Value);
 	void Input_Grab(const FInputActionValue& Value);
 	void Input_Primary(const FInputActionValue& Value);
+	void Input_PrimaryReleased(const FInputActionValue& Value);
+	void Input_SwitchCommanderStation(const FInputActionValue& Value);
+
+	// Turns the screen pointer on for a local Commander at the SCREEN station - the mouse pointer on a
+	// desktop, the hand laser (SetVRWidgetInteractionEnabled) in VR - and off everywhere else.
+	void UpdateCommanderScreenInteraction();
+
+	// True while THIS function turned VR widget interaction on, so it only ever turns off what it turned on.
+	bool bCommanderScreenVRInteraction = false;
 	void Input_Secondary(const FInputActionValue& Value);
 	void Input_Menu(const FInputActionValue& Value);
 	void Input_Drive(const FInputActionValue& Value);

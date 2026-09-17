@@ -12,6 +12,7 @@ void ATSTankPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(ATSTankPlayerState, bIsHost);
 	DOREPLIFETIME(ATSTankPlayerState, PlayMode);
 	DOREPLIFETIME(ATSTankPlayerState, DriveControlMode);
+	DOREPLIFETIME(ATSTankPlayerState, CommanderStation);
 	DOREPLIFETIME(ATSTankPlayerState, bHeadsetConnected);
 
 	// Voice state replicates to EVERYONE, not COND_OwnerOnly: the whole point of the TX/RX lamps is
@@ -136,6 +137,16 @@ void ATSTankPlayerState::SetDriveControlMode(ETSDriveControlMode NewMode)
 		return;
 	}
 	DriveControlMode = NewMode;
+	OnRep_Assignment();
+}
+
+void ATSTankPlayerState::SetCommanderStation(ETSCommanderStation NewStation)
+{
+	if (!HasAuthority() || CommanderStation == NewStation)
+	{
+		return;
+	}
+	CommanderStation = NewStation;
 	OnRep_Assignment();
 }
 

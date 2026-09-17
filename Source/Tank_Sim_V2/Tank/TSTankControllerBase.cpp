@@ -424,6 +424,49 @@ void ATSTankControllerBase::SetCrewViewVisionMode(ETSVisionMode NewMode)
 	ApplyVisionModeToActiveCapture();
 }
 
+void ATSTankControllerBase::SetCommanderViewVisionMode(ETSVisionMode NewMode)
+{
+	CommanderViewVisionMode = NewMode;
+
+	UPrimitiveComponent* ViewMesh = nullptr;
+	TArray<UPrimitiveComponent*> Primitives;
+	GetComponents<UPrimitiveComponent>(Primitives);
+	for (UPrimitiveComponent* Primitive : Primitives)
+	{
+		if (Primitive && Primitive->GetFName() == CommanderViewComponentName)
+		{
+			ViewMesh = Primitive;
+			break;
+		}
+	}
+
+	if (!ViewMesh)
+	{
+		UE_LOG(LogTankSim, Warning,
+			TEXT("SetCommanderViewVisionMode: %s has no component named '%s' - nothing to filter. Set ")
+			TEXT("CommanderViewComponentName to the mesh showing M_Commander_View."),
+			*GetName(), *CommanderViewComponentName.ToString());
+		return;
+	}
+
+	// Enum order is the material's contract: Normal 0, NightVision 1, Thermal (heatmap) 2.
+	const float ParameterValue = static_cast<float>(static_cast<uint8>(NewMode));
+
+	int32 Applied = 0;
+	for (int32 Index = 0; Index < ViewMesh->GetNumMaterials(); ++Index)
+	{
+		// Reuses the existing dynamic instance after the first call.
+		if (UMaterialInstanceDynamic* MID = ViewMesh->CreateDynamicMaterialInstance(Index))
+		{
+			MID->SetScalarParameterValue(CommanderViewVisionParameter, ParameterValue);
+			++Applied;
+		}
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("SetCommanderViewVisionMode: %s %s=%.0f on %d slot(s) of '%s'"),
+		*GetName(), *CommanderViewVisionParameter.ToString(), ParameterValue, Applied, *ViewMesh->GetName());
+}
+
 ETSVisionMode ATSTankControllerBase::CycleCrewViewVisionMode()
 {
 	switch (CrewViewVisionMode)

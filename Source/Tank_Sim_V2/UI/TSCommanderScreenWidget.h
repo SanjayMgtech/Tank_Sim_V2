@@ -19,6 +19,9 @@ class UTSRadarWidget;
 class UTSTankAttitudeWidget;
 class UTSVisionFeedWidget;
 class UTSVoiceChannelPanelWidget;
+class UTSVisionModeSelectorWidget;
+class UButton;
+class UTextBlock;
 
 UCLASS()
 class UTSCommanderScreenWidget : public UTSCommanderHUDWidget
@@ -62,10 +65,20 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Commander Screen")
 	UTSVoiceChannelPanelWidget* GetVoicePanelWidget() const { return VoicePanelWidget; }
 
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Commander Screen")
+	UTSVisionModeSelectorWidget* GetVisionModeSelector() const { return VisionModeSelector; }
+
 	// Which classes the default layout instantiates. Swapping one for a subclass is how a project
 	// customises a panel without re-authoring the split.
+	//
+	// The vision FEED is no longer part of the default layout (None) - the Commander looks through the
+	// periscope mesh in the tank and picks its filter with the view-mode buttons instead. Set a class
+	// here to put a feed panel back.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander Screen")
 	TSubclassOf<UTSVisionFeedWidget> VisionFeedWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander Screen")
+	TSubclassOf<UTSVisionModeSelectorWidget> VisionModeSelectorWidgetClass;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Commander Screen")
 	TSubclassOf<UTSRadarWidget> RadarWidgetClass;
@@ -115,6 +128,17 @@ protected:
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Commander Screen")
 	TObjectPtr<UTSVoiceChannelPanelWidget> VoicePanelWidget;
 
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Commander Screen")
+	TObjectPtr<UTSVisionModeSelectorWidget> VisionModeSelector;
+
+	// Bottom-right. Switches the Commander between the scope and this screen - the on-screen twin of
+	// C on the keyboard and the VR switch button. Bound by NAME from a WBP.
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Commander Screen", meta = (BindWidgetOptional))
+	TObjectPtr<UButton> SwitchStationButton;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Commander Screen", meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> SwitchStationLabel;
+
 	virtual void NativeConstruct() override;
 
 	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
@@ -122,6 +146,11 @@ protected:
 		const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
 
 private:
+	UFUNCTION()
+	void OnSwitchStationClicked();
+
+	void RefreshSwitchStationLabel();
+
 	int32 TickCount = 0;
 
 	// One line each, the first time this screen constructs / ticks / paints. Two of those three can

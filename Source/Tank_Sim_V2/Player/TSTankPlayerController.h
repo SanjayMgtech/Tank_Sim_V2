@@ -103,6 +103,32 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
 	void ServerSetDriveControlMode(ETSDriveControlMode NewMode);
 
+	// --- Commander stations ----------------------------------------------------------------------
+	// The Commander has two seats on the tank: the scope (CommanderScoopScene) and the instrument
+	// screen (CommanderScreenScene). C, the VR switch button and the button on the Commander screen
+	// all land on ToggleCommanderStation.
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Commander")
+	ETSCommanderStation GetCommanderStation() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Commander")
+	bool IsLocalCommander() const;
+
+	// Scope <-> Screen. Does nothing unless this player holds the Commander seat.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Commander")
+	void ToggleCommanderStation();
+
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Commander")
+	void SetCommanderStation(ETSCommanderStation NewStation);
+
+	// Reliable: a one-shot request, and a dropped one would read as a dead key.
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Commander")
+	void ServerSetCommanderStation(ETSCommanderStation NewStation);
+
+	// TSCommanderStation <scope|screen|toggle>
+	UFUNCTION(Exec)
+	void TSCommanderStation(const FString& Station);
+
 	// Host-driven, alongside the team and seat buttons in the lobby console. Re-checks IsMatchHost()
 	// server-side for the same reason the team/role RPCs do: a Server RPC's HasAuthority() is
 	// trivially true, so without it any client could put anybody into VR.
@@ -596,6 +622,9 @@ private:
 	// (menu map, a selection panel, or a focused lobby console) instead of letting each caller set a
 	// mode of its own and stomp the others.
 	void ApplyInputModeForLocalState();
+
+	// A desktop Commander at the SCREEN station gets a mouse cursor to click the in-world screen with.
+	bool WantsCommanderScreenCursor() const;
 
 	bool IsOnMenuMap() const;
 

@@ -19,6 +19,7 @@
 #include "Haptics/HapticFeedbackEffect_Base.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Components/WidgetInteractionComponent.h"
+#include "UI/TSVRPointerComponent.h"
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Net/UnrealNetwork.h"
@@ -56,6 +57,17 @@ ATSCrewPawn::ATSCrewPawn()
 	WidgetInteraction->bShowDebug = false;
 	// Off until a widget actually exists - an always-on pointer traces every frame for nothing.
 	WidgetInteraction->bAutoActivate = false;
+
+	MousePointer = CreateDefaultSubobject<UTSVRPointerComponent>(TEXT("MousePointer"));
+	MousePointer->SetupAttachment(Camera);
+	MousePointer->bFollowMouseCursor = true;
+	MousePointer->InteractionDistance = 400.f;
+	// Slate tracks hover and focus per virtual user. 0 is WidgetInteraction, the VR pawn's hand
+	// pointers use 1 and 2 - keep clear of all of them.
+	MousePointer->VirtualUserIndex = 4;
+	MousePointer->PointerIndex = 4;
+	MousePointer->bAutoActivate = false;
+	MousePointer->PrimaryComponentTick.bStartWithTickEnabled = false;
 }
 
 ATSTankPlayerController* ATSCrewPawn::GetTankController() const
@@ -314,7 +326,8 @@ void ATSCrewPawn::UpdateCrewStationAttachment()
 	// GunnerSeat and the other tanks have not been given a station yet. Trying both keeps them seated
 	// somewhere sensible instead of dumping them on the tank's origin.
 	const FName SeatName = GetSeatComponentNameForRole(CrewRole);
-	const FName FallbackSeatName = (CrewRole == ETSCrewRole::Gunner) ? GunnerSeatFallbackComponent : NAME_None;
+	const FName FallbackSeatName = (CrewRole == ETSCrewRole::Gunner) ? GunnerSeatFallbackComponent
+		: (CrewRole == ETSCrewRole::Commander) ? CommanderSeatComponent : NAME_None;
 
 	TArray<USceneComponent*> SceneComponents;
 	Tank->GetComponents<USceneComponent>(SceneComponents);
@@ -369,7 +382,12 @@ FName ATSCrewPawn::GetSeatComponentNameForRole(ETSCrewRole InRole) const
 	{
 	case ETSCrewRole::Driver:    return DriverSeatComponent;
 	case ETSCrewRole::Gunner:    return GunnerSeatComponent;
-	case ETSCrewRole::Commander: return CommanderSeatComponent;
+	case ETSCrewRole::Commander:
+	{
+		const ATSTankPlayerState* PS = GetCrewPlayerState();
+		return (PS && PS->GetCommanderStation() == ETSCommanderStation::Screen)
+			? CommanderScreenSeatComponent : CommanderScopeSeatComponent;
+	}
 	default:                     return NAME_None;
 	}
 }
@@ -506,7 +524,16 @@ void ATSCrewPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	if (IA_Recenter) EIC->BindAction(IA_Recenter, ETriggerEvent::Started, this, &ATSCrewPawn::Input_Recenter);
 	if (IA_Interact) EIC->BindAction(IA_Interact, ETriggerEvent::Started, this, &ATSCrewPawn::Input_Interact);
 	if (IA_Grab) EIC->BindAction(IA_Grab, ETriggerEvent::Started, this, &ATSCrewPawn::Input_Grab);
-	if (IA_Primary) EIC->BindAction(IA_Primary, ETriggerEvent::Started, this, &ATSCrewPawn::Input_Primary);
+	if (IA_Primary)
+	{
+		EIC->BindAction(IA_Primary, ETriggerEvent::Started, this, &ATSCrewPawn::Input_Primary);
+		EIC->BindAction(IA_Primary, ETriggerEvent::Completed, this, &ATSCrewPawn::Input_PrimaryReleased);
+		EIC->BindAction(IA_Primary, ETriggerEvent::Canceled, this, &ATSCrewPawn::Input_PrimaryReleased);
+	}
+	if (IA_SwitchCommanderStation)
+	{
+		EIC->BindAction(IA_SwitchCommanderStation, ETriggerEvent::Started, this, &ATSCrewPawn::Input_SwitchCommanderStation);
+	}
 	if (IA_Secondary) EIC->BindAction(IA_Secondary, ETriggerEvent::Started, this, &ATSCrewPawn::Input_Secondary);
 	if (IA_Menu) EIC->BindAction(IA_Menu, ETriggerEvent::Started, this, &ATSCrewPawn::Input_Menu);
 
@@ -568,7 +595,68 @@ void ATSCrewPawn::Input_Interact(const FInputActionValue& Value)
 
 void ATSCrewPawn::Input_Primary(const FInputActionValue& Value)
 {
+	// Left mouse clicks the in-world screen while the desktop Commander is at it.
+	if (MousePointer && MousePointer->IsActive())
+	{
+		MousePointer->PressPointer();
+	}
 	OnPrimaryPressed();
+}
+
+void ATSCrewPawn::Input_PrimaryReleased(const FInputActionValue& Value)
+{
+	if (MousePointer && MousePointer->IsActive())
+	{
+		MousePointer->ReleasePointer();
+	}
+}
+
+void ATSCrewPawn::Input_SwitchCommanderStation(const FInputActionValue& Value)
+{
+	if (ATSTankPlayerController* PC = GetTankController())
+	{
+		PC->ToggleCommanderStation();
+	}
+}
+
+void ATSCrewPawn::UpdateCommanderScreenInteraction()
+{
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	const ATSTankPlayerState* PS = GetCrewPlayerState();
+	const bool bAtScreen = bCrewPawnActive && PC && PC->IsLocalController() && PS && !PS->IsHost()
+		&& PS->GetCrewRole() == ETSCrewRole::Commander
+		&& PS->GetCommanderStation() == ETSCommanderStation::Screen;
+
+	const bool bVRPawn = GetSupportedPlayMode() == ETSPlayMode::VR;
+
+	if (MousePointer)
+	{
+		const bool bWantMouse = bAtScreen && !bVRPawn;
+		if (MousePointer->IsActive() != bWantMouse)
+		{
+			if (!bWantMouse)
+			{
+				// Let go of anything held, or a button stays pressed.
+				MousePointer->ReleasePointer();
+			}
+			MousePointer->SetActive(bWantMouse);
+			MousePointer->SetComponentTickEnabled(bWantMouse);
+		}
+	}
+
+	if (bVRPawn)
+	{
+		if (bAtScreen && !bCommanderScreenVRInteraction)
+		{
+			bCommanderScreenVRInteraction = true;
+			SetVRWidgetInteractionEnabled(true);
+		}
+		else if (!bAtScreen && bCommanderScreenVRInteraction)
+		{
+			bCommanderScreenVRInteraction = false;
+			SetVRWidgetInteractionEnabled(false);
+		}
+	}
 }
 
 void ATSCrewPawn::Input_Secondary(const FInputActionValue& Value)
@@ -1262,6 +1350,9 @@ void ATSCrewPawn::UpdateAimTickEnabled()
 	}
 
 	SetActorTickEnabled(bCrewPawnActive && (IsLocalGunner() || bManualDriver));
+
+	// Same trigger points (assignment change, possession, parking) decide the Commander screen pointer.
+	UpdateCommanderScreenInteraction();
 }
 
 void ATSCrewPawn::Tick(float DeltaSeconds)

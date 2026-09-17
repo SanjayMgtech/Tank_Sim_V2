@@ -56,6 +56,19 @@ enum class ETSDriveControlMode : uint8
 	Manual	UMETA(DisplayName = "Manual controls (VR hands)")
 };
 
+// Which of the Commander's two stations they are sitting at. Toggled with C (or the VR button, or the
+// button on the Commander screen). Each maps to a seat scene component on the tank - see
+// ATSCrewPawn::CommanderScopeSeatComponent / CommanderScreenSeatComponent.
+UENUM(BlueprintType)
+enum class ETSCommanderStation : uint8
+{
+	// Head up in the cupola, looking out through the scope. The mouse looks around.
+	Scope	UMETA(DisplayName = "Scope"),
+
+	// Down at the instrument screen. The mouse is a cursor that clicks the screen.
+	Screen	UMETA(DisplayName = "Screen")
+};
+
 // Which voice net a player's microphone is patched into.
 //
 // This is a RADIO NET selector, not a mute button: it decides both where a player's voice goes and

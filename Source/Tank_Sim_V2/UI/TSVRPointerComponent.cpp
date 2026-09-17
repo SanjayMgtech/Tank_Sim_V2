@@ -5,6 +5,7 @@
 #include "EnhancedInputComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "InputAction.h"
 #include "Tank_Sim_V2.h"
 #include "WorldCollision.h"
@@ -136,8 +137,21 @@ void UTSVRPointerComponent::UpdateCustomHit()
 		return;
 	}
 
-	const FVector Start = GetComponentLocation();
-	const FVector End = Start + GetForwardVector() * InteractionDistance;
+	FVector Start = GetComponentLocation();
+	FVector Direction = GetForwardVector();
+
+	if (bFollowMouseCursor)
+	{
+		const APawn* Pawn = Cast<APawn>(GetOwner());
+		const APlayerController* PC = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
+		if (!PC || !PC->IsLocalController() || !PC->DeprojectMousePositionToWorld(Start, Direction))
+		{
+			// No cursor this frame (unfocused window, no viewport): hover nothing rather than a stale target.
+			return;
+		}
+	}
+
+	const FVector End = Start + Direction * InteractionDistance;
 
 	// No ignore list at all. That is the whole point of this class - the stock trace's ignore list
 	// would contain the panel we are trying to hit.

@@ -10,12 +10,18 @@
 #include "UI/TSTankAttitudeWidget.h"
 #include "UI/TSVisionFeedWidget.h"
 #include "UI/TSVoiceChannelPanelWidget.h"
+#include "UI/TSVisionModeSelectorWidget.h"
+#include "UI/TSRoleDebugRowWidget.h"
+#include "Components/Button.h"
+#include "Components/TextBlock.h"
+#include "Player/TSTankPlayerController.h"
 
 UTSCommanderScreenWidget::UTSCommanderScreenWidget()
 {
 	// Class defaults, not asset loads - RULE 2 is about ConstructorHelpers reaching into Content,
 	// which none of these do.
-	VisionFeedWidgetClass = UTSVisionFeedWidget::StaticClass();
+	VisionFeedWidgetClass = nullptr;
+	VisionModeSelectorWidgetClass = UTSVisionModeSelectorWidget::StaticClass();
 	RadarWidgetClass = UTSRadarWidget::StaticClass();
 	AttitudeWidgetClass = UTSTankAttitudeWidget::StaticClass();
 	VoicePanelWidgetClass = UTSVoiceChannelPanelWidget::StaticClass();
@@ -29,6 +35,11 @@ TSharedRef<SWidget> UTSCommanderScreenWidget::RebuildWidget()
 	}
 
 	BindPanelsFromWidgetTree();
+
+	if (SwitchStationButton)
+	{
+		SwitchStationButton->OnClicked.AddUniqueDynamic(this, &UTSCommanderScreenWidget::OnSwitchStationClicked);
+	}
 
 	return Super::RebuildWidget();
 }
@@ -92,84 +103,109 @@ void UTSCommanderScreenWidget::NativeTick(const FGeometry& MyGeometry, float InD
 	{
 		VoicePanelWidget->RefreshPanel();
 	}
+
+	RefreshSwitchStationLabel();
+}
+
+void UTSCommanderScreenWidget::OnSwitchStationClicked()
+{
+	if (ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(GetOwningPlayer()))
+	{
+		PC->ToggleCommanderStation();
+	}
+}
+
+void UTSCommanderScreenWidget::RefreshSwitchStationLabel()
+{
+	if (!SwitchStationLabel)
+	{
+		return;
+	}
+
+	const ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(GetOwningPlayer());
+	const bool bAtScreen = PC && PC->GetCommanderStation() == ETSCommanderStation::Screen;
+	SwitchStationLabel->SetText(FText::FromString(bAtScreen ? TEXT("TO SCOPE  [C]") : TEXT("TO SCREEN  [C]")));
 }
 
 void UTSCommanderScreenWidget::BuildDefaultLayout()
 {
+	// [ optional feed ] [ RADAR / view modes ] [ ATTITUDE / radio / seat switch (bottom right) ]
 	UHorizontalBox* Root = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("CommanderSplit"));
 	WidgetTree->RootWidget = Root;
 
+	auto AddColumn = [this, Root](const TCHAR* Name, float Fill) -> UVerticalBox*
+	{
+		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), Name);
+		if (UHorizontalBoxSlot* ColumnSlot = Root->AddChildToHorizontalBox(Column))
+		{
+			FSlateChildSize Size(ESlateSizeRule::Fill);
+			Size.Value = Fill;
+			ColumnSlot->SetSize(Size);
+			ColumnSlot->SetHorizontalAlignment(HAlign_Fill);
+			ColumnSlot->SetVerticalAlignment(VAlign_Fill);
+		}
+		return Column;
+	};
+
+	auto AddToColumn = [this](UVerticalBox* Column, UWidget* Widget, float Fill, EVerticalAlignment VAlign)
+	{
+		if (UVerticalBoxSlot* BoxSlot = Column->AddChildToVerticalBox(Widget))
+		{
+			// Fill <= 0 means auto-size: a strip of buttons has a natural height and must not stretch.
+			FSlateChildSize Size(Fill > 0.f ? ESlateSizeRule::Fill : ESlateSizeRule::Automatic);
+			Size.Value = Fill > 0.f ? Fill : 1.f;
+			BoxSlot->SetSize(Size);
+			BoxSlot->SetPadding(PanelPadding);
+			BoxSlot->SetHorizontalAlignment(HAlign_Fill);
+			BoxSlot->SetVerticalAlignment(VAlign);
+		}
+	};
+
 	if (VisionFeedWidgetClass)
 	{
+		UVerticalBox* FeedColumn = AddColumn(TEXT("FeedColumn"), VisionFill);
 		UTSVisionFeedWidget* Feed = WidgetTree->ConstructWidget<UTSVisionFeedWidget>(VisionFeedWidgetClass, TEXT("VisionFeed"));
-
-		// Visible, not SelfHitTestInvisible: the feed is the one panel that accepts a click (to cycle
-		// vision mode), and a widget cannot be clicked if it is not hit-testable.
 		Feed->SetVisibility(ESlateVisibility::Visible);
-
-		if (UHorizontalBoxSlot* BoxSlot = Root->AddChildToHorizontalBox(Feed))
-		{
-			FSlateChildSize FeedSize(ESlateSizeRule::Fill);
-			FeedSize.Value = VisionFill;
-			BoxSlot->SetSize(FeedSize);
-			BoxSlot->SetPadding(PanelPadding);
-			BoxSlot->SetHorizontalAlignment(HAlign_Fill);
-			BoxSlot->SetVerticalAlignment(VAlign_Fill);
-		}
+		AddToColumn(FeedColumn, Feed, 1.f, VAlign_Fill);
 	}
 
-	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InstrumentColumn"));
-	if (UHorizontalBoxSlot* ColumnSlot = Root->AddChildToHorizontalBox(Column))
-	{
-		FSlateChildSize ColumnSize(ESlateSizeRule::Fill);
-		ColumnSize.Value = InstrumentFill;
-		ColumnSlot->SetSize(ColumnSize);
-		ColumnSlot->SetHorizontalAlignment(HAlign_Fill);
-		ColumnSlot->SetVerticalAlignment(VAlign_Fill);
-	}
-
+	UVerticalBox* LeftColumn = AddColumn(TEXT("LeftColumn"), InstrumentFill);
 	if (RadarWidgetClass)
 	{
-		UTSRadarWidget* Radar = WidgetTree->ConstructWidget<UTSRadarWidget>(RadarWidgetClass, TEXT("Radar"));
-		if (UVerticalBoxSlot* BoxSlot = Column->AddChildToVerticalBox(Radar))
-		{
-			FSlateChildSize RadarSize(ESlateSizeRule::Fill);
-			RadarSize.Value = RadarFill;
-			BoxSlot->SetSize(RadarSize);
-			BoxSlot->SetPadding(PanelPadding);
-			BoxSlot->SetHorizontalAlignment(HAlign_Fill);
-			BoxSlot->SetVerticalAlignment(VAlign_Fill);
-		}
+		AddToColumn(LeftColumn, WidgetTree->ConstructWidget<UTSRadarWidget>(RadarWidgetClass, TEXT("Radar")), RadarFill, VAlign_Fill);
+	}
+	if (VisionModeSelectorWidgetClass)
+	{
+		AddToColumn(LeftColumn,
+			WidgetTree->ConstructWidget<UTSVisionModeSelectorWidget>(VisionModeSelectorWidgetClass, TEXT("VisionModes")), 0.f, VAlign_Bottom);
 	}
 
+	UVerticalBox* RightColumn = AddColumn(TEXT("RightColumn"), InstrumentFill);
 	if (AttitudeWidgetClass)
 	{
-		UTSTankAttitudeWidget* Attitude = WidgetTree->ConstructWidget<UTSTankAttitudeWidget>(AttitudeWidgetClass, TEXT("Attitude"));
-		if (UVerticalBoxSlot* BoxSlot = Column->AddChildToVerticalBox(Attitude))
-		{
-			FSlateChildSize AttitudeSize(ESlateSizeRule::Fill);
-			AttitudeSize.Value = AttitudeFill;
-			BoxSlot->SetSize(AttitudeSize);
-			BoxSlot->SetPadding(PanelPadding);
-			BoxSlot->SetHorizontalAlignment(HAlign_Fill);
-			BoxSlot->SetVerticalAlignment(VAlign_Fill);
-		}
+		AddToColumn(RightColumn, WidgetTree->ConstructWidget<UTSTankAttitudeWidget>(AttitudeWidgetClass, TEXT("Attitude")), AttitudeFill, VAlign_Fill);
 	}
-
 	if (bShowVoicePanel && VoicePanelWidgetClass)
 	{
-		UTSVoiceChannelPanelWidget* VoicePanel =
-			WidgetTree->ConstructWidget<UTSVoiceChannelPanelWidget>(VoicePanelWidgetClass, TEXT("VoicePanel"));
+		AddToColumn(RightColumn,
+			WidgetTree->ConstructWidget<UTSVoiceChannelPanelWidget>(VoicePanelWidgetClass, TEXT("VoicePanel")), 0.f, VAlign_Bottom);
+	}
 
-		if (UVerticalBoxSlot* BoxSlot = Column->AddChildToVerticalBox(VoicePanel))
-		{
-			// Auto, not Fill: two rows of buttons have a natural height, and a fill weight would
-			// stretch them over the instruments they sit beneath.
-			BoxSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
-			BoxSlot->SetPadding(PanelPadding);
-			BoxSlot->SetHorizontalAlignment(HAlign_Fill);
-			BoxSlot->SetVerticalAlignment(VAlign_Bottom);
-		}
+	SwitchStationButton = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("SwitchStationButton"));
+	UTSRoleDebugRowWidget::MakeButtonNonFocusable(SwitchStationButton);
+	SwitchStationButton->SetBackgroundColor(FLinearColor(0.13f, 0.45f, 0.62f, 0.95f));
+
+	SwitchStationLabel = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("SwitchStationLabel"));
+	SwitchStationLabel->SetText(FText::FromString(TEXT("SWITCH SEAT  [C]")));
+	SwitchStationLabel->SetJustification(ETextJustify::Center);
+	SwitchStationButton->SetContent(SwitchStationLabel);
+
+	if (UVerticalBoxSlot* ButtonSlot = RightColumn->AddChildToVerticalBox(SwitchStationButton))
+	{
+		ButtonSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+		ButtonSlot->SetPadding(PanelPadding);
+		ButtonSlot->SetHorizontalAlignment(HAlign_Right);
+		ButtonSlot->SetVerticalAlignment(VAlign_Bottom);
 	}
 }
 
@@ -179,6 +215,7 @@ void UTSCommanderScreenWidget::BindPanelsFromWidgetTree()
 	AttitudeWidget = nullptr;
 	VisionFeedWidget = nullptr;
 	VoicePanelWidget = nullptr;
+	VisionModeSelector = nullptr;
 
 	if (!WidgetTree)
 	{
@@ -203,6 +240,10 @@ void UTSCommanderScreenWidget::BindPanelsFromWidgetTree()
 		if (!VoicePanelWidget)
 		{
 			VoicePanelWidget = Cast<UTSVoiceChannelPanelWidget>(Widget);
+		}
+		if (!VisionModeSelector)
+		{
+			VisionModeSelector = Cast<UTSVisionModeSelectorWidget>(Widget);
 		}
 	});
 }
