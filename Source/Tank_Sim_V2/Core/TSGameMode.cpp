@@ -923,27 +923,71 @@ bool ATSGameMode::AreAllActiveTeamsFullyCrewed() const
 	return true;
 }
 
+namespace
+{
+	// A tank only ever takes YAW from a spawn marker. The marker's pitch and roll are meaningless for a
+	// vehicle that settles onto the ground, and copying them is how TeamB came in upside down: its
+	// TargetPoint carried Roll=180 (a yaw of 180 typed into the roll slot of unreal.Rotator(roll, pitch,
+	// yaw)). Scale is dropped for the same reason - a scaled marker must not scale the tank.
+	FTransform MakeTankSpawnTransform(const AActor* Marker)
+	{
+		return FTransform(FRotator(0., Marker->GetActorRotation().Yaw, 0.), Marker->GetActorLocation());
+	}
+}
+
 FTransform ATSGameMode::GetSpawnTransformForTeam(ETSTeamId TeamId) const
 {
 	const FName Tag = SpawnTagForTeam(TeamId);
+	const FString TeamName = UTSTypeUtils::TeamIdToString(TeamId);
+
+	if (bUsePlayerStartsForTeamTanks && Tag != NAME_None)
+	{
+		// 1. A PlayerStart reserved for this team, by Player Start Tag or actor tag.
+		TArray<APlayerStart*> UntaggedStarts;
+		for (TActorIterator<APlayerStart> It(GetWorld()); It; ++It)
+		{
+			APlayerStart* Start = *It;
+			if (Start->PlayerStartTag == Tag || Start->ActorHasTag(Tag))
+			{
+				UE_LOG(LogTankSim, Log, TEXT("ATSGameMode: %s tank spawns at PlayerStart '%s' (tagged %s)."),
+					*TeamName, *Start->GetName(), *Tag.ToString());
+				return MakeTankSpawnTransform(Start);
+			}
+
+			const bool bTaggedForAnyTeam = AllTeams.ContainsByPredicate([Start](ETSTeamId Other)
+			{
+				const FName OtherTag = SpawnTagForTeam(Other);
+				return Start->PlayerStartTag == OtherTag || Start->ActorHasTag(OtherTag);
+			});
+			if (!bTaggedForAnyTeam)
+			{
+				UntaggedStarts.Add(Start);
+			}
+		}
+
+		// 2. Otherwise the untagged PlayerStarts, one per team in a stable (name) order, so TeamA and
+		//    TeamB never land on the same start and the same team always gets the same one.
+		UntaggedStarts.Sort([](const APlayerStart& A, const APlayerStart& B) { return A.GetName() < B.GetName(); });
+		const int32 TeamIndex = AllTeams.IndexOfByKey(TeamId);
+		if (UntaggedStarts.IsValidIndex(TeamIndex))
+		{
+			const APlayerStart* Start = UntaggedStarts[TeamIndex];
+			UE_LOG(LogTankSim, Log, TEXT("ATSGameMode: %s tank spawns at PlayerStart '%s' (untagged start #%d of %d)."),
+				*TeamName, *Start->GetName(), TeamIndex + 1, UntaggedStarts.Num());
+			return MakeTankSpawnTransform(Start);
+		}
+	}
+
 	if (Tag != NAME_None)
 	{
-		// Any actor carrying the tag wins - a PlayerStart, a TargetPoint or an empty Actor all work.
+		// 3. Any other actor carrying the tag - a TargetPoint or an empty Actor.
 		for (TActorIterator<AActor> It(GetWorld()); It; ++It)
 		{
 			if (It->ActorHasTag(Tag))
 			{
-				return It->GetActorTransform();
-			}
-		}
-
-		// A PlayerStart whose Player Start Tag matches is the same idea via the PlayerStart-specific
-		// field, which is what people usually reach for first in the Details panel.
-		for (TActorIterator<APlayerStart> It(GetWorld()); It; ++It)
-		{
-			if (It->PlayerStartTag == Tag)
-			{
-				return It->GetActorTransform();
+				UE_LOG(LogTankSim, Log, TEXT("ATSGameMode: %s tank spawns at '%s' (tagged %s)."),
+					*TeamName, *It->GetName(), *Tag.ToString());
+				return MakeTankSpawnTransform(*It);
 			}
 		}
 	}
@@ -956,7 +1000,7 @@ FTransform ATSGameMode::GetSpawnTransformForTeam(ETSTeamId TeamId) const
 		UE_LOG(LogTankSim, Log,
 			TEXT("ATSGameMode: no actor tagged '%s' in the level - using the configured fallback transform for %s."),
 			*Tag.ToString(), *UTSTypeUtils::TeamIdToString(TeamId));
-		return *Configured;
+		return FTransform(FRotator(0., Configured->Rotator().Yaw, 0.), Configured->GetLocation());
 	}
 
 	const int32 TeamIndex = AllTeams.IndexOfByKey(TeamId);

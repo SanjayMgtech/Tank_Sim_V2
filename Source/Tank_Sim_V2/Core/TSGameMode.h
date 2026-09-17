@@ -212,6 +212,13 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation", meta = (ClampMin = "1", ClampMax = "4", EditCondition = "bPreSpawnTeamTanks"))
 	int32 NumTeamsToPreSpawn = 2;
 
+	// Team tanks spawn at the level's PlayerStarts. A PlayerStart whose Player Start Tag (or actor tag)
+	// is TSTeamSpawn_TeamA..D is reserved for that team; otherwise the untagged PlayerStarts are handed
+	// out in name order - first to TeamA, second to TeamB, and so on. Only when that finds nothing are
+	// other TSTeamSpawn_* tagged actors (TargetPoints) and FallbackTeamSpawnTransforms used.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
+	bool bUsePlayerStartsForTeamTanks = true;
+
 	// Fallback spacing along X between team tanks when the level has no TSTeamSpawn_* tagged actor.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	float FallbackTeamSpawnSpacing = 2000.f;
