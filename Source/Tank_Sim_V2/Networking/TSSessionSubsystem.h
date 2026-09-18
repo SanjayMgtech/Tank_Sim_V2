@@ -27,6 +27,11 @@ struct FTSSessionSearchResult
 
 	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Session")
 	int32 PingMs = 0;
+
+	// Short name of the map the host picked (e.g. "Tundra"). Empty for a host running a build older
+	// than the map picker.
+	UPROPERTY(BlueprintReadOnly, Category = "Tank Simulation|Session")
+	FString MapName;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FTSOnCreateSessionComplete, bool, bWasSuccessful);

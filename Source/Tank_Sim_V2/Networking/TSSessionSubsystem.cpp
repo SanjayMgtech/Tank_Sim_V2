@@ -6,6 +6,8 @@
 #include "IPAddress.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
+#include "Misc/PackageName.h"
+#include "Online/OnlineSessionNames.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
@@ -370,8 +372,10 @@ void UTSSessionSubsystem::CreateSession(int32 MaxPlayers, bool bIsLAN, bool bIsP
 	SessionSettings.bUseLobbiesIfAvailable = false;
 	// ULocalPlayer::GetNickname is overridden by UTSLocalPlayer to return the login-screen name.
 	SessionSettings.Set(HostDisplayNameKey, LocalPlayer->GetNickname(), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+	// Which map the host picked, so the session list can show it.
+	SessionSettings.Set(SETTING_MAPNAME, FPackageName::GetShortName(HostMapPath), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 
-	PrintOnScreen(FString::Printf(TEXT("[Session] Hosting session (MaxPlayers=%d, LAN=%s)..."), MaxPlayers, bIsLAN ? TEXT("true") : TEXT("false")), FColor::Yellow);
+	PrintOnScreen(FString::Printf(TEXT("[Session] Hosting session on %s (MaxPlayers=%d, LAN=%s)..."), *HostMapPath, MaxPlayers, bIsLAN ? TEXT("true") : TEXT("false")), FColor::Yellow);
 	Sessions->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, SessionSettings);
 }
 
@@ -464,6 +468,7 @@ void UTSSessionSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 			Entry.MaxPlayers = Result.Session.SessionSettings.NumPublicConnections;
 			Entry.CurrentPlayers = Entry.MaxPlayers - Result.Session.NumOpenPublicConnections;
 			Entry.PingMs = Result.PingInMs;
+			Result.Session.SessionSettings.Get(SETTING_MAPNAME, Entry.MapName);
 			Results.Add(Entry);
 
 			// The address the join would travel to - the one thing that tells "found but unreachable"
@@ -474,8 +479,8 @@ void UTSSessionSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 				Sessions->GetResolvedConnectString(Result, NAME_GamePort, Address);
 			}
 			Result.Session.SessionSettings.Get(LobbyCodeKey, Code);
-			UE_LOG(LogTankSim, Log, TEXT("[Session]   result: host='%s' address=%s code=%s players=%d/%d ping=%dms"),
-				*Entry.HostUserName, *Address, *Code, Entry.CurrentPlayers, Entry.MaxPlayers, Entry.PingMs);
+			UE_LOG(LogTankSim, Log, TEXT("[Session]   result: host='%s' map=%s address=%s code=%s players=%d/%d ping=%dms"),
+				*Entry.HostUserName, *Entry.MapName, *Address, *Code, Entry.CurrentPlayers, Entry.MaxPlayers, Entry.PingMs);
 		}
 	}
 
