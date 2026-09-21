@@ -595,6 +595,14 @@ protected:
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Tank Simulation|Debug")
 	TObjectPtr<UTSRoleDebugWidget> RoleDebugWidget;
 
+	// True while the debug panel is down only because this player is in VR, so it can come back if
+	// they return to desktop - without overriding a panel they hid themselves with TSRoleDebug.
+	bool bRoleDebugHiddenForVR = false;
+
+	// Takes the debug panel off (or back on) as this player enters (or leaves) VR. Arrival on a map
+	// only decides once; the play mode can change afterwards, so this runs on every assignment change.
+	void RefreshRoleDebugWidget();
+
 	UPROPERTY(Transient)
 	TObjectPtr<UTSCommanderScreenWidget> CommanderScreenWidget;
 

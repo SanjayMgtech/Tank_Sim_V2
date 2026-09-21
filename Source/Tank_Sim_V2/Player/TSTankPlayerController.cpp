@@ -741,6 +741,12 @@ void ATSTankPlayerController::ShowRoleDebugWidget(bool bShow)
 		RoleDebugWidget = nullptr;
 	}
 
+	// Also covers the TSRoleDebug console toggle: a VR player must not get this panel however it is asked for.
+	if (WillPlayInVR())
+	{
+		return;
+	}
+
 	if (!RoleDebugWidget)
 	{
 		TSubclassOf<UTSRoleDebugWidget> WidgetClass = RoleDebugWidgetClass;
@@ -756,6 +762,34 @@ void ATSTankPlayerController::ShowRoleDebugWidget(bool bShow)
 	{
 		RoleDebugWidget->AddToViewport(RoleDebugWidgetZOrder);
 		RoleDebugWidget->RefreshNow();
+	}
+}
+
+void ATSTankPlayerController::RefreshRoleDebugWidget()
+{
+	if (!IsLocalController() || !bShowRoleDebugWidgetOnGameplayMaps)
+	{
+		return;
+	}
+
+	const UTSUISubsystem* UI = GetUISubsystem();
+	if (UI && UI->IsCurrentMapMenuMap())
+	{
+		return;
+	}
+
+	if (WillPlayInVR())
+	{
+		if (IsRoleDebugWidgetVisible())
+		{
+			bRoleDebugHiddenForVR = true;
+			ShowRoleDebugWidget(false);
+		}
+	}
+	else if (bRoleDebugHiddenForVR)
+	{
+		bRoleDebugHiddenForVR = false;
+		ShowRoleDebugWidget(true);
 	}
 }
 
@@ -1086,6 +1120,7 @@ void ATSTankPlayerController::OnRep_PlayerState()
 void ATSTankPlayerController::HandleAssignmentChanged()
 {
 	RefreshSelectionUI();
+	RefreshRoleDebugWidget();
 	RefreshCommanderScreen();
 	RefreshHostVoicePanel();
 
