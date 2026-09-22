@@ -1167,9 +1167,6 @@ private:
 	// Commander and Driver setters; Caller only labels the log lines.
 	void ApplyViewMeshVisionMode(FName ComponentName, ETSVisionMode NewMode, const TCHAR* Caller);
 
-	// Points every UTSDriverPanelWidget on this tank's widget components at this tank.
-	void BindDriverPanels();
-
 	// What the Blueprint authored on each station capture, snapshotted the first time that station
 	// is configured. Switching back to Normal restores THIS rather than an engine default, so a
 	// designer's own grading on a periscope is not quietly thrown away by using the mode switch.

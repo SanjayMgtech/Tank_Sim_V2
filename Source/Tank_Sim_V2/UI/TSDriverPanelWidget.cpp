@@ -7,6 +7,8 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Components/WidgetComponent.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Tank/TSTankControllerBase.h"
@@ -108,6 +110,34 @@ void UTSDriverPanelWidget::ConfigureVisionSelector()
 	}
 }
 
+void UTSDriverPanelWidget::ResolveMountingTank()
+{
+	if (Tank.IsValid())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	for (TActorIterator<ATSTankControllerBase> It(World); It; ++It)
+	{
+		TArray<UWidgetComponent*> Panels;
+		It->GetComponents<UWidgetComponent>(Panels);
+		for (const UWidgetComponent* Panel : Panels)
+		{
+			if (Panel && Panel->GetUserWidgetObject() == this)
+			{
+				SetTank(*It);
+				return;
+			}
+		}
+	}
+}
+
 void UTSDriverPanelWidget::SetTank(ATSTankControllerBase* InTank)
 {
 	Tank = InTank;
@@ -162,6 +192,8 @@ void UTSDriverPanelWidget::NativeTick(const FGeometry& MyGeometry, float InDelta
 
 void UTSDriverPanelWidget::RefreshReadouts()
 {
+	ResolveMountingTank();
+
 	const bool bHasTank = GetTank() != nullptr;
 	const float SpeedKmh = GetForwardSpeedKmh();
 	const bool bReversing = SpeedKmh < -ReverseThresholdKmh;

@@ -31,9 +31,8 @@ class UTSDriverPanelWidget : public UUserWidget
 public:
 	UTSDriverPanelWidget(const FObjectInitializer& ObjectInitializer);
 
-	// Pin the panel to the tank it is mounted in. ATSTankControllerBase does this at BeginPlay for a
-	// panel on one of its own widget components; unset, the panel follows the local player's
-	// assigned tank.
+	// Pin the panel to a tank. Normally unnecessary: a panel on a tank's widget component finds that
+	// tank itself. Otherwise it follows the local player's assigned tank.
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Driver Panel")
 	void SetTank(ATSTankControllerBase* InTank);
 
@@ -81,6 +80,11 @@ protected:
 private:
 	TWeakObjectPtr<ATSTankControllerBase> Tank;
 	float TimeSinceReadout = 0.f;
+
+	// Finds the tank whose widget component is showing this panel. Done lazily rather than pushed by
+	// the tank at BeginPlay because UWidgetComponent recreates its widget when it re-registers, and a
+	// one-shot push is lost with the old instance.
+	void ResolveMountingTank();
 
 	void ConfigureVisionSelector();
 	void RefreshReadouts();

@@ -5,7 +5,6 @@
 
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "Components/WidgetComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -14,7 +13,6 @@
 #include "Net/UnrealNetwork.h"
 #include "GameFramework/PlayerController.h"
 #include "Player/TSTankPlayerState.h"
-#include "UI/TSDriverPanelWidget.h"
 #include "Tank_Sim_V2.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
@@ -321,24 +319,6 @@ void ATSTankControllerBase::BeginPlay()
 	AttachTurretCrewSeats();
 	SyncInteriorMeshTickToPawn();
 	InitialiseCrewViewCaptures();
-	BindDriverPanels();
-}
-
-void ATSTankControllerBase::BindDriverPanels()
-{
-	// A world-space widget has no link back to the actor its component sits on, so without this a
-	// driver panel would fall back to the LOCAL player's tank - right for the Driver, wrong for
-	// anyone looking into somebody else's compartment. Components ran their BeginPlay inside
-	// Super::BeginPlay, which is where UWidgetComponent creates its widget.
-	TArray<UWidgetComponent*> Panels;
-	GetComponents<UWidgetComponent>(Panels);
-	for (UWidgetComponent* Panel : Panels)
-	{
-		if (UTSDriverPanelWidget* DriverPanel = Panel ? Cast<UTSDriverPanelWidget>(Panel->GetUserWidgetObject()) : nullptr)
-		{
-			DriverPanel->SetTank(this);
-		}
-	}
 }
 
 void ATSTankControllerBase::Tick(float InDeltaSeconds)
