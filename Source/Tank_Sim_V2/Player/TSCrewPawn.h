@@ -533,8 +533,9 @@ private:
 	void Input_PrimaryReleased(const FInputActionValue& Value);
 	void Input_SwitchCommanderStation(const FInputActionValue& Value);
 
-	// Turns the screen pointer on for a local Commander at the SCREEN station - the mouse pointer on a
-	// desktop, the hand laser (SetVRWidgetInteractionEnabled) in VR - and off everywhere else.
+	// Turns the screen pointer on for a local Commander at the SCREEN station and for a local Driver
+	// (their in-world panel) - the mouse pointer on a desktop, the hand laser
+	// (SetVRWidgetInteractionEnabled) in VR - and off everywhere else.
 	void UpdateCommanderScreenInteraction();
 
 	// True while THIS function turned VR widget interaction on, so it only ever turns off what it turned on.

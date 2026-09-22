@@ -1195,7 +1195,14 @@ void ATSTankPlayerController::TSCommanderStation(const FString& Station)
 
 bool ATSTankPlayerController::WantsCommanderScreenCursor() const
 {
-	return IsLocalCommander() && GetCommanderStation() == ETSCommanderStation::Screen;
+	if (IsLocalCommander() && GetCommanderStation() == ETSCommanderStation::Screen)
+	{
+		return true;
+	}
+
+	// The Driver clicks their in-world panel. They have no mouse look, so the cursor costs nothing.
+	const ATSTankPlayerState* PS = GetTankPlayerState();
+	return IsLocalController() && PS && !PS->IsHost() && PS->GetCrewRole() == ETSCrewRole::Driver;
 }
 
 void ATSTankPlayerController::RefreshSelectionUI()

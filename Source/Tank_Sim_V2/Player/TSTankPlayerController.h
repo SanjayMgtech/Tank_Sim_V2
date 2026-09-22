@@ -631,7 +631,8 @@ private:
 	// mode of its own and stomp the others.
 	void ApplyInputModeForLocalState();
 
-	// A desktop Commander at the SCREEN station gets a mouse cursor to click the in-world screen with.
+	// A desktop Commander at the SCREEN station, or a Driver, gets a mouse cursor to click the in-world
+	// screen or panel with.
 	bool WantsCommanderScreenCursor() const;
 
 	bool IsOnMenuMap() const;

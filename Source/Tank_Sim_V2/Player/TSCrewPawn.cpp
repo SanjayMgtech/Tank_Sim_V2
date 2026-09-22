@@ -595,7 +595,7 @@ void ATSCrewPawn::Input_Interact(const FInputActionValue& Value)
 
 void ATSCrewPawn::Input_Primary(const FInputActionValue& Value)
 {
-	// Left mouse clicks the in-world screen while the desktop Commander is at it.
+	// Left mouse clicks the in-world screen while the desktop Commander is at it, or the Driver's panel.
 	if (MousePointer && MousePointer->IsActive())
 	{
 		MousePointer->PressPointer();
@@ -623,11 +623,21 @@ void ATSCrewPawn::UpdateCommanderScreenInteraction()
 {
 	const APlayerController* PC = Cast<APlayerController>(GetController());
 	const ATSTankPlayerState* PS = GetCrewPlayerState();
-	const bool bAtScreen = bCrewPawnActive && PC && PC->IsLocalController() && PS && !PS->IsHost()
+	const bool bLocalCrew = bCrewPawnActive && PC && PC->IsLocalController() && PS && !PS->IsHost();
+	const bool bVRPawn = GetSupportedPlayMode() == ETSPlayMode::VR;
+
+	const bool bCommanderAtScreen = bLocalCrew
 		&& PS->GetCrewRole() == ETSCrewRole::Commander
 		&& PS->GetCommanderStation() == ETSCommanderStation::Screen;
 
-	const bool bVRPawn = GetSupportedPlayMode() == ETSPlayMode::VR;
+	// The Driver's in-world panel (speed, position, view mode) needs the same pointer. Except a VR
+	// Driver in Manual mode: there the right trigger is the gas pedal, and the widget click shares it,
+	// so every click would also open the throttle.
+	const bool bDriverAtPanel = bLocalCrew
+		&& PS->GetCrewRole() == ETSCrewRole::Driver
+		&& !(bVRPawn && PS->GetDriveControlMode() == ETSDriveControlMode::Manual);
+
+	const bool bAtScreen = bCommanderAtScreen || bDriverAtPanel;
 
 	if (MousePointer)
 	{
