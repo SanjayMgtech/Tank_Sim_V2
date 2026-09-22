@@ -1,8 +1,8 @@
 // The Commander screen's view-mode options: DAY / NIGHT / HEATMAP.
 //
-// Each button calls ATSTankControllerBase::SetCommanderViewVisionMode on the local player's assigned
-// tank, which sets the VisionMode parameter on M_Commander_View (the Commander's periscope mesh). The
-// look of each mode lives in that material, not here.
+// Each button sets the VisionMode parameter on one crew station's view material on the local player's
+// assigned tank: M_Commander_View (CommanderView mesh) or M_Driver_View (DriverScreen mesh), chosen by
+// ViewTarget. The look of each mode lives in that material, not here.
 //
 // Like the other Commander screen panels it builds its own tree in C++ when used bare. A WBP subclass
 // that authors its own tree keeps it, and gets its buttons bound by NAME (DayButton, NightVisionButton,
@@ -17,6 +17,14 @@
 class ATSTankControllerBase;
 class UButton;
 class UTextBlock;
+
+// Which station's view material a selector drives.
+UENUM(BlueprintType)
+enum class ETSVisionViewTarget : uint8
+{
+	Commander,
+	Driver
+};
 
 UCLASS()
 class UTSVisionModeSelectorWidget : public UUserWidget
@@ -34,6 +42,28 @@ public:
 	ETSVisionMode GetSelectedVisionMode() const;
 
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+
+	// Which station's view this selector filters. Commander by default, so existing Commander screens
+	// are unchanged.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Commander Screen")
+	ETSVisionViewTarget ViewTarget = ETSVisionViewTarget::Commander;
+
+	// Pin the selector to a specific tank. Unset, it follows the local player's assigned tank.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Commander Screen")
+	void SetTargetTank(ATSTankControllerBase* InTank);
+
+	// Labels for the tree this class builds when used bare. A WBP-authored tree keeps its own text.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Commander Screen")
+	FText HeaderLabel = NSLOCTEXT("TankSim", "VisionHeader", "VIEW MODE");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Commander Screen")
+	FText DayLabel = NSLOCTEXT("TankSim", "VisionDay", "DAY");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Commander Screen")
+	FText NightVisionLabel = NSLOCTEXT("TankSim", "VisionNight", "NIGHT");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Commander Screen")
+	FText HeatmapLabel = NSLOCTEXT("TankSim", "VisionHeatmap", "HEATMAP");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tank Simulation|Commander Screen", meta = (ClampMin = "6", ClampMax = "48"))
 	int32 FontSize = 14;
@@ -60,6 +90,8 @@ protected:
 	TObjectPtr<UTextBlock> HeaderText;
 
 private:
+	TWeakObjectPtr<ATSTankControllerBase> TargetTank;
+
 	UFUNCTION() void OnDayClicked();
 	UFUNCTION() void OnNightVisionClicked();
 	UFUNCTION() void OnHeatmapClicked();

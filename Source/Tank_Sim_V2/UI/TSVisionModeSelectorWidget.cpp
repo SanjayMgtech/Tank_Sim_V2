@@ -51,7 +51,7 @@ TSharedRef<SWidget> UTSVisionModeSelectorWidget::RebuildWidget()
 		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("Column"));
 		WidgetTree->RootWidget = Column;
 
-		HeaderText = MakeText(TEXT("VIEW MODE"), FontSize - 2, FLinearColor(0.72f, 0.78f, 0.80f, 1.f));
+		HeaderText = MakeText(HeaderLabel.ToString(), FontSize - 2, FLinearColor(0.72f, 0.78f, 0.80f, 1.f));
 		Column->AddChildToVerticalBox(HeaderText);
 
 		UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("Options"));
@@ -70,9 +70,9 @@ TSharedRef<SWidget> UTSVisionModeSelectorWidget::RebuildWidget()
 			}
 		};
 
-		AddOption(DayButton, TEXT("DAY"));
-		AddOption(NightVisionButton, TEXT("NIGHT"));
-		AddOption(HeatmapButton, TEXT("HEATMAP"));
+		AddOption(DayButton, DayLabel.ToString());
+		AddOption(NightVisionButton, NightVisionLabel.ToString());
+		AddOption(HeatmapButton, HeatmapLabel.ToString());
 	}
 
 	// Outside the build branch so a WBP-authored tree (bound by name) gets the handlers too.
@@ -92,8 +92,18 @@ TSharedRef<SWidget> UTSVisionModeSelectorWidget::RebuildWidget()
 	return Super::RebuildWidget();
 }
 
+void UTSVisionModeSelectorWidget::SetTargetTank(ATSTankControllerBase* InTank)
+{
+	TargetTank = InTank;
+}
+
 ATSTankControllerBase* UTSVisionModeSelectorWidget::GetLocalTank() const
 {
+	if (TargetTank.IsValid())
+	{
+		return TargetTank.Get();
+	}
+
 	const APlayerController* PC = GetOwningPlayer();
 	const ATSTankPlayerState* PS = PC ? PC->GetPlayerState<ATSTankPlayerState>() : nullptr;
 	return PS ? Cast<ATSTankControllerBase>(PS->GetAssignedTank()) : nullptr;
@@ -103,7 +113,14 @@ void UTSVisionModeSelectorWidget::SelectVisionMode(ETSVisionMode NewMode)
 {
 	if (ATSTankControllerBase* Tank = GetLocalTank())
 	{
-		Tank->SetCommanderViewVisionMode(NewMode);
+		if (ViewTarget == ETSVisionViewTarget::Driver)
+		{
+			Tank->SetDriverViewVisionMode(NewMode);
+		}
+		else
+		{
+			Tank->SetCommanderViewVisionMode(NewMode);
+		}
 	}
 	RefreshHighlight();
 }
@@ -111,7 +128,11 @@ void UTSVisionModeSelectorWidget::SelectVisionMode(ETSVisionMode NewMode)
 ETSVisionMode UTSVisionModeSelectorWidget::GetSelectedVisionMode() const
 {
 	const ATSTankControllerBase* Tank = GetLocalTank();
-	return Tank ? Tank->GetCommanderViewVisionMode() : ETSVisionMode::Normal;
+	if (!Tank)
+	{
+		return ETSVisionMode::Normal;
+	}
+	return ViewTarget == ETSVisionViewTarget::Driver ? Tank->GetDriverViewVisionMode() : Tank->GetCommanderViewVisionMode();
 }
 
 void UTSVisionModeSelectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)

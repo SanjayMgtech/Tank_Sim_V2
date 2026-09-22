@@ -5,6 +5,7 @@
 
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/WidgetComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -13,6 +14,7 @@
 #include "Net/UnrealNetwork.h"
 #include "GameFramework/PlayerController.h"
 #include "Player/TSTankPlayerState.h"
+#include "UI/TSDriverPanelWidget.h"
 #include "Tank_Sim_V2.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
@@ -319,6 +321,24 @@ void ATSTankControllerBase::BeginPlay()
 	AttachTurretCrewSeats();
 	SyncInteriorMeshTickToPawn();
 	InitialiseCrewViewCaptures();
+	BindDriverPanels();
+}
+
+void ATSTankControllerBase::BindDriverPanels()
+{
+	// A world-space widget has no link back to the actor its component sits on, so without this a
+	// driver panel would fall back to the LOCAL player's tank - right for the Driver, wrong for
+	// anyone looking into somebody else's compartment. Components ran their BeginPlay inside
+	// Super::BeginPlay, which is where UWidgetComponent creates its widget.
+	TArray<UWidgetComponent*> Panels;
+	GetComponents<UWidgetComponent>(Panels);
+	for (UWidgetComponent* Panel : Panels)
+	{
+		if (UTSDriverPanelWidget* DriverPanel = Panel ? Cast<UTSDriverPanelWidget>(Panel->GetUserWidgetObject()) : nullptr)
+		{
+			DriverPanel->SetTank(this);
+		}
+	}
 }
 
 void ATSTankControllerBase::Tick(float InDeltaSeconds)
@@ -427,13 +447,23 @@ void ATSTankControllerBase::SetCrewViewVisionMode(ETSVisionMode NewMode)
 void ATSTankControllerBase::SetCommanderViewVisionMode(ETSVisionMode NewMode)
 {
 	CommanderViewVisionMode = NewMode;
+	ApplyViewMeshVisionMode(CommanderViewComponentName, NewMode, TEXT("SetCommanderViewVisionMode"));
+}
 
+void ATSTankControllerBase::SetDriverViewVisionMode(ETSVisionMode NewMode)
+{
+	DriverViewVisionMode = NewMode;
+	ApplyViewMeshVisionMode(DriverViewComponentName, NewMode, TEXT("SetDriverViewVisionMode"));
+}
+
+void ATSTankControllerBase::ApplyViewMeshVisionMode(FName ComponentName, ETSVisionMode NewMode, const TCHAR* Caller)
+{
 	UPrimitiveComponent* ViewMesh = nullptr;
 	TArray<UPrimitiveComponent*> Primitives;
 	GetComponents<UPrimitiveComponent>(Primitives);
 	for (UPrimitiveComponent* Primitive : Primitives)
 	{
-		if (Primitive && Primitive->GetFName() == CommanderViewComponentName)
+		if (Primitive && Primitive->GetFName() == ComponentName)
 		{
 			ViewMesh = Primitive;
 			break;
@@ -443,9 +473,9 @@ void ATSTankControllerBase::SetCommanderViewVisionMode(ETSVisionMode NewMode)
 	if (!ViewMesh)
 	{
 		UE_LOG(LogTankSim, Warning,
-			TEXT("SetCommanderViewVisionMode: %s has no component named '%s' - nothing to filter. Set ")
-			TEXT("CommanderViewComponentName to the mesh showing M_Commander_View."),
-			*GetName(), *CommanderViewComponentName.ToString());
+			TEXT("%s: %s has no component named '%s' - nothing to filter. Set the view component name ")
+			TEXT("to the mesh wearing the view material."),
+			Caller, *GetName(), *ComponentName.ToString());
 		return;
 	}
 
@@ -463,8 +493,8 @@ void ATSTankControllerBase::SetCommanderViewVisionMode(ETSVisionMode NewMode)
 		}
 	}
 
-	UE_LOG(LogTankSim, Log, TEXT("SetCommanderViewVisionMode: %s %s=%.0f on %d slot(s) of '%s'"),
-		*GetName(), *CommanderViewVisionParameter.ToString(), ParameterValue, Applied, *ViewMesh->GetName());
+	UE_LOG(LogTankSim, Log, TEXT("%s: %s %s=%.0f on %d slot(s) of '%s'"),
+		Caller, *GetName(), *CommanderViewVisionParameter.ToString(), ParameterValue, Applied, *ViewMesh->GetName());
 }
 
 ETSVisionMode ATSTankControllerBase::CycleCrewViewVisionMode()

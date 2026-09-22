@@ -1060,6 +1060,21 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View")
 	FName CommanderViewVisionParameter = TEXT("VisionMode");
 
+	// --- Driver view filter (M_Driver_View) --------------------------------------------------------
+	//
+	// Same contract as the Commander's: the Driver's screen is a mesh (DriverScreen) wearing
+	// M_Driver_View, whose VisionMode scalar (0 day, 1 night vision, 2 heatmap) drives the filter. The
+	// parameter name is shared with the Commander's (CommanderViewVisionParameter). Local only.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew View")
+	void SetDriverViewVisionMode(ETSVisionMode NewMode);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew View")
+	ETSVisionMode GetDriverViewVisionMode() const { return DriverViewVisionMode; }
+
+	// Name of the mesh component showing the Driver's view. Blueprint data (RULE 8).
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View")
+	FName DriverViewComponentName = TEXT("DriverScreen");
+
 	// The render target the given station draws into, or null when that station has no capture or
 	// the capture has no TextureTarget assigned. A widget showing a periscope feed asks for this
 	// rather than hard-referencing RT_Gunner, so per-tank overrides work.
@@ -1145,6 +1160,15 @@ private:
 	ETSVisionMode CrewViewVisionMode = ETSVisionMode::Normal;
 
 	ETSVisionMode CommanderViewVisionMode = ETSVisionMode::Normal;
+
+	ETSVisionMode DriverViewVisionMode = ETSVisionMode::Normal;
+
+	// Sets the vision parameter on every material slot of the named view mesh. Shared by the
+	// Commander and Driver setters; Caller only labels the log lines.
+	void ApplyViewMeshVisionMode(FName ComponentName, ETSVisionMode NewMode, const TCHAR* Caller);
+
+	// Points every UTSDriverPanelWidget on this tank's widget components at this tank.
+	void BindDriverPanels();
 
 	// What the Blueprint authored on each station capture, snapshotted the first time that station
 	// is configured. Switching back to Normal restores THIS rather than an engine default, so a
