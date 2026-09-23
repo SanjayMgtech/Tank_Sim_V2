@@ -347,11 +347,24 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputAction> IA_AimTurret;
 
+	// VR only: each hand's trigger fires its OWN weapon directly, independent of SelectedWeapon -
+	// see TryFire/TrySelectWeapon in UTSTankWeaponComponent. Not bound to any desktop key.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputAction> IA_FireMainCannon;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputAction> IA_FireMachineGun;
+
+	// Desktop: LMB/Spacebar. Fires whichever weapon IA_SelectMainCannon/IA_SelectMachineGun (keys 1/2)
+	// last selected.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_Fire;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_SelectMainCannon;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_SelectMachineGun;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputAction> IA_ReloadWeapon;
@@ -556,6 +569,9 @@ private:
 	void Input_AimTurret(const FInputActionValue& Value);
 	void Input_FireMainCannon(const FInputActionValue& Value);
 	void Input_FireMachineGun(const FInputActionValue& Value);
+	void Input_Fire(const FInputActionValue& Value);
+	void Input_SelectMainCannon(const FInputActionValue& Value);
+	void Input_SelectMachineGun(const FInputActionValue& Value);
 	void Input_ReloadWeapon(const FInputActionValue& Value);
 	void Input_RequestIntel(const FInputActionValue& Value);
 

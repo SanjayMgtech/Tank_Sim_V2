@@ -39,6 +39,11 @@ public:
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Tank Simulation|Blueprint Integration")
 	void BP_FireMachineGun();
 
+	// WeaponIndex is BP_TankWeapon's own Weapons array index (see ETSWeaponSlot), not the enum
+	// itself - the interface stays a plain int so it does not need to include TSTypes.h.
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Tank Simulation|Blueprint Integration")
+	void BP_SelectWeapon(int32 WeaponIndex);
+
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Tank Simulation|Blueprint Integration")
 	void BP_UpdateCommanderIntel(const FTSCommanderIntel& Intel);
 };

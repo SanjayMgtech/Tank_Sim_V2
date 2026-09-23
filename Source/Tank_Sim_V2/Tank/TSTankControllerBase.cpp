@@ -778,6 +778,12 @@ void ATSTankControllerBase::BP_FireMachineGun_Implementation()
 		&ATSTankControllerBase::ReleaseWeaponTrigger, MachineGunReleaseDelaySeconds, false);
 }
 
+void ATSTankControllerBase::BP_SelectWeapon_Implementation(int32 WeaponIndex)
+{
+	UE_LOG(LogTankSim, Log, TEXT("[Tank] %s: SELECT WEAPON index %d"), *GetName(), WeaponIndex);
+	BP_WeaponSelect(WeaponIndex);
+}
+
 FRotator ATSTankControllerBase::GetInteriorTurretRotation() const
 {
 	// TurretsRot is the same array the exterior AnimBP reads, so the interior cannot drift out of

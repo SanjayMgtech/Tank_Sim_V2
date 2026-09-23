@@ -1614,6 +1614,38 @@ bool ATSTankPlayerController::ServerFireMachineGun_Validate()
 	return true;
 }
 
+void ATSTankPlayerController::ServerFire_Implementation()
+{
+	if (APawn* Tank = GetAssignedTank())
+	{
+		if (UTSTankWeaponComponent* Weapon = Tank->FindComponentByClass<UTSTankWeaponComponent>())
+		{
+			Weapon->TryFire(GetTankPlayerState());
+		}
+	}
+}
+
+bool ATSTankPlayerController::ServerFire_Validate()
+{
+	return true;
+}
+
+void ATSTankPlayerController::ServerSelectWeapon_Implementation(ETSWeaponSlot Slot)
+{
+	if (APawn* Tank = GetAssignedTank())
+	{
+		if (UTSTankWeaponComponent* Weapon = Tank->FindComponentByClass<UTSTankWeaponComponent>())
+		{
+			Weapon->TrySelectWeapon(GetTankPlayerState(), Slot);
+		}
+	}
+}
+
+bool ATSTankPlayerController::ServerSelectWeapon_Validate(ETSWeaponSlot Slot)
+{
+	return true;
+}
+
 void ATSTankPlayerController::ServerRequestReload_Implementation()
 {
 	if (APawn* Tank = GetAssignedTank())

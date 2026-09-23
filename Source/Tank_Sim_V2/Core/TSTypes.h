@@ -162,6 +162,17 @@ enum class ETSAccessLevel : uint8
 	Full
 };
 
+// Which weapon the Gunner currently has equipped. IA_SelectMainCannon/IA_SelectMachineGun (keys 1
+// and 2) set this; the single IA_Fire action (LMB) then fires whichever one this is. Maps directly
+// to BP_TankWeapon's Weapons array index - MainCannon is index 0 ("MainGun"), MachineGun is index 1
+// ("Turret Machine Gun") - see ATSTankControllerBase::BP_SelectWeapon_Implementation.
+UENUM(BlueprintType)
+enum class ETSWeaponSlot : uint8
+{
+	MainCannon	UMETA(DisplayName = "Main Cannon"),
+	MachineGun	UMETA(DisplayName = "Machine Gun")
+};
+
 // Starter set of Commander crew commands. Extend as gameplay needs grow.
 UENUM(BlueprintType)
 enum class ETSCrewCommand : uint8

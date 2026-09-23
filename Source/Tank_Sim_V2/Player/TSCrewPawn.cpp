@@ -25,6 +25,7 @@
 #include "Net/UnrealNetwork.h"
 #include "Player/TSVRModeLibrary.h"
 #include "Tank/TSTankControllerBase.h"
+#include "Tank/TSTankWeaponComponent.h"
 #include "Tank_Sim_V2.h"
 
 ATSCrewPawn::ATSCrewPawn()
@@ -552,6 +553,12 @@ void ATSCrewPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	if (IA_AimTurret) EIC->BindAction(IA_AimTurret, ETriggerEvent::Triggered, this, &ATSCrewPawn::Input_AimTurret);
 	if (IA_FireMainCannon) EIC->BindAction(IA_FireMainCannon, ETriggerEvent::Started, this, &ATSCrewPawn::Input_FireMainCannon);
 	if (IA_FireMachineGun) EIC->BindAction(IA_FireMachineGun, ETriggerEvent::Triggered, this, &ATSCrewPawn::Input_FireMachineGun);
+	// Triggered (not Started): fires every frame LMB is held, so an auto weapon (machine gun) keeps
+	// going while it's selected. TryFireMainCannon's own cooldown throttles a held cannon shot to its
+	// fire rate rather than firing every frame.
+	if (IA_Fire) EIC->BindAction(IA_Fire, ETriggerEvent::Triggered, this, &ATSCrewPawn::Input_Fire);
+	if (IA_SelectMainCannon) EIC->BindAction(IA_SelectMainCannon, ETriggerEvent::Started, this, &ATSCrewPawn::Input_SelectMainCannon);
+	if (IA_SelectMachineGun) EIC->BindAction(IA_SelectMachineGun, ETriggerEvent::Started, this, &ATSCrewPawn::Input_SelectMachineGun);
 	if (IA_ReloadWeapon) EIC->BindAction(IA_ReloadWeapon, ETriggerEvent::Started, this, &ATSCrewPawn::Input_ReloadWeapon);
 	if (IA_RequestIntel) EIC->BindAction(IA_RequestIntel, ETriggerEvent::Started, this, &ATSCrewPawn::Input_RequestIntel);
 
@@ -1492,6 +1499,59 @@ void ATSCrewPawn::Input_FireMachineGun(const FInputActionValue& Value)
 			LastMachineGunHapticTime = Now;
 			PlayHaptic(FireHapticEffect, EControllerHand::Left, MachineGunHapticScale);
 		}
+	}
+}
+
+void ATSCrewPawn::Input_Fire(const FInputActionValue& Value)
+{
+	ATSTankPlayerController* PC = GetTankController();
+	if (!PC)
+	{
+		return;
+	}
+
+	PC->ServerFire();
+
+	// Haptic feedback is purely cosmetic and local, so it is fine to read whichever weapon this
+	// client currently believes is selected (replicated from the server) rather than round-tripping.
+	ETSWeaponSlot Selected = ETSWeaponSlot::MainCannon;
+	if (const APawn* Tank = PC->GetAssignedTank())
+	{
+		if (const UTSTankWeaponComponent* Weapon = Tank->FindComponentByClass<UTSTankWeaponComponent>())
+		{
+			Selected = Weapon->GetSelectedWeapon();
+		}
+	}
+
+	if (Selected == ETSWeaponSlot::MainCannon)
+	{
+		PlayHaptic(FireHapticEffect, EControllerHand::Left, MainCannonHapticScale);
+		PlayHaptic(FireHapticEffect, EControllerHand::Right, MainCannonHapticScale);
+	}
+	else
+	{
+		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		if (Now - LastMachineGunHapticTime >= MachineGunHapticInterval || Now < LastMachineGunHapticTime)
+		{
+			LastMachineGunHapticTime = Now;
+			PlayHaptic(FireHapticEffect, EControllerHand::Left, MachineGunHapticScale);
+		}
+	}
+}
+
+void ATSCrewPawn::Input_SelectMainCannon(const FInputActionValue& Value)
+{
+	if (ATSTankPlayerController* PC = GetTankController())
+	{
+		PC->ServerSelectWeapon(ETSWeaponSlot::MainCannon);
+	}
+}
+
+void ATSCrewPawn::Input_SelectMachineGun(const FInputActionValue& Value)
+{
+	if (ATSTankPlayerController* PC = GetTankController())
+	{
+		PC->ServerSelectWeapon(ETSWeaponSlot::MachineGun);
 	}
 }
 

@@ -102,6 +102,7 @@ bool FTSCrossTankAccessTest::RunTest(const FString& Parameters)
 	// --- sanity: each crew CAN act on its own tank, or the denials below prove nothing ---
 	TestTrue(TEXT("GunnerA can aim tank A"), TankA.Weapon->TryAimTurret(GunnerA, FVector_NetQuantize(100.f, 0.f, 0.f)));
 	TestTrue(TEXT("GunnerB can aim tank B"), TankB.Weapon->TryAimTurret(GunnerB, FVector_NetQuantize(200.f, 0.f, 0.f)));
+	TestTrue(TEXT("GunnerA can select tank A's machine gun"), TankA.Weapon->TrySelectWeapon(GunnerA, ETSWeaponSlot::MachineGun));
 	TestTrue(TEXT("DriverA can drive tank A"), TankA.Control->TryApplyDriveInput(DriverA, 1.f, 0.f));
 
 	// =========================================================================================
@@ -116,6 +117,8 @@ bool FTSCrossTankAccessTest::RunTest(const FString& Parameters)
 		TankA.Weapon->TryFireMainCannon(GunnerB));
 	TestFalse(TEXT("GunnerB CANNOT fire tank A's machine gun"),
 		TankA.Weapon->TryFireMachineGun(GunnerB));
+	TestFalse(TEXT("GunnerB CANNOT select tank A's machine gun"),
+		TankA.Weapon->TrySelectWeapon(GunnerB, ETSWeaponSlot::MachineGun));
 	TestFalse(TEXT("GunnerB CANNOT reload tank A"),
 		TankA.Weapon->TryReload(GunnerB));
 

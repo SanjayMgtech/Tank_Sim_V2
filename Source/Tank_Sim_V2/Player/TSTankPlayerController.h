@@ -488,6 +488,19 @@ public:
 	UFUNCTION(Server, Unreliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerFireMachineGun();
 
+	// Fires whichever weapon is currently selected (UTSTankWeaponComponent::SelectedWeapon), which
+	// only the server sets - see ServerSelectWeapon. Unreliable and called every frame IA_Fire (LMB)
+	// is held, the same pattern ServerFireMachineGun already uses, since it now also has to carry an
+	// automatic machine-gun stream and a reliable RPC sent every frame can disconnect the client.
+	UFUNCTION(Server, Unreliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
+	void ServerFire();
+
+	// Reliable and discrete - a dropped weapon-switch request should not leave the Gunner holding
+	// the wrong weapon with no way to notice, unlike a per-frame fire/aim stream where the next
+	// packet simply supersedes a lost one.
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
+	void ServerSelectWeapon(ETSWeaponSlot Slot);
+
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation")
 	void ServerRequestReload();
 

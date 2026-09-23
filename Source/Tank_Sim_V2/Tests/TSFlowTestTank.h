@@ -33,6 +33,7 @@ public:
 	virtual void BP_AimTurret_Implementation(FVector_NetQuantize AimPoint) override {}
 	virtual void BP_FireMainCannon_Implementation() override {}
 	virtual void BP_FireMachineGun_Implementation() override {}
+	virtual void BP_SelectWeapon_Implementation(int32 WeaponIndex) override {}
 	virtual void BP_UpdateCommanderIntel_Implementation(const FTSCommanderIntel& Intel) override {}
 
 protected:

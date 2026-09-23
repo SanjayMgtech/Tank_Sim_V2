@@ -21,6 +21,7 @@ void UTSTankWeaponComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	DOREPLIFETIME(UTSTankWeaponComponent, AmmoMainCannon);
 	DOREPLIFETIME(UTSTankWeaponComponent, AmmoMachineGun);
 	DOREPLIFETIME(UTSTankWeaponComponent, bReloading);
+	DOREPLIFETIME(UTSTankWeaponComponent, SelectedWeapon);
 }
 
 UTSTankCrewComponent* UTSTankWeaponComponent::GetCrewComponent() const
@@ -132,6 +133,43 @@ void UTSTankWeaponComponent::MulticastFireMachineGun_Implementation()
 	if (GetOwner() && GetOwner()->Implements<UTSTankInterface>())
 	{
 		ITSTankInterface::Execute_BP_FireMachineGun(GetOwner());
+	}
+}
+
+bool UTSTankWeaponComponent::TryFire(ATSTankPlayerState* Requester)
+{
+	switch (SelectedWeapon)
+	{
+	case ETSWeaponSlot::MainCannon: return TryFireMainCannon(Requester);
+	case ETSWeaponSlot::MachineGun: return TryFireMachineGun(Requester);
+	default: return false;
+	}
+}
+
+bool UTSTankWeaponComponent::TrySelectWeapon(ATSTankPlayerState* Requester, ETSWeaponSlot Slot)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return false;
+	}
+
+	const ETSCapability Capability = (Slot == ETSWeaponSlot::MainCannon) ? ETSCapability::MainCannon : ETSCapability::MachineGun;
+	if (!HasGunnerAccess(GetCrewComponent(), Requester, Capability))
+	{
+		return false;
+	}
+
+	SelectedWeapon = Slot;
+	OnRep_SelectedWeapon();
+
+	return true;
+}
+
+void UTSTankWeaponComponent::OnRep_SelectedWeapon()
+{
+	if (GetOwner() && GetOwner()->Implements<UTSTankInterface>())
+	{
+		ITSTankInterface::Execute_BP_SelectWeapon(GetOwner(), static_cast<int32>(SelectedWeapon));
 	}
 }
 

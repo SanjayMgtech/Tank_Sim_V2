@@ -666,6 +666,7 @@ public:
 	virtual void BP_AimTurret_Implementation(FVector_NetQuantize AimPoint) override;
 	virtual void BP_FireMainCannon_Implementation() override;
 	virtual void BP_FireMachineGun_Implementation() override;
+	virtual void BP_SelectWeapon_Implementation(int32 WeaponIndex) override;
 
 	// --- Weapon hooks -----------------------------------------------------------------------------
 	// The tank's actual firing lives on BP_TankWeapon (StartShooting / StopShooting), and
@@ -678,6 +679,12 @@ public:
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|Blueprint Integration")
 	void BP_WeaponStopShooting();
+
+	// The Blueprint hooks this to BP_TankWeapon's own SERVER_ChangeWeapon(WeaponIndex) - the exact
+	// function the (now-dead) legacy IA_UseWeapon1/IA_UseWeapon2 nodes called - plus UpdateChosenWeaponUI
+	// so the HUD reflects the switch. See BP_SelectWeapon_Implementation.
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|Blueprint Integration")
+	void BP_WeaponSelect(int32 WeaponIndex);
 
 	// --- Crew seats that ride the turret ----------------------------------------------------------
 	// DriverSeat/GunnerSeat/CommanderSeat are authored as plain scene components on the tank, which
