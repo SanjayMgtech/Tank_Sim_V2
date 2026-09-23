@@ -3,6 +3,7 @@
 
 #include "ChaosVehicleMovementComponent.h"
 
+#include "Components/LightComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -71,6 +72,9 @@ void ATSTankControllerBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 	// the network.
 	DOREPLIFETIME(ATSTankControllerBase, TurretsRot);
 	DOREPLIFETIME(ATSTankControllerBase, GunsRot);
+
+	// Host-set team alert level. RepNotify, because every machine drives its own lights from it.
+	DOREPLIFETIME(ATSTankControllerBase, TeamAlertState);
 }
 
 void ATSTankControllerBase::VibrationCalculation(double VibrationAmplitude, double VibrationPhase, double& VibrationOffset)
@@ -319,6 +323,10 @@ void ATSTankControllerBase::BeginPlay()
 	AttachTurretCrewSeats();
 	SyncInteriorMeshTickToPawn();
 	InitialiseCrewViewCaptures();
+
+	// Puts the warning lights into the state this tank spawned with - OFF unless the host had already
+	// put this team in danger before the tank existed. Runs on every machine.
+	ApplyTeamAlertState();
 }
 
 void ATSTankControllerBase::Tick(float InDeltaSeconds)
@@ -333,6 +341,113 @@ void ATSTankControllerBase::Tick(float InDeltaSeconds)
 	UpdateInteriorControlState(InDeltaSeconds);
 
 	UpdateCrewViewCapture(InDeltaSeconds);
+
+	UpdateWarningLights(InDeltaSeconds);
+}
+
+void ATSTankControllerBase::SetTeamAlertState(ETSTeamAlertState NewState)
+{
+	if (!HasAuthority() || TeamAlertState == NewState)
+	{
+		return;
+	}
+
+	TeamAlertState = NewState;
+	UE_LOG(LogTankSim, Log, TEXT("[TeamAlert] %s -> %s"), *GetName(), *UTSTypeUtils::TeamAlertStateToString(NewState));
+
+	// A listen server gets no RepNotify for its own write.
+	OnRep_TeamAlertState();
+}
+
+void ATSTankControllerBase::OnRep_TeamAlertState()
+{
+	ApplyTeamAlertState();
+	BP_OnTeamAlertStateChanged(TeamAlertState);
+}
+
+void ATSTankControllerBase::ResolveWarningLights()
+{
+	if (bWarningLightsResolved)
+	{
+		return;
+	}
+	bWarningLightsResolved = true;
+
+	TArray<ULightComponent*> Lights;
+	GetComponents<ULightComponent>(Lights);
+
+	for (const FName& LightName : WarningLightComponentNames)
+	{
+		ULightComponent* const* Found = Lights.FindByPredicate(
+			[&LightName](const ULightComponent* Light) { return Light && Light->GetFName() == LightName; });
+		if (Found)
+		{
+			ResolvedWarningLights.Add(*Found);
+			WarningLightRestRotations.Add((*Found)->GetRelativeRotation().Quaternion());
+		}
+	}
+}
+
+void ATSTankControllerBase::ApplyTeamAlertState()
+{
+	ResolveWarningLights();
+
+	const bool bDanger = TeamAlertState == ETSTeamAlertState::InDanger;
+
+	// Loud, but only when it matters: most tanks have no warning lights and are never put in danger,
+	// so warning at BeginPlay would be noise. Being put in danger with nothing to show for it is the
+	// case that reads as "the danger button is broken".
+	if (bDanger && ResolvedWarningLights.Num() < WarningLightComponentNames.Num() && !bWarnedMissingWarningLights)
+	{
+		bWarnedMissingWarningLights = true;
+		const FString Wanted = FString::JoinBy(WarningLightComponentNames, TEXT(", "),
+			[](const FName& Name) { return FString::Printf(TEXT("'%s'"), *Name.ToString()); });
+		UE_LOG(LogTankSim, Warning,
+			TEXT("[TeamAlert] %s is IN DANGER but only %d of %d warning lights were found. Add light components named %s to its Blueprint, or edit WarningLightComponentNames."),
+			*GetName(), ResolvedWarningLights.Num(), WarningLightComponentNames.Num(), *Wanted);
+	}
+
+	const bool bLit = bDanger || !bTurnWarningLightsOffWhenClear;
+	for (ULightComponent* Light : ResolvedWarningLights)
+	{
+		if (Light)
+		{
+			Light->SetVisibility(bLit);
+		}
+	}
+
+	if (!bDanger && bTurnWarningLightsOffWhenClear)
+	{
+		// Back to exactly how the tank spawned, so the next alarm starts from the authored aim.
+		WarningLightSpinDegrees = 0.f;
+		SetWarningLightSpin(0.f);
+	}
+}
+
+void ATSTankControllerBase::UpdateWarningLights(float InDeltaSeconds)
+{
+	if (TeamAlertState != ETSTeamAlertState::InDanger || ResolvedWarningLights.Num() == 0)
+	{
+		return;
+	}
+
+	WarningLightSpinDegrees = FMath::Fmod(WarningLightSpinDegrees + WarningLightRotationSpeed * InDeltaSeconds, 360.f);
+	SetWarningLightSpin(WarningLightSpinDegrees);
+}
+
+void ATSTankControllerBase::SetWarningLightSpin(float Degrees)
+{
+	// Spin about the PARENT's Z (pre-multiplied), not the light's own: the beams are authored tilted
+	// down, and turning about their own axis would wobble them rather than sweep them round like a
+	// siren.
+	const FQuat Spin(FVector::UpVector, FMath::DegreesToRadians(Degrees));
+	for (int32 Index = 0; Index < ResolvedWarningLights.Num(); ++Index)
+	{
+		if (ULightComponent* Light = ResolvedWarningLights[Index])
+		{
+			Light->SetRelativeRotation(Spin * WarningLightRestRotations[Index]);
+		}
+	}
 }
 
 void ATSTankControllerBase::InitialiseCrewViewCaptures()

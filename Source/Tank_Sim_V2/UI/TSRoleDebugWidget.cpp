@@ -310,8 +310,52 @@ void UTSRoleDebugWidget::EnsureTeamCards()
 		Inner->AddChildToVerticalBox(Count);
 		PadVerticalSlot(Count, FMargin(0.f, 7.f, 0.f, 0.f));
 
+		// Alert level: a status line everyone sees, and the host's NO DANGER / DANGER pair.
+		UTextBlock* Alert = MakeText(TEXT(""), S.FontSize - 3, true, S.MutedTextColor, 100);
+		Inner->AddChildToVerticalBox(Alert);
+		PadVerticalSlot(Alert, FMargin(0.f, 7.f, 0.f, 0.f));
+
+		UHorizontalBox* AlertButtons = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+		Inner->AddChildToVerticalBox(AlertButtons);
+		PadVerticalSlot(AlertButtons, FMargin(0.f, 4.f, 0.f, 0.f));
+
+		UButton* ClearButton = MakeCardButton(TEXT("NO DANGER"));
+		UButton* DangerButton = MakeCardButton(TEXT("DANGER"));
+		for (UButton* Button : { ClearButton, DangerButton })
+		{
+			if (UHorizontalBoxSlot* ButtonSlot = AlertButtons->AddChildToHorizontalBox(Button))
+			{
+				ButtonSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+				ButtonSlot->SetPadding(FMargin(Button == ClearButton ? 0.f : 2.f, 0.f, Button == ClearButton ? 2.f : 0.f, 0.f));
+			}
+		}
+
+		switch (TeamIndex)
+		{
+		case 0:
+			ClearButton->OnClicked.AddUniqueDynamic(this, &UTSRoleDebugWidget::OnTeamAClearClicked);
+			DangerButton->OnClicked.AddUniqueDynamic(this, &UTSRoleDebugWidget::OnTeamADangerClicked);
+			break;
+		case 1:
+			ClearButton->OnClicked.AddUniqueDynamic(this, &UTSRoleDebugWidget::OnTeamBClearClicked);
+			DangerButton->OnClicked.AddUniqueDynamic(this, &UTSRoleDebugWidget::OnTeamBDangerClicked);
+			break;
+		case 2:
+			ClearButton->OnClicked.AddUniqueDynamic(this, &UTSRoleDebugWidget::OnTeamCClearClicked);
+			DangerButton->OnClicked.AddUniqueDynamic(this, &UTSRoleDebugWidget::OnTeamCDangerClicked);
+			break;
+		default:
+			ClearButton->OnClicked.AddUniqueDynamic(this, &UTSRoleDebugWidget::OnTeamDClearClicked);
+			DangerButton->OnClicked.AddUniqueDynamic(this, &UTSRoleDebugWidget::OnTeamDDangerClicked);
+			break;
+		}
+
 		TeamCardsBox->AddChild(CardSize);
 
+		TeamAlertTexts.Add(Alert);
+		TeamAlertButtonRows.Add(AlertButtons);
+		TeamClearButtons.Add(ClearButton);
+		TeamDangerButtons.Add(DangerButton);
 		TeamCards.Add(Card);
 		TeamCardStripes.Add(Stripe);
 		TeamTitleTexts.Add(Title);
@@ -441,6 +485,8 @@ void UTSRoleDebugWidget::RefreshTeamCards()
 
 	const ATSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ATSGameState>() : nullptr;
 	const FTSLobbyConsoleStyle& S = ConsoleStyle;
+	const ATSTankPlayerController* OwningPC = GetOwningPlayer<ATSTankPlayerController>();
+	const bool bViewerIsHost = OwningPC && OwningPC->IsMatchHost();
 
 	for (int32 TeamIndex = 0; TeamIndex < TeamCards.Num(); ++TeamIndex)
 	{
@@ -510,6 +556,29 @@ void UTSRoleDebugWidget::RefreshTeamCards()
 					? TEXT("FULLY CREWED")
 					: FString::Printf(TEXT("%d / %d SEATS FILLED"), Filled, SeatsPerTank)));
 				Count->SetColorAndOpacity(FSlateColor(Filled == SeatsPerTank ? S.ButtonSelectedColor * 1.7f : S.MutedTextColor));
+			}
+		}
+
+		const bool bDanger = GS && GS->GetTeamAlertState(TeamId) == ETSTeamAlertState::InDanger;
+		if (UTextBlock* Alert = TeamAlertTexts.IsValidIndex(TeamIndex) ? TeamAlertTexts[TeamIndex].Get() : nullptr)
+		{
+			Alert->SetText(FText::FromString(bDanger ? TEXT("IN DANGER") : TEXT("NO DANGER")));
+			Alert->SetColorAndOpacity(FSlateColor(bDanger ? S.DangerColor * 1.4f : S.MutedTextColor * 0.8f));
+		}
+		if (UPanelWidget* Row = TeamAlertButtonRows.IsValidIndex(TeamIndex) ? TeamAlertButtonRows[TeamIndex].Get() : nullptr)
+		{
+			// Everyone sees the state; only the host can change it (and the server re-checks that).
+			Row->SetVisibility(bViewerIsHost ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		}
+		if (bViewerIsHost)
+		{
+			if (UButton* Clear = TeamClearButtons.IsValidIndex(TeamIndex) ? TeamClearButtons[TeamIndex].Get() : nullptr)
+			{
+				TSLobbyConsoleUI::ApplyButtonColor(Clear, bDanger ? S.ButtonIdleColor : S.ButtonSelectedColor, S);
+			}
+			if (UButton* Danger = TeamDangerButtons.IsValidIndex(TeamIndex) ? TeamDangerButtons[TeamIndex].Get() : nullptr)
+			{
+				TSLobbyConsoleUI::ApplyButtonColor(Danger, bDanger ? S.DangerColor : S.ButtonIdleColor, S);
 			}
 		}
 	}
@@ -654,6 +723,36 @@ void UTSRoleDebugWidget::OnStartMatchClicked()
 		PC->SetLobbyConsoleFocused(false);
 	}
 }
+
+UButton* UTSRoleDebugWidget::MakeCardButton(const FString& Label)
+{
+	UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+	UTSRoleDebugRowWidget::MakeButtonNonFocusable(Button);
+	TSLobbyConsoleUI::ApplyButtonColor(Button, ConsoleStyle.ButtonIdleColor, ConsoleStyle);
+
+	UTextBlock* Text = MakeText(Label, ConsoleStyle.FontSize - 3, true, ConsoleStyle.TextColor, 60);
+	Text->SetJustification(ETextJustify::Center);
+	Button->SetContent(Text);
+	return Button;
+}
+
+void UTSRoleDebugWidget::RequestTeamAlert(int32 TeamIndex, ETSTeamAlertState NewState)
+{
+	ATSTankPlayerController* PC = GetOwningPlayer<ATSTankPlayerController>();
+	if (PC && ConsoleTeams.IsValidIndex(TeamIndex))
+	{
+		PC->ServerHostSetTeamAlertState(ConsoleTeams[TeamIndex], NewState);
+	}
+}
+
+void UTSRoleDebugWidget::OnTeamAClearClicked()  { RequestTeamAlert(0, ETSTeamAlertState::NoDanger); }
+void UTSRoleDebugWidget::OnTeamADangerClicked() { RequestTeamAlert(0, ETSTeamAlertState::InDanger); }
+void UTSRoleDebugWidget::OnTeamBClearClicked()  { RequestTeamAlert(1, ETSTeamAlertState::NoDanger); }
+void UTSRoleDebugWidget::OnTeamBDangerClicked() { RequestTeamAlert(1, ETSTeamAlertState::InDanger); }
+void UTSRoleDebugWidget::OnTeamCClearClicked()  { RequestTeamAlert(2, ETSTeamAlertState::NoDanger); }
+void UTSRoleDebugWidget::OnTeamCDangerClicked() { RequestTeamAlert(2, ETSTeamAlertState::InDanger); }
+void UTSRoleDebugWidget::OnTeamDClearClicked()  { RequestTeamAlert(3, ETSTeamAlertState::NoDanger); }
+void UTSRoleDebugWidget::OnTeamDDangerClicked() { RequestTeamAlert(3, ETSTeamAlertState::InDanger); }
 
 FString UTSRoleDebugWidget::GetTankDisplayName(const APawn* Tank)
 {

@@ -21,6 +21,7 @@ class UMaterialInstanceDynamic;
 class UInstancedStaticMeshComponent;
 class USplineComponent;
 class UChaosWheeledVehicleMovementComponent;
+class ULightComponent;
 
 UCLASS(Blueprintable, BlueprintType)
 class TANK_SIM_V2_API ATSTankControllerBase : public AWheeledVehiclePawn, public ITSTankInterface
@@ -1132,6 +1133,54 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Weapons", meta = (ClampMin = "0.05"))
 	float MachineGunReleaseDelaySeconds = 0.25f;
 
+	// --- Team alert: the host's Danger / No Danger switch (prototype) ----------------------------
+	// The host sets a TEAM's alert level from the lobby console (ATSTankPlayerController::
+	// ServerHostSetTeamAlertState). ATSGameState stores it per team and pushes it here, onto that
+	// team's tank, which replicates it to every machine. Each machine then runs the lights itself -
+	// the spin is cosmetic, so it is never replicated frame by frame.
+	//
+	// What "in danger" looks like is Blueprint data (RULE 8): the warning lights are ordinary light
+	// components on the tank Blueprint, found here by NAME. A tank without them simply shows nothing,
+	// and says so in the log the first time it is put in danger.
+
+	// Server only. Called by ATSGameState::SetTeamAlertState - go through that, not this, or the
+	// lobby console and the tank will disagree about the team's state.
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Tank Simulation|Team Alert")
+	void SetTeamAlertState(ETSTeamAlertState NewState);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Team Alert")
+	ETSTeamAlertState GetTeamAlertState() const { return TeamAlertState; }
+
+	// Fires on every machine whenever the alert level changes, after the lights have been switched.
+	// For Blueprint extras on top (a siren sound, an emissive beacon material).
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tank Simulation|Team Alert")
+	void BP_OnTeamAlertStateChanged(ETSTeamAlertState NewState);
+
+	// Light components (by component name) that switch on and spin while the team is in danger.
+	// The VK1602 Blueprint's two spotlights are literally named with a space: "Warning Light" and
+	// "Warning Light1".
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Team Alert")
+	TArray<FName> WarningLightComponentNames = { TEXT("Warning Light"), TEXT("Warning Light1") };
+
+	// Siren spin, about the light's parent Z axis. Negative spins the other way.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Team Alert", meta = (Units = "DegreesPerSecond"))
+	float WarningLightRotationSpeed = 360.f;
+
+	// On (default): clearing the danger switches the lights off and returns them to their authored
+	// rotation, i.e. back to exactly how the tank spawned. Off: they stay lit and just stop spinning
+	// where they are.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Team Alert")
+	bool bTurnWarningLightsOffWhenClear = true;
+
+protected:
+	UPROPERTY(ReplicatedUsing = OnRep_TeamAlertState, BlueprintReadOnly, Category = "Tank Simulation|Team Alert")
+	ETSTeamAlertState TeamAlertState = ETSTeamAlertState::NoDanger;
+
+	UFUNCTION()
+	void OnRep_TeamAlertState();
+
+public:
+
 private:
 	double LastInteriorLogTime = 0.0;
 	float DisplayThrottle = 0.f;
@@ -1149,6 +1198,24 @@ private:
 	FTimerHandle WeaponStopTimerHandle;
 	bool bWeaponFiring = false;
 	void ReleaseWeaponTrigger();
+
+	// Team alert lights - see WarningLightComponentNames. Resolved lazily, because on a client the
+	// first OnRep can arrive before BeginPlay.
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<ULightComponent>> ResolvedWarningLights;
+
+	// Each light's authored relative rotation, parallel to ResolvedWarningLights. The spin is applied
+	// on top of this, so the authored tilt of the beam is kept while it turns.
+	TArray<FQuat> WarningLightRestRotations;
+
+	bool bWarningLightsResolved = false;
+	bool bWarnedMissingWarningLights = false;
+	float WarningLightSpinDegrees = 0.f;
+
+	void ResolveWarningLights();
+	void ApplyTeamAlertState();
+	void UpdateWarningLights(float InDeltaSeconds);
+	void SetWarningLightSpin(float Degrees);
 
 	// Resolved once at BeginPlay from CrewViewCaptureComponents - the name lookup is not worth
 	// repeating every frame.

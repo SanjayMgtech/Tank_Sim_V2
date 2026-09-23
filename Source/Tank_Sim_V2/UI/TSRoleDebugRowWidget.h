@@ -84,6 +84,10 @@ struct FTSLobbyConsoleStyle
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Teams")
 	FLinearColor NoTeamColor = FLinearColor(0.34f, 0.37f, 0.42f, 1.f);
 
+	// A team the host has put IN DANGER: its card's alert line and the selected DANGER button.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Teams")
+	FLinearColor DangerColor = FLinearColor(0.86f, 0.13f, 0.1f, 1.f);
+
 	FLinearColor GetTeamColor(ETSTeamId Team) const;
 };
 

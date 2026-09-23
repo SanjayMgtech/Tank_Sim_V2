@@ -169,6 +169,19 @@ private:
 	UFUNCTION()
 	void OnStartMatchClicked();
 
+	// Team alert (Danger / No Danger) buttons on each team card. Host only - clients see just the
+	// status line. UButton::OnClicked carries no payload, hence one handler per team and state.
+	UButton* MakeCardButton(const FString& Label);
+	void RequestTeamAlert(int32 TeamIndex, ETSTeamAlertState NewState);
+	UFUNCTION() void OnTeamAClearClicked();
+	UFUNCTION() void OnTeamADangerClicked();
+	UFUNCTION() void OnTeamBClearClicked();
+	UFUNCTION() void OnTeamBDangerClicked();
+	UFUNCTION() void OnTeamCClearClicked();
+	UFUNCTION() void OnTeamCDangerClicked();
+	UFUNCTION() void OnTeamDClearClicked();
+	UFUNCTION() void OnTeamDDangerClicked();
+
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UTSRoleDebugRowWidget>> PlayerRows;
 
@@ -194,6 +207,18 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UTextBlock>> TeamCountTexts;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UTextBlock>> TeamAlertTexts;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UPanelWidget>> TeamAlertButtonRows;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UButton>> TeamClearButtons;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UButton>> TeamDangerButtons;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UScrollBox> RootScrollBox;

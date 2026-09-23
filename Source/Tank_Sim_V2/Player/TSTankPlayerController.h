@@ -338,6 +338,12 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Lobby")
 	void ServerRequestStartMatch();
 
+	// Host only, re-checked server-side. Sets a whole TEAM's alert level (Danger / No Danger), which
+	// the team's tank shows - on the VK1602 its warning lights switch on and spin. Allowed before
+	// the team's tank exists; it picks the state up when it spawns.
+	UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category = "Tank Simulation|Team Alert")
+	void ServerHostSetTeamAlertState(ETSTeamId TeamId, ETSTeamAlertState NewState);
+
 	// --- Lobby console focus ---------------------------------------------------------------------
 	// Whether this local player's cursor is being lent to the lobby console. This is deliberately NOT
 	// derived from the match state: doing so meant the host held FInputModeGameAndUI (no camera look,
@@ -382,6 +388,10 @@ public:
 	// Host only (re-checked server-side). Ends the assignment phase.
 	UFUNCTION(Exec)
 	void TSStartMatch();
+
+	// TSTeamAlert <A|B|C|D> <danger|clear|toggle>. Host only (re-checked server-side).
+	UFUNCTION(Exec)
+	void TSTeamAlert(const FString& Team, const FString& State);
 
 	// TSDrive <throttle> <steering> <seconds>. Holds the drive input for a duration, because a single
 	// call is cleared by Chaos on the next tick and proves nothing.

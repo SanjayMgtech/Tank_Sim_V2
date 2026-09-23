@@ -27,6 +27,16 @@ enum class ETSTeamId : uint8
 	TeamD	UMETA(DisplayName = "Team D")
 };
 
+// A team's alert level, set by the host from the lobby console (prototype). Replicated per team on
+// ATSGameState and mirrored onto the team's tank, which turns it into something visible - on the
+// VK1602 its two rotating warning spotlights. See ATSTankControllerBase::TeamAlertState.
+UENUM(BlueprintType)
+enum class ETSTeamAlertState : uint8
+{
+	NoDanger	UMETA(DisplayName = "No Danger"),
+	InDanger	UMETA(DisplayName = "In Danger")
+};
+
 // How a player is embodied in the match. Assigned by the host alongside team and crew role, and
 // changeable mid-match by the player themselves - it decides WHICH crew pawn the PlayerController
 // possesses (ATSDesktopPawn or ATSVRPawn), not merely whether stereo rendering is on.
@@ -304,4 +314,7 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
 	static FString VoiceChannelToString(ETSVoiceChannel Channel);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Utils")
+	static FString TeamAlertStateToString(ETSTeamAlertState State);
 };

@@ -2,6 +2,7 @@
 
 #include "Net/UnrealNetwork.h"
 #include "Player/TSTankPlayerState.h"
+#include "Tank/TSTankControllerBase.h"
 #include "Tank/TSTankCrewComponent.h"
 
 void ATSGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -11,6 +12,7 @@ void ATSGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ATSGameState, MatchState);
 	DOREPLIFETIME(ATSGameState, TeamTankEntries);
 	DOREPLIFETIME(ATSGameState, LobbyCode);
+	DOREPLIFETIME(ATSGameState, TeamAlertStates);
 }
 
 void ATSGameState::AddPlayerState(APlayerState* PlayerState)
@@ -120,6 +122,7 @@ void ATSGameState::RegisterTeamTank(ETSTeamId TeamId, APawn* Tank)
 		if (Entry.TeamId == TeamId)
 		{
 			Entry.AssignedTank = Tank;
+			PushTeamAlertStateToTank(TeamId, Tank);
 			OnRep_TeamTankEntries();
 			return;
 		}
@@ -129,6 +132,7 @@ void ATSGameState::RegisterTeamTank(ETSTeamId TeamId, APawn* Tank)
 	NewEntry.TeamId = TeamId;
 	NewEntry.AssignedTank = Tank;
 	TeamTankEntries.Add(NewEntry);
+	PushTeamAlertStateToTank(TeamId, Tank);
 	OnRep_TeamTankEntries();
 }
 
@@ -140,6 +144,50 @@ void ATSGameState::OnRep_MatchState()
 void ATSGameState::OnRep_TeamTankEntries()
 {
 	OnTeamTanksChanged.Broadcast();
+}
+
+namespace
+{
+	// TeamA = 0 .. TeamD = 3, INDEX_NONE for None.
+	int32 TeamAlertIndex(ETSTeamId TeamId)
+	{
+		return TeamId == ETSTeamId::None ? INDEX_NONE : static_cast<int32>(TeamId) - 1;
+	}
+}
+
+ETSTeamAlertState ATSGameState::GetTeamAlertState(ETSTeamId TeamId) const
+{
+	const int32 Index = TeamAlertIndex(TeamId);
+	return TeamAlertStates.IsValidIndex(Index) ? TeamAlertStates[Index] : ETSTeamAlertState::NoDanger;
+}
+
+bool ATSGameState::SetTeamAlertState(ETSTeamId TeamId, ETSTeamAlertState NewState)
+{
+	const int32 Index = TeamAlertIndex(TeamId);
+	if (!HasAuthority() || !TeamAlertStates.IsValidIndex(Index))
+	{
+		return false;
+	}
+
+	TeamAlertStates[Index] = NewState;
+	PushTeamAlertStateToTank(TeamId, FindTankForTeam(TeamId));
+	OnRep_TeamAlertStates();
+	return true;
+}
+
+void ATSGameState::PushTeamAlertStateToTank(ETSTeamId TeamId, APawn* Tank) const
+{
+	// The tank carries its own replicated copy, so every machine that has the tank also has its
+	// state - including a late joiner - without the tank having to know which team it belongs to.
+	if (ATSTankControllerBase* TankBase = Cast<ATSTankControllerBase>(Tank))
+	{
+		TankBase->SetTeamAlertState(GetTeamAlertState(TeamId));
+	}
+}
+
+void ATSGameState::OnRep_TeamAlertStates()
+{
+	OnTeamAlertStatesChanged.Broadcast();
 }
 
 void ATSGameState::OnRep_LobbyCode()

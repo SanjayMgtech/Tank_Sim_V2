@@ -5,6 +5,7 @@
 #include "Components/InputComponent.h"
 #include "Core/TSGameInstance.h"
 #include "Core/TSGameMode.h"
+#include "Core/TSGameState.h"
 #include "Core/TSTypes.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -610,6 +611,38 @@ void ATSTankPlayerController::TSStartMatch()
 	UE_LOG(LogTankSim, Log, TEXT("TSStartMatch: requesting (IsMatchHost=%s locally)"),
 		IsMatchHost() ? TEXT("true") : TEXT("false"));
 	ServerRequestStartMatch();
+#endif
+}
+
+void ATSTankPlayerController::TSTeamAlert(const FString& Team, const FString& State)
+{
+#if !UE_BUILD_SHIPPING
+	ETSTeamId TeamId = ETSTeamId::None;
+	if (!ParseTeam(Team, TeamId))
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("TSTeamAlert: unknown team '%s'. Usage: TSTeamAlert <A|B|C|D> <danger|clear|toggle>"), *Team);
+		return;
+	}
+
+	ETSTeamAlertState NewState;
+	if (State.Equals(TEXT("danger"), ESearchCase::IgnoreCase) || State.Equals(TEXT("on"), ESearchCase::IgnoreCase))
+	{
+		NewState = ETSTeamAlertState::InDanger;
+	}
+	else if (State.Equals(TEXT("clear"), ESearchCase::IgnoreCase) || State.Equals(TEXT("off"), ESearchCase::IgnoreCase))
+	{
+		NewState = ETSTeamAlertState::NoDanger;
+	}
+	else
+	{
+		const ATSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ATSGameState>() : nullptr;
+		NewState = GS && GS->GetTeamAlertState(TeamId) == ETSTeamAlertState::InDanger
+			? ETSTeamAlertState::NoDanger : ETSTeamAlertState::InDanger;
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("TSTeamAlert: requesting %s -> %s"),
+		*UTSTypeUtils::TeamIdToString(TeamId), *UTSTypeUtils::TeamAlertStateToString(NewState));
+	ServerHostSetTeamAlertState(TeamId, NewState);
 #endif
 }
 
@@ -1506,6 +1539,26 @@ void ATSTankPlayerController::ServerRequestStartMatch_Implementation()
 bool ATSTankPlayerController::ServerRequestStartMatch_Validate()
 {
 	return true;
+}
+
+void ATSTankPlayerController::ServerHostSetTeamAlertState_Implementation(ETSTeamId TeamId, ETSTeamAlertState NewState)
+{
+	// Re-checked here, not just on the button: a Server RPC's HasAuthority() is trivially true.
+	if (!IsMatchHost())
+	{
+		return;
+	}
+
+	ATSGameState* GS = GetWorld()->GetGameState<ATSGameState>();
+	const bool bSet = GS && GS->SetTeamAlertState(TeamId, NewState);
+	UE_LOG(LogTankSim, Log, TEXT("Host set team alert: %s -> %s (%s)"),
+		*UTSTypeUtils::TeamIdToString(TeamId), *UTSTypeUtils::TeamAlertStateToString(NewState),
+		bSet ? TEXT("ok") : TEXT("rejected"));
+}
+
+bool ATSTankPlayerController::ServerHostSetTeamAlertState_Validate(ETSTeamId TeamId, ETSTeamAlertState NewState)
+{
+	return TeamId != ETSTeamId::None;
 }
 
 void ATSTankPlayerController::ServerRequestRoleChange_Implementation(ETSCrewRole NewRole)

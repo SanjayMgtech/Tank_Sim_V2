@@ -85,6 +85,11 @@ FString UTSTypeUtils::PlayModeDenialToString(ETSPlayModeDenial Denial)
 	return EnumDisplayName(Denial);
 }
 
+FString UTSTypeUtils::TeamAlertStateToString(ETSTeamAlertState State)
+{
+	return EnumDisplayName(State);
+}
+
 FString UTSTypeUtils::VoiceChannelToString(ETSVoiceChannel Channel)
 {
 	switch (Channel)
