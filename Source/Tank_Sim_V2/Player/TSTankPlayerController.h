@@ -575,10 +575,17 @@ protected:
 	// reasons and at the same moments as RefreshCommanderScreen.
 	void RefreshHostVoicePanel();
 
-	// Optional Blueprint restyle of the debug panel. Left empty, the pure-C++ UTSRoleDebugWidget is
-	// used, so no WBP asset is required.
+	// Optional Blueprint restyle of the lobby console. Takes precedence over HostLobbyConsoleClass.
+	// Left empty, HostLobbyConsoleClass is used, and failing that the pure-C++ UTSRoleDebugWidget - so
+	// no WBP asset is required.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
 	TSubclassOf<UTSRoleDebugWidget> RoleDebugWidgetClass;
+
+	// The lobby console Widget Blueprint (WBP_HostLobbyConsole), set in DefaultGame.ini because this
+	// controller has no Blueprint of its own to hold the reference. A soft pointer loaded on first
+	// show, never in the constructor (RULE 2).
+	UPROPERTY(Config, EditDefaultsOnly, Category = "Tank Simulation|Debug")
+	TSoftClassPtr<UTSRoleDebugWidget> HostLobbyConsoleClass;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Debug")
 	int32 RoleDebugWidgetZOrder = 1000;

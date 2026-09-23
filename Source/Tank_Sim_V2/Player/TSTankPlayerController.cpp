@@ -750,6 +750,15 @@ void ATSTankPlayerController::ShowRoleDebugWidget(bool bShow)
 	if (!RoleDebugWidget)
 	{
 		TSubclassOf<UTSRoleDebugWidget> WidgetClass = RoleDebugWidgetClass;
+		if (!WidgetClass && !HostLobbyConsoleClass.IsNull())
+		{
+			WidgetClass = HostLobbyConsoleClass.LoadSynchronous();
+			if (!WidgetClass)
+			{
+				UE_LOG(LogTankSim, Warning, TEXT("ATSTankPlayerController: HostLobbyConsoleClass '%s' did not load - using the plain C++ lobby console."),
+					*HostLobbyConsoleClass.ToString());
+			}
+		}
 		if (!WidgetClass)
 		{
 			WidgetClass = UTSRoleDebugWidget::StaticClass();
