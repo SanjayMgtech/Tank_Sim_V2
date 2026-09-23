@@ -8,6 +8,8 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialParameterCollection.h"
+#include "Materials/MaterialParameterCollectionInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
@@ -341,6 +343,8 @@ void ATSTankControllerBase::Tick(float InDeltaSeconds)
 	UpdateInteriorControlState(InDeltaSeconds);
 
 	UpdateCrewViewCapture(InDeltaSeconds);
+
+	UpdateCompassHeadings();
 
 	UpdateWarningLights(InDeltaSeconds);
 }
@@ -1066,6 +1070,58 @@ FRotator ATSTankControllerBase::GetMainGunAimRotation() const
 
 	// No roll: the gun elevates and the turret traverses, neither of them banks.
 	return FRotator(Pitch, Yaw, 0.0);
+}
+
+float ATSTankControllerBase::GetHullCompassHeading() const
+{
+	return static_cast<float>(FRotator::ClampAxis(GetActorRotation().Yaw));
+}
+
+float ATSTankControllerBase::GetTurretCompassHeading() const
+{
+	// TurretsRot is in the tank's own space, so the world heading is the hull's plus the traverse.
+	const double Traverse = TurretsRot.Num() > 0 ? TurretsRot[0].Yaw : 0.0;
+	return static_cast<float>(FRotator::ClampAxis(GetActorRotation().Yaw + Traverse));
+}
+
+void ATSTankControllerBase::UpdateCompassHeadings()
+{
+	// Only the tank the person at THIS machine is crewing may write: the collection is global to
+	// the world, so every other tank writing too would make the compass show whichever tank ticked
+	// last. Remote copies and a dedicated server get None here and do nothing.
+	if (GetLocalCrewRoleOnThisTank() == ETSCrewRole::None)
+	{
+		return;
+	}
+
+	if (!CompassParameterCollection)
+	{
+		if (!bWarnedCompassCollectionMissing)
+		{
+			bWarnedCompassCollectionMissing = true;
+			UE_LOG(LogTankSim, Warning,
+				TEXT("[Compass] %s has no CompassParameterCollection set, so the periscope compasses will not turn. Set it to MPC_Compass in the tank Blueprint's Class Defaults."),
+				*GetName());
+		}
+		return;
+	}
+
+	UMaterialParameterCollectionInstance* Instance = GetWorld()->GetParameterCollectionInstance(CompassParameterCollection);
+	if (!Instance)
+	{
+		return;
+	}
+
+	const bool bHull = Instance->SetScalarParameterValue(HullHeadingParameterName, GetHullCompassHeading());
+	const bool bTurret = Instance->SetScalarParameterValue(TurretHeadingParameterName, GetTurretCompassHeading());
+	if ((!bHull || !bTurret) && !bWarnedCompassParameterMissing)
+	{
+		bWarnedCompassParameterMissing = true;
+		UE_LOG(LogTankSim, Warning,
+			TEXT("[Compass] %s: '%s' has no scalar named '%s' - that compass will not turn."),
+			*GetName(), *CompassParameterCollection->GetName(),
+			*(!bHull ? HullHeadingParameterName : TurretHeadingParameterName).ToString());
+	}
 }
 
 FVector ATSTankControllerBase::GetTurretPivotLocation() const

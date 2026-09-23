@@ -1005,6 +1005,33 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View", meta = (ClampMin = "0.0", ClampMax = "240.0"))
 	float CrewViewCaptureHz = 30.f;
 
+	// --- Periscope compasses -------------------------------------------------------------------
+	// MF_HUDCompass reads its heading out of a Material Parameter Collection, so the tank the local
+	// player is crewing pushes two headings into it every tick: the HULL's for the Driver's view and
+	// the TURRET's for the Gunner's sight. Only that one tank writes, so one shared collection is
+	// safe for the same reason one shared render target per station is (see above).
+	//
+	// The collection is Blueprint data (RULE 2) - leave it empty to switch the compasses off.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View|Compass")
+	TObjectPtr<class UMaterialParameterCollection> CompassParameterCollection;
+
+	// Scalar in CompassParameterCollection that receives GetHullCompassHeading().
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View|Compass")
+	FName HullHeadingParameterName = TEXT("HullHeading");
+
+	// Scalar in CompassParameterCollection that receives GetTurretCompassHeading().
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View|Compass")
+	FName TurretHeadingParameterName = TEXT("TurretHeading");
+
+	// Compass heading of the hull in degrees, 0..360. 0 = North = world +X, 90 = East = world +Y.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew View|Compass")
+	float GetHullCompassHeading() const;
+
+	// Compass heading the turret faces in degrees, 0..360: hull yaw plus the ACHIEVED turret
+	// traverse (TurretsRot[0], what the barrel is drawn from - see GetMainGunAimRotation).
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew View|Compass")
+	float GetTurretCompassHeading() const;
+
 	// Strip the effects a periscope image does not need. Off renders the station view with the same
 	// settings as the main view, which looks marginally better and costs a great deal more.
 	//
@@ -1253,6 +1280,14 @@ private:
 
 	float CrewViewCaptureAccumulator = 0.f;
 	float CrewViewRoleRefreshAccumulator = 0.f;
+
+	// Writes both compass headings into CompassParameterCollection when the local player crews this
+	// tank. Runs after Super::Tick, so the turret heading is this frame's.
+	void UpdateCompassHeadings();
+
+	// One warning each per tank, not one per frame.
+	bool bWarnedCompassCollectionMissing = false;
+	bool bWarnedCompassParameterMissing = false;
 
 public:
 	virtual void BP_UpdateCommanderIntel_Implementation(const FTSCommanderIntel& Intel) override;
