@@ -19,7 +19,9 @@
 #include "Misc/PackageName.h"
 #include "Tank_Sim_V2.h"
 #include "UI/TSRoleDebugRowWidget.h"
+#include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 
 namespace
@@ -224,18 +226,47 @@ void UTSSessionBrowserWidget::ShowLoadingText(const FString& Message)
 			return;
 		}
 
-		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle("Bold", 24);
+		// A lobby-console status badge: rounded panel, amber accent bar, letter-spaced bold text. SBorder
+		// keeps a raw pointer to its brush, so the brushes are statics rather than locals.
+		const FTSLobbyConsoleStyle Style;
+		static const FSlateBrush PanelBrush = TSLobbyConsoleUI::MakeRoundedBrush(Style.PanelColor, Style.CornerRadius + 4.f);
+		static const FSlateBrush AccentBrush = TSLobbyConsoleUI::MakeRoundedBrush(Style.AccentColor, 2.f);
+
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle("Bold", Style.FontSize + 2);
+		Font.LetterSpacing = 80;
+
 		LoadingOverlay = SNew(SBox)
 			.HAlign(HAlign_Center)
 			.VAlign(VAlign_Bottom)
 			.Padding(FMargin(0.f, 0.f, 0.f, 48.f))
 			.Visibility(EVisibility::HitTestInvisible)
 			[
-				SAssignNew(LoadingTextBlock, STextBlock)
-				.Font(Font)
-				.ColorAndOpacity(FLinearColor::White)
-				.ShadowOffset(FVector2D(1.f, 1.f))
-				.ShadowColorAndOpacity(FLinearColor(0.f, 0.f, 0.f, 0.8f))
+				SNew(SBorder)
+				.BorderImage(&PanelBrush)
+				.Padding(FMargin(16.f, 10.f))
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(FMargin(0.f, 0.f, 10.f, 0.f))
+					[
+						SNew(SBox)
+						.WidthOverride(4.f)
+						.HeightOverride(Style.FontSize + 8.f)
+						[
+							SNew(SBorder).BorderImage(&AccentBrush)
+						]
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					[
+						SAssignNew(LoadingTextBlock, STextBlock)
+						.Font(Font)
+						.ColorAndOpacity(Style.TextColor)
+					]
+				]
 			];
 
 		// High Z-order so it sits above the session browser itself.
