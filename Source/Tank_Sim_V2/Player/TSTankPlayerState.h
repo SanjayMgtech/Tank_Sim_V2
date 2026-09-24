@@ -30,6 +30,23 @@ public:
 	virtual void CopyProperties(APlayerState* PlayerState) override;
 	virtual void OverrideWith(APlayerState* PlayerState) override;
 
+	// Team privacy. Another player's PlayerState - their name, team, seat, voice lamp - is only
+	// replicated to a connection allowed to know about them (see CanPlayerSeePlayer). The rest of the
+	// match simply does not exist on that client: not hidden by a widget, never sent.
+	virtual bool IsNetRelevantFor(const AActor* RealViewer, const AActor* ViewTarget, const FVector& SrcLocation) const override;
+
+	// The whole rule, on plain data so it can be tested without a NetDriver:
+	//   yourself                  always
+	//   the host                  sees everyone, and is seen by everyone (it holds no team or seat)
+	//   a teammate                only while both of you are on the same, real team
+	//   anyone else               never - including everyone while you have no team
+	static bool CanPlayerSeePlayer(bool bSamePlayer, bool bViewerIsHost, ETSTeamId ViewerTeam,
+		bool bTargetIsHost, ETSTeamId TargetTeam);
+
+	// Off restores the engine default (every PlayerState replicates to everyone).
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Networking")
+	bool bReplicateOnlyToTeammates = true;
+
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation")
 	ETSTeamId GetTeamId() const { return TeamId; }
 
@@ -118,6 +135,9 @@ public:
 	FTSOnAssignmentChanged OnAssignmentChanged;
 
 protected:
+	// Server: a team or host change reshapes who may see whom - see IsNetRelevantFor.
+	void RefreshTeamRelevancy();
+
 	UPROPERTY(ReplicatedUsing = OnRep_Assignment, BlueprintReadOnly, Category = "Tank Simulation")
 	ETSTeamId TeamId = ETSTeamId::None;
 

@@ -1,6 +1,9 @@
 #include "Player/TSTankPlayerState.h"
 
 #include "Net/UnrealNetwork.h"
+#include "GameFramework/GameStateBase.h"
+#include "GameFramework/PlayerController.h"
+#include "Engine/World.h"
 
 void ATSTankPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -80,6 +83,70 @@ void ATSTankPlayerState::OverrideWith(APlayerState* PlayerState)
 	}
 }
 
+bool ATSTankPlayerState::CanPlayerSeePlayer(bool bSamePlayer, bool bViewerIsHost, ETSTeamId ViewerTeam,
+	bool bTargetIsHost, ETSTeamId TargetTeam)
+{
+	if (bSamePlayer || bViewerIsHost || bTargetIsHost)
+	{
+		return true;
+	}
+	// None == None is not a team. Two unassigned players are strangers, not teammates.
+	return ViewerTeam != ETSTeamId::None && ViewerTeam == TargetTeam;
+}
+
+bool ATSTankPlayerState::IsNetRelevantFor(const AActor* RealViewer, const AActor* ViewTarget, const FVector& SrcLocation) const
+{
+	if (!bReplicateOnlyToTeammates)
+	{
+		return Super::IsNetRelevantFor(RealViewer, ViewTarget, SrcLocation);
+	}
+
+	// A connection always gets its own PlayerState (owned by its PlayerController).
+	if (IsOwnedBy(RealViewer) || IsOwnedBy(ViewTarget))
+	{
+		return true;
+	}
+
+	// Not a player's connection at all (a replay recorder's spectator): nothing to keep private from.
+	const APlayerController* ViewerPC = Cast<APlayerController>(RealViewer);
+	if (!ViewerPC)
+	{
+		return Super::IsNetRelevantFor(RealViewer, ViewTarget, SrcLocation);
+	}
+
+	// A connection whose PlayerState does not exist yet knows nobody. Failing closed here matters:
+	// a channel opened now would stay open for RelevantTimeout after the PlayerState arrives.
+	const ATSTankPlayerState* ViewerPS = ViewerPC->GetPlayerState<ATSTankPlayerState>();
+	if (!ViewerPS)
+	{
+		return false;
+	}
+
+	return CanPlayerSeePlayer(ViewerPS == this, ViewerPS->IsHost(), ViewerPS->GetTeamId(), IsHost(), GetTeamId());
+}
+
+void ATSTankPlayerState::RefreshTeamRelevancy()
+{
+	// Relevancy is re-evaluated only when an actor comes up for replication, and a PlayerState's
+	// NetUpdateFrequency is 1Hz. A team change alters what EVERY connection may see - this player's
+	// visibility to others and theirs to this player - so wake every PlayerState up now rather than
+	// leaving new teammates missing for up to a second. ForceNetUpdate only schedules; it does not
+	// force relevancy, so it cannot leak anything.
+	const UWorld* World = GetWorld();
+	const AGameStateBase* GS = World ? World->GetGameState() : nullptr;
+	if (!HasAuthority() || !GS)
+	{
+		return;
+	}
+	for (APlayerState* Other : GS->PlayerArray)
+	{
+		if (Other)
+		{
+			Other->ForceNetUpdate();
+		}
+	}
+}
+
 void ATSTankPlayerState::SetTeamId(ETSTeamId NewTeamId)
 {
 	if (!HasAuthority() || TeamId == NewTeamId)
@@ -88,6 +155,7 @@ void ATSTankPlayerState::SetTeamId(ETSTeamId NewTeamId)
 	}
 	TeamId = NewTeamId;
 	OnRep_Assignment();
+	RefreshTeamRelevancy();
 }
 
 void ATSTankPlayerState::SetCrewRole(ETSCrewRole NewRole)
@@ -118,6 +186,7 @@ void ATSTankPlayerState::SetIsHost(bool bNewIsHost)
 	}
 	bIsHost = bNewIsHost;
 	OnRep_Assignment();
+	RefreshTeamRelevancy();
 }
 
 void ATSTankPlayerState::SetPlayMode(ETSPlayMode NewPlayMode)

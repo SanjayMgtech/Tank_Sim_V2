@@ -3930,3 +3930,25 @@ test run must not be read as "voice works". What is owed:
 
 The pawn changes add `UPROPERTY`s and several new `UCLASS`es, so **Live Coding cannot carry them** -
 close the editor and rebuild before testing.
+
+## 🔒 Team privacy — a client is only sent its own team's PlayerStates (2026-09-24)
+
+`ATSTankPlayerState::IsNetRelevantFor` restricts which PlayerStates replicate to each connection
+(`CanPlayerSeePlayer`, tested by `TankSim.Net.TeamPrivacy`): yourself, your teammates, and the
+host. The host's connection gets everyone. An unassigned player gets only themselves and the host.
+Other teams' players are never sent, so `GameState->PlayerArray` on a client holds only those.
+`bReplicateOnlyToTeammates` (default on) turns it off.
+
+Consequences worth knowing before building client-side features:
+- **A PlayerState pointer to another team's player resolves to null on a client.** That covers
+  `UTSTankCrewComponent`'s occupant pointers on other teams' tanks and `APawn::PlayerState` on
+  their crew pawns. Anything client-side that needs to know about other teams must get it from
+  server-built data (the way the radar gets `FTSCommanderIntel`), not by walking PlayerStates.
+- **After a team change, the old channel stays open for `RelevantTimeout` (5s by default).** During
+  that window a former teammate's PlayerState is still present, with their NEW team on it. UI must
+  therefore filter by team as well; `UTSRoleDebugWidget` does. `RefreshTeamRelevancy` forces a net
+  update on every PlayerState so new teammates appear at once rather than at the 1Hz PlayerState rate.
+- Voice is unaffected. Every audible pair is either same-team or involves the host, and the host's
+  PlayerState is relevant to everyone.
+- Legacy NetDriver only. The project does not enable Iris, which ignores `IsNetRelevantFor`. If
+  Iris is ever turned on, this has to move to an Iris net-object filter.
