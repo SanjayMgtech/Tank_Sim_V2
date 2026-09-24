@@ -18,6 +18,7 @@
 #include "Engine/World.h"
 #include "Misc/PackageName.h"
 #include "Tank_Sim_V2.h"
+#include "UI/TSRoleDebugRowWidget.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -59,14 +60,18 @@ void UTSSessionBrowserWidget::BuildMapPicker()
 		return;
 	}
 
+	// The lobby console's look (its style defaults), so the picker matches WBP_SessionBrowser's panel.
+	const FTSLobbyConsoleStyle Style;
+
 	UVerticalBox* PickerRoot = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("MapPicker"));
 
 	UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("MapPicker_Title"));
 	Title->SetText(FText::FromString(TEXT("SELECT MAP")));
-	Title->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 16));
+	Title->SetColorAndOpacity(FSlateColor(Style.AccentColor));
+	TSLobbyConsoleUI::SetFont(Title, Style.FontSize - 1, true, 150);
 	if (UVerticalBoxSlot* TitleSlot = PickerRoot->AddChildToVerticalBox(Title))
 	{
-		TitleSlot->SetPadding(FMargin(0.f, 0.f, 0.f, 4.f));
+		TitleSlot->SetPadding(FMargin(0.f, 0.f, 0.f, 6.f));
 	}
 
 	UHorizontalBox* Tiles = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("MapPicker_Tiles"));
@@ -79,8 +84,9 @@ void UTSSessionBrowserWidget::BuildMapPicker()
 		UButton* TileButton = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
 		TileButton->SetBackgroundColor(FLinearColor(0.f, 0.f, 0.f, 0.f));
 
-		// The frame is what changes colour on selection.
+		// The frame is what changes colour on selection: a white rounded brush, tinted by BrushColor.
 		UBorder* Frame = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		Frame->SetBrush(TSLobbyConsoleUI::MakeRoundedBrush(FLinearColor::White, Style.CornerRadius));
 		Frame->SetPadding(FMargin(4.f));
 		Frame->SetBrushColor(UnselectedTileColor);
 		TileButton->AddChild(Frame);
@@ -108,7 +114,8 @@ void UTSSessionBrowserWidget::BuildMapPicker()
 		MapLabel->SetText(Option.DisplayName.IsEmpty()
 			? FText::FromString(FPackageName::GetShortName(Option.GetMapPath()))
 			: Option.DisplayName);
-		MapLabel->SetFont(FCoreStyle::GetDefaultFontStyle("Bold", 12));
+		MapLabel->SetColorAndOpacity(FSlateColor(Style.TextColor));
+		TSLobbyConsoleUI::SetFont(MapLabel, Style.FontSize, true);
 		MapLabel->SetJustification(ETextJustify::Center);
 		if (UVerticalBoxSlot* LabelSlot = TileContent->AddChildToVerticalBox(MapLabel))
 		{
@@ -130,7 +137,8 @@ void UTSSessionBrowserWidget::BuildMapPicker()
 	}
 
 	SelectedMapLabel = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("MapPicker_Selected"));
-	SelectedMapLabel->SetFont(FCoreStyle::GetDefaultFontStyle("Regular", 12));
+	SelectedMapLabel->SetColorAndOpacity(FSlateColor(Style.MutedTextColor));
+	TSLobbyConsoleUI::SetFont(SelectedMapLabel, Style.FontSize - 1, false);
 	if (UVerticalBoxSlot* SelectedSlot = PickerRoot->AddChildToVerticalBox(SelectedMapLabel))
 	{
 		SelectedSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 8.f));
