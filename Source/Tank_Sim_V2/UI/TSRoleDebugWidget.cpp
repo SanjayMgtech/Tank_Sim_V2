@@ -452,7 +452,9 @@ void UTSRoleDebugWidget::RefreshHeader()
 	if (PlayersHeaderText)
 	{
 		const int32 Unseated = ListedPlayerCount - SeatedPlayerCount;
-		FString Header = FString::Printf(TEXT("PLAYERS  ·  %d CONNECTED"), ListedPlayerCount);
+		FString Header = bIsHost
+			? FString::Printf(TEXT("PLAYERS  ·  %d CONNECTED"), ListedPlayerCount)
+			: FString::Printf(TEXT("YOUR TEAM  ·  %d"), ListedPlayerCount);
 		if (Unseated > 0)
 		{
 			Header += FString::Printf(TEXT("  ·  %d WITHOUT A SEAT"), Unseated);
@@ -475,8 +477,19 @@ void UTSRoleDebugWidget::RefreshTeamCards()
 	{
 		return;
 	}
-	TeamCardsBox->SetVisibility(bShowTeamTanks ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
-	if (!bShowTeamTanks)
+	const ATSTankPlayerController* OwningPC = GetOwningPlayer<ATSTankPlayerController>();
+	const bool bViewerIsHost = OwningPC && OwningPC->IsMatchHost();
+
+	// Only the host gets the whole-match overview. A crew member sees their own team's card and
+	// nothing else - other teams' tanks and crews are not theirs to know. No team yet: no cards.
+	const ETSTeamId ViewerTeam = GetViewerTeam();
+	const bool bAnyCardVisible = bShowTeamTanks && (bViewerIsHost || ViewerTeam != ETSTeamId::None);
+	if (TeamsHeaderText)
+	{
+		TeamsHeaderText->SetVisibility(bAnyCardVisible ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	TeamCardsBox->SetVisibility(bAnyCardVisible ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
+	if (!bAnyCardVisible)
 	{
 		return;
 	}
@@ -485,14 +498,13 @@ void UTSRoleDebugWidget::RefreshTeamCards()
 
 	const ATSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ATSGameState>() : nullptr;
 	const FTSLobbyConsoleStyle& S = ConsoleStyle;
-	const ATSTankPlayerController* OwningPC = GetOwningPlayer<ATSTankPlayerController>();
-	const bool bViewerIsHost = OwningPC && OwningPC->IsMatchHost();
 
 	for (int32 TeamIndex = 0; TeamIndex < TeamCards.Num(); ++TeamIndex)
 	{
 		// The card's parent is its SizeBox; hide that so a hidden team leaves no gap in the wrap box.
 		UWidget* CardRoot = TeamCards[TeamIndex] ? TeamCards[TeamIndex]->GetParent() : nullptr;
-		const bool bVisible = TeamIndex < NumTeams;
+		const bool bVisible = TeamIndex < NumTeams
+			&& (bViewerIsHost || ConsoleTeams[TeamIndex] == ViewerTeam);
 		if (CardRoot)
 		{
 			CardRoot->SetVisibility(bVisible ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
@@ -611,15 +623,26 @@ void UTSRoleDebugWidget::RefreshPlayerRows()
 		return;
 	}
 
+	// The host sees every player. Anyone else sees only their own team (themselves included), or
+	// just themselves while they have no team - other teams' players and seats are hidden.
+	const ATSTankPlayerController* OwningPC = GetOwningPlayer<ATSTankPlayerController>();
+	const bool bViewerIsHost = OwningPC && OwningPC->IsMatchHost();
+	const APlayerState* ViewerPS = GetOwningPlayerState();
+	const ETSTeamId ViewerTeam = GetViewerTeam();
+
 	TArray<ATSTankPlayerState*> Players;
 	Players.Reserve(GS->PlayerArray.Num());
 	for (APlayerState* PlayerState : GS->PlayerArray)
 	{
 		if (ATSTankPlayerState* TankPS = Cast<ATSTankPlayerState>(PlayerState))
 		{
+			const bool bVisibleToViewer = bViewerIsHost
+				|| TankPS == ViewerPS
+				|| (ViewerTeam != ETSTeamId::None && TankPS->GetTeamId() == ViewerTeam);
+
 			// The host runs this console; it is not one of the players it assigns. Listing it would
 			// give a card whose every assignment the GameMode rejects.
-			if (!TankPS->IsHost())
+			if (!TankPS->IsHost() && bVisibleToViewer)
 			{
 				Players.Add(TankPS);
 				SeatedPlayerCount += TankPS->GetCrewRole() != ETSCrewRole::None ? 1 : 0;
@@ -687,6 +710,12 @@ void UTSRoleDebugWidget::RefreshPlayerRows()
 			Row->SetTargetPlayerState(nullptr);
 		}
 	}
+}
+
+ETSTeamId UTSRoleDebugWidget::GetViewerTeam() const
+{
+	const ATSTankPlayerState* PS = GetOwningPlayerState<ATSTankPlayerState>();
+	return PS ? PS->GetTeamId() : ETSTeamId::None;
 }
 
 void UTSRoleDebugWidget::RefreshStartMatchButton()

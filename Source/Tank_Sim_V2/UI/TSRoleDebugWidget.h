@@ -164,6 +164,8 @@ private:
 	// Cards are pooled and re-pointed rather than rebuilt, so buttons keep their identity and do not
 	// flicker out from under the cursor on every refresh.
 	void RefreshPlayerRows();
+	// The viewing player's team, or None (also for the host, who holds none).
+	ETSTeamId GetViewerTeam() const;
 	void RefreshStartMatchButton();
 
 	UFUNCTION()
