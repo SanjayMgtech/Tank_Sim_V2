@@ -5,7 +5,9 @@
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/SpectatorPawnMovement.h"
 #include "InputMappingContext.h"
+#include "Player/TSTankPlayerController.h"
 #include "Player/TSVRModeLibrary.h"
+#include "TimerManager.h"
 #include "Tank_Sim_V2.h"
 
 ATSHostCameraPawn::ATSHostCameraPawn(const FObjectInitializer& ObjectInitializer)
@@ -45,10 +47,10 @@ ATSHostCameraPawn::ATSHostCameraPawn(const FObjectInitializer& ObjectInitializer
 	// control rotation. That is the "WASD goes sideways" bug.
 	Camera->bUsePawnControlRotation = true;
 
-	// The host is a match admin on a FLAT SCREEN and never a VR participant, so unlike a crew pawn
-	// it must NOT compose the head pose on top of the control rotation - a free-cam that swings
-	// around with a headset sitting on the desk is unusable. NotifyControllerChanged clears this
-	// again on the live instance; setting it here means even an un-possessed preview is flat.
+	// This pawn is the host's FLAT body (ATSHostVRPawn is the headset one), so it must NOT compose
+	// the head pose on top of the control rotation - a free-cam that swings around with a headset
+	// sitting on the desk is unusable. The deferred display-mode pass clears this again on the live
+	// instance; setting it here means even an un-possessed preview is flat.
 	Camera->bLockToHmd = false;
 }
 
@@ -64,6 +66,19 @@ void ATSHostCameraPawn::NotifyControllerChanged()
 		return;
 	}
 
+	// Deferred for the same reason ATSCrewPawn defers its display mode: this runs inside Possess,
+	// and changing stereo rebuilds the viewport under the input setup that follows it.
+	GetWorldTimerManager().SetTimerForNextTick(this, &ATSHostCameraPawn::ApplyHostDisplayModeDeferred);
+}
+
+void ATSHostCameraPawn::ApplyHostDisplayModeDeferred()
+{
+	ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(GetController());
+	if (!PC || !PC->IsLocalController())
+	{
+		return;
+	}
+
 	// Two separate things have to be off, and only killing both makes the host truly flat:
 	// stereo rendering, and the camera following the headset's pose.
 	UTSVRModeLibrary::SetVRModeEnabled(false);
@@ -73,8 +88,12 @@ void ATSHostCameraPawn::NotifyControllerChanged()
 		Camera->bLockToHmd = false;
 	}
 
+	// The lobby console and the voice panel go back into the viewport - they may have been mounted
+	// on the VR host pawn's world-space panels a moment ago.
+	PC->RefreshHostPanelPlacement();
+
 	UE_LOG(LogTankSim, Log,
-		TEXT("ATSHostCameraPawn: host possessed the free-roam camera - VR forced off (HMD connected: %s)."),
+		TEXT("ATSHostCameraPawn: host possessed the flat free-roam camera - VR off (HMD connected: %s)."),
 		UTSVRModeLibrary::IsHMDAvailable() ? TEXT("yes") : TEXT("no"));
 }
 

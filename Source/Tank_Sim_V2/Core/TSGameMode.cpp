@@ -11,6 +11,7 @@
 #include "Tank_Sim_V2.h"
 #include "Kismet/GameplayStatics.h"
 #include "Player/TSHostCameraPawn.h"
+#include "Player/TSHostVRPawn.h"
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSCrewPawn.h"
 #include "Player/TSDesktopPawn.h"
@@ -48,6 +49,7 @@ ATSGameMode::ATSGameMode()
 	GameStateClass = ATSGameState::StaticClass();
 	PlayerStateClass = ATSTankPlayerState::StaticClass();
 	HostCameraPawnClass = ATSHostCameraPawn::StaticClass();
+	HostVRCameraPawnClass = ATSHostVRPawn::StaticClass();
 
 	// Carry PlayerControllers and PlayerStates across ServerTravel so the crews the host assigned in
 	// the lobby survive the trip to the battle map. No transition map is configured, which is fine -
@@ -345,9 +347,14 @@ bool ATSGameMode::IsHostController(const APlayerController* Player) const
 UClass* ATSGameMode::GetDefaultPawnClassForController_Implementation(AController* InController)
 {
 	const ATSTankPlayerState* PS = InController ? InController->GetPlayerState<ATSTankPlayerState>() : nullptr;
-	if (PS && PS->IsHost() && HostCameraPawnClass)
+	if (PS && PS->IsHost())
 	{
-		return HostCameraPawnClass;
+		// The host's body follows its play mode like everyone else's: the flat free camera, or the
+		// VR one when it has a headset.
+		if (const TSubclassOf<APawn> HostClass = GetHostPawnClassForMode(PS->GetPlayMode()))
+		{
+			return HostClass;
+		}
 	}
 
 	// Restart the player straight into the pawn their assigned mode calls for, so a player who chose
@@ -377,6 +384,78 @@ TSubclassOf<APawn> ATSGameMode::GetCrewPawnClassForMode(ETSPlayMode Mode) const
 	// then serves both modes, and the pawn switches stereo from the assigned mode rather than from
 	// which class it happens to be.
 	return DefaultPawnClass;
+}
+
+TSubclassOf<APawn> ATSGameMode::GetHostPawnClassForMode(ETSPlayMode Mode) const
+{
+	if (Mode == ETSPlayMode::VR && HostVRCameraPawnClass)
+	{
+		return HostVRCameraPawnClass;
+	}
+	return HostCameraPawnClass;
+}
+
+void ATSGameMode::HandleHeadsetConnected(APlayerController* Player)
+{
+	ATSTankPlayerState* PS = Player ? Player->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	if (!bAutoSelectVRWhenHeadsetConnected || !PS || PS->GetPlayMode() == ETSPlayMode::VR)
+	{
+		return;
+	}
+
+	if (!Player->GetPawn())
+	{
+		// Not restarted yet. A listen-server host reports from its controller's BeginPlay, which runs
+		// inside Login - BEFORE PostLogin has designated it host. Going through TrySetPlayMode there
+		// would spawn crew pawns for a player about to become the host. Recording the mode is enough:
+		// GetDefaultPawnClassForController reads it when the player is restarted a moment later.
+		PS->SetPlayMode(ETSPlayMode::VR);
+		UE_LOG(LogTankSim, Log, TEXT("ATSGameMode: '%s' has a headset - they will start in VR."), *PS->GetPlayerName());
+		return;
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("ATSGameMode: '%s' connected a headset - switching them to VR."), *PS->GetPlayerName());
+	TrySetPlayMode(Player, ETSPlayMode::VR);
+}
+
+void ATSGameMode::SwapHostPawnFor(APlayerController* Player)
+{
+	ATSTankPlayerState* PS = Player ? Player->GetPlayerState<ATSTankPlayerState>() : nullptr;
+	UWorld* World = GetWorld();
+	if (!PS || !World)
+	{
+		return;
+	}
+
+	const TSubclassOf<APawn> DesiredClass = GetHostPawnClassForMode(PS->GetPlayMode());
+	APawn* Current = Player->GetPawn();
+	if (!DesiredClass || !Current || Current->GetClass() == DesiredClass)
+	{
+		// No pawn yet: RestartPlayer will spawn the right one from GetDefaultPawnClassForController.
+		return;
+	}
+
+	// Where the host is, facing where the host was looking (yaw only - the new pawn should arrive
+	// level, whatever the old one's pitch was).
+	const FRotator Facing(0.f, Player->GetControlRotation().Yaw, 0.f);
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = Player;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	APawn* NewPawn = World->SpawnActor<APawn>(DesiredClass, Current->GetActorLocation(), Facing, SpawnParams);
+	if (!NewPawn)
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("ATSGameMode: could not spawn host pawn '%s' - the host keeps '%s'."),
+			*DesiredClass->GetName(), *Current->GetName());
+		return;
+	}
+
+	Player->Possess(NewPawn);
+	Player->SetControlRotation(Facing);
+	Current->Destroy();
+
+	UE_LOG(LogTankSim, Log, TEXT("ATSGameMode: host '%s' is now in %s (pawn '%s')."),
+		*PS->GetPlayerName(), *UTSTypeUtils::PlayModeToString(PS->GetPlayMode()), *NewPawn->GetName());
 }
 
 void ATSGameMode::HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer)
@@ -572,13 +651,6 @@ ETSPlayModeDenial ATSGameMode::GetPlayModeDenialReason(const APlayerController* 
 		return ETSPlayModeDenial::HostCannotPlay;
 	}
 
-	// The host runs the match on a flat screen and possesses the free-roam camera, so a play mode
-	// would have nothing to act on.
-	if (PS->IsHost())
-	{
-		return ETSPlayModeDenial::HostCannotPlay;
-	}
-
 	// THE GUARD THIS WHOLE SECTION EXISTS FOR.
 	//
 	// A misclick on "Play in VR" with no headset attached used to be accepted: the server swapped the
@@ -591,6 +663,12 @@ ETSPlayModeDenial ATSGameMode::GetPlayModeDenialReason(const APlayerController* 
 	if (Mode == ETSPlayMode::VR && !PS->HasHeadsetConnected())
 	{
 		return ETSPlayModeDenial::NoHeadset;
+	}
+
+	// The host has a free-roam pawn for each mode rather than a crew pawn.
+	if (PS->IsHost())
+	{
+		return GetHostPawnClassForMode(Mode) ? ETSPlayModeDenial::None : ETSPlayModeDenial::NoPawnClass;
 	}
 
 	const TSubclassOf<APawn> PawnClass = GetCrewPawnClassForMode(Mode);
@@ -624,6 +702,14 @@ bool ATSGameMode::TrySetPlayMode(APlayerController* Player, ETSPlayMode NewMode)
 	}
 
 	PS->SetPlayMode(NewMode);
+
+	// The host holds no seat and no crew pawns - just the free camera for the mode.
+	if (PS->IsHost())
+	{
+		SwapHostPawnFor(PC);
+		PC->ClientPlayModeRequestResult(NewMode, true, ETSPlayModeDenial::None);
+		return true;
+	}
 
 	// Manual controls ARE the VR hands (see TrySetDriveControlMode, which refuses Manual for a
 	// desktop player). Leaving VR while set to Manual would strand the player with levers they can no

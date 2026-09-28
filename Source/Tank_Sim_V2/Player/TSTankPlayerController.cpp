@@ -12,6 +12,7 @@
 #include "Net/UnrealNetwork.h"
 #include "Networking/TSSessionSubsystem.h"
 #include "Player/TSCrewPawn.h"
+#include "Player/TSHostVRPawn.h"
 #include "Player/TSVRModeLibrary.h"
 #include "Player/TSTankPlayerState.h"
 #include "Tank/TSTankControllerBase.h"
@@ -80,8 +81,11 @@ void ATSTankPlayerController::ApplyLocalUIForCurrentMap()
 	// (it rebuilds the viewport, which is unsafe inside the possession call stack), so stereo is
 	// still off at this point even for a player who is about to be in VR. Asking "is a headset
 	// present and is this player eligible for it" is decidable now; asking "is stereo on" is not.
+	//
+	// The HOST is the exception: in VR its console moves onto ATSHostVRPawn's world-space panel
+	// (see PresentLobbyPanel), so it is created either way.
 	const bool bWillBeVR = WillPlayInVR();
-	if (bShowRoleDebugWidgetOnGameplayMaps && !bWillBeVR)
+	if (bShowRoleDebugWidgetOnGameplayMaps && (!bWillBeVR || IsMatchHost()))
 	{
 		ShowRoleDebugWidget(true);
 	}
@@ -225,9 +229,24 @@ void ATSTankPlayerController::ReportLocalHeadsetState()
 
 void ATSTankPlayerController::ServerReportHeadsetConnected_Implementation(bool bConnected)
 {
+	bool bNewlyConnected = false;
 	if (ATSTankPlayerState* PS = GetTankPlayerState())
 	{
+		// Only the TRANSITION counts. The flag survives seamless travel (CopyProperties) and the
+		// client re-reports on every map, so acting on "connected" alone would drag a player who had
+		// switched back to the keyboard into VR again after every travel.
+		bNewlyConnected = bConnected && !PS->HasHeadsetConnected();
 		PS->SetHeadsetConnected(bConnected);
+	}
+
+	// A headset has appeared on this player's machine: play in it (crew and host alike), unless the
+	// GameMode has automatic VR turned off.
+	if (bNewlyConnected)
+	{
+		if (ATSGameMode* GM = GetWorld()->GetAuthGameMode<ATSGameMode>())
+		{
+			GM->HandleHeadsetConnected(this);
+		}
 	}
 
 	// A headset unplugged mid-match must not leave the player stranded in a VR pawn it can no longer
@@ -285,7 +304,7 @@ void ATSTankPlayerController::ServerSetPlayMode_Implementation(ETSPlayMode NewMo
 		const bool bAccepted = GM->TrySetPlayMode(this, NewMode);
 		UE_LOG(LogTankSim, Log, TEXT("ServerSetPlayMode: '%s' -> %s (%s)"),
 			*GetNameSafe(PlayerState), *UTSTypeUtils::PlayModeToString(NewMode),
-			bAccepted ? TEXT("ok") : TEXT("rejected - the host holds no crew pawn"));
+			bAccepted ? TEXT("ok") : TEXT("rejected"));
 	}
 }
 
@@ -754,6 +773,7 @@ void ATSTankPlayerController::ShowRoleDebugWidget(bool bShow)
 	{
 		if (RoleDebugWidget)
 		{
+			UnmountFromHostVRPawn(RoleDebugWidget);
 			RoleDebugWidget->RemoveFromParent();
 			RoleDebugWidget = nullptr;
 		}
@@ -770,12 +790,14 @@ void ATSTankPlayerController::ShowRoleDebugWidget(bool bShow)
 	// GetWorld() is the dead one.
 	if (RoleDebugWidget && RoleDebugWidget->GetWorld() != GetWorld())
 	{
+		UnmountFromHostVRPawn(RoleDebugWidget);
 		RoleDebugWidget->RemoveFromParent();
 		RoleDebugWidget = nullptr;
 	}
 
-	// Also covers the TSRoleDebug console toggle: a VR player must not get this panel however it is asked for.
-	if (WillPlayInVR())
+	// Also covers the TSRoleDebug console toggle: a VR crew member must not get this panel however it
+	// is asked for. A VR host does - on a world-space panel rather than the viewport.
+	if (WillPlayInVR() && !IsMatchHost())
 	{
 		return;
 	}
@@ -800,9 +822,9 @@ void ATSTankPlayerController::ShowRoleDebugWidget(bool bShow)
 		RoleDebugWidget = CreateWidget<UTSRoleDebugWidget>(this, WidgetClass);
 	}
 
-	if (RoleDebugWidget && !RoleDebugWidget->IsInViewport())
+	if (RoleDebugWidget && !IsRoleDebugWidgetVisible())
 	{
-		RoleDebugWidget->AddToViewport(RoleDebugWidgetZOrder);
+		PresentLobbyPanel(RoleDebugWidget, RoleDebugWidgetZOrder, ETSHostVRPanel::Console);
 		RoleDebugWidget->RefreshNow();
 	}
 }
@@ -820,7 +842,7 @@ void ATSTankPlayerController::RefreshRoleDebugWidget()
 		return;
 	}
 
-	if (WillPlayInVR())
+	if (WillPlayInVR() && !IsMatchHost())
 	{
 		if (IsRoleDebugWidgetVisible())
 		{
@@ -837,7 +859,76 @@ void ATSTankPlayerController::RefreshRoleDebugWidget()
 
 bool ATSTankPlayerController::IsRoleDebugWidgetVisible() const
 {
-	return RoleDebugWidget && RoleDebugWidget->IsInViewport();
+	return RoleDebugWidget && (RoleDebugWidget->IsInViewport() || IsMountedOnHostVRPawn(RoleDebugWidget));
+}
+
+// --- Host panels: viewport on a flat screen, world-space panels in VR -----------------------------
+
+void ATSTankPlayerController::PresentLobbyPanel(UUserWidget* Widget, int32 ZOrder, ETSHostVRPanel Panel)
+{
+	if (!Widget || !IsLocalController())
+	{
+		return;
+	}
+
+	// A host flying ATSHostVRPawn with stereo up reads its panels in the world: a screen-space widget
+	// is invisible in a headset. Same widget instance either way, so nothing about its state is lost.
+	ATSHostVRPawn* VRHost = Cast<ATSHostVRPawn>(GetPawn());
+	if (VRHost && UTSVRModeLibrary::IsVRModeActive())
+	{
+		if (Widget->IsInViewport())
+		{
+			Widget->RemoveFromParent();
+		}
+		VRHost->MountPanelWidget(Panel, Widget);
+		MountedHostVRPawn = VRHost;
+		return;
+	}
+
+	// Flat. Take it off the VR pawn first - a widget cannot sit in a widget component and the
+	// viewport at once, and the VR pawn may still exist for a frame after the swap.
+	UnmountFromHostVRPawn(Widget);
+	if (!Widget->IsInViewport())
+	{
+		Widget->AddToViewport(ZOrder);
+	}
+}
+
+void ATSTankPlayerController::UnmountFromHostVRPawn(UUserWidget* Widget)
+{
+	if (ATSHostVRPawn* VRHost = MountedHostVRPawn.Get())
+	{
+		VRHost->UnmountPanelWidget(Widget);
+	}
+}
+
+bool ATSTankPlayerController::IsMountedOnHostVRPawn(const UUserWidget* Widget) const
+{
+	const ATSHostVRPawn* VRHost = MountedHostVRPawn.Get();
+	return VRHost && VRHost->IsWidgetMounted(Widget);
+}
+
+void ATSTankPlayerController::RefreshHostPanelPlacement()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	// A non-null pointer means the panel is wanted (hiding one nulls it), so re-present whatever
+	// exists: the host just changed body, and the panel has to follow into (or out of) the headset.
+	if (RoleDebugWidget)
+	{
+		PresentLobbyPanel(RoleDebugWidget, RoleDebugWidgetZOrder, ETSHostVRPanel::Console);
+	}
+	if (HostVoicePanelWidget)
+	{
+		PresentLobbyPanel(HostVoicePanelWidget, HostVoicePanelZOrder, ETSHostVRPanel::Voice);
+	}
+
+	// Entering VR drops the mouse cursor / UI input mode (it would only swallow input in a headset);
+	// leaving VR brings it back if the lobby console is focused.
+	ApplyInputModeForLocalState();
 }
 
 void ATSTankPlayerController::ShowCommanderScreen(bool bShow)
@@ -923,8 +1014,12 @@ bool ATSTankPlayerController::WillPlayInVR() const
 	// only IsHMDAvailable() hid the Commander screen from exactly that player.
 	//
 	// Still not IsVRModeActive(): stereo is switched on a tick late, so ask about the assignment.
+	//
+	// The host is included: it has a VR free camera of its own (ATSHostVRPawn). Callers that hide
+	// screen-space UI for VR check IsMatchHost() themselves, because the host's panels MOVE into the
+	// world rather than disappearing.
 	const ATSTankPlayerState* PS = GetTankPlayerState();
-	return PS && !IsMatchHost()
+	return PS
 		&& PS->GetPlayMode() == ETSPlayMode::VR
 		&& UTSVRModeLibrary::IsHMDAvailable();
 }
@@ -2196,6 +2291,7 @@ void ATSTankPlayerController::ShowHostVoicePanel(bool bShow)
 	{
 		if (HostVoicePanelWidget)
 		{
+			UnmountFromHostVRPawn(HostVoicePanelWidget);
 			HostVoicePanelWidget->RemoveFromParent();
 			HostVoicePanelWidget = nullptr;
 		}
@@ -2211,6 +2307,7 @@ void ATSTankPlayerController::ShowHostVoicePanel(bool bShow)
 	// the widget built for the world just left.
 	if (HostVoicePanelWidget && HostVoicePanelWidget->GetWorld() != GetWorld())
 	{
+		UnmountFromHostVRPawn(HostVoicePanelWidget);
 		HostVoicePanelWidget->RemoveFromParent();
 		HostVoicePanelWidget = nullptr;
 	}
@@ -2225,15 +2322,15 @@ void ATSTankPlayerController::ShowHostVoicePanel(bool bShow)
 		HostVoicePanelWidget = CreateWidget<UTSHostVoicePanelWidget>(this, WidgetClass);
 	}
 
-	if (HostVoicePanelWidget && !HostVoicePanelWidget->IsInViewport())
+	if (HostVoicePanelWidget && !IsHostVoicePanelVisible())
 	{
-		HostVoicePanelWidget->AddToViewport(HostVoicePanelZOrder);
+		PresentLobbyPanel(HostVoicePanelWidget, HostVoicePanelZOrder, ETSHostVRPanel::Voice);
 	}
 }
 
 bool ATSTankPlayerController::IsHostVoicePanelVisible() const
 {
-	return HostVoicePanelWidget && HostVoicePanelWidget->IsInViewport();
+	return HostVoicePanelWidget && (HostVoicePanelWidget->IsInViewport() || IsMountedOnHostVRPawn(HostVoicePanelWidget));
 }
 
 void ATSTankPlayerController::RefreshHostVoicePanel()
@@ -2250,9 +2347,8 @@ void ATSTankPlayerController::RefreshHostVoicePanel()
 		return;
 	}
 
-	// No VR guard is needed and none is written: the host is never in VR by design (TryAssignTeam
-	// and TryAssignRole refuse a host a seat, and ATSHostCameraPawn forces stereo off), so a panel
-	// shown only to the host cannot end up plastered across a headset view.
+	// No VR guard: a host in VR gets this panel on ATSHostVRPawn's world-space panel instead of the
+	// viewport (PresentLobbyPanel decides), so it never ends up plastered across a headset view.
 	ShowHostVoicePanel(IsMatchHost());
 }
 

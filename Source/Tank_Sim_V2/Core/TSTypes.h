@@ -41,8 +41,10 @@ enum class ETSTeamAlertState : uint8
 // changeable mid-match by the player themselves - it decides WHICH crew pawn the PlayerController
 // possesses (ATSDesktopPawn or ATSVRPawn), not merely whether stereo rendering is on.
 //
-// This is a deliberate assignment rather than pure headset auto-detection: a player with a headset
-// plugged in may still want to sit at the keyboard, and a lobby needs to show who is where.
+// Chosen automatically when a player's machine reports a headset (ATSGameMode::
+// bAutoSelectVRWhenHeadsetConnected), but still an ASSIGNMENT rather than live detection: a player
+// with a headset plugged in can switch back to the keyboard (F2, the lobby buttons) and keeps that
+// choice, and a lobby needs to show who is where. Applies to the host too, who gets a VR free camera.
 UENUM(BlueprintType)
 enum class ETSPlayMode : uint8
 {
@@ -122,7 +124,8 @@ enum class ETSPlayModeDenial : uint8
 	// GPU down (DXGI_ERROR_DEVICE_HUNG), so this is refused on the SERVER before any pawn is swapped.
 	NoHeadset		UMETA(DisplayName = "No headset connected"),
 
-	// The session host is a match admin on a flat screen and holds no crew pawn of either kind.
+	// The request could not be matched to a player (no PlayerState). Kept under its old name so
+	// existing Blueprint switches still compile; the host itself now has a Desktop and a VR camera.
 	HostCannotPlay	UMETA(DisplayName = "Host does not play"),
 
 	// The GameMode has no crew pawn class configured for that mode.

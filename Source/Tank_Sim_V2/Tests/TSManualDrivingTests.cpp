@@ -131,7 +131,7 @@ namespace
 	const TCHAR* VRPawnClassPath = TEXT("/Game/TankSimulation/Player/BP_TSVRPawn.BP_TSVRPawn_C");
 	const TCHAR* DesktopPawnClassPath = TEXT("/Game/TankSimulation/Player/BP_TSDesktopPawn.BP_TSDesktopPawn_C");
 
-	const TCHAR* ContextNames[] = { TEXT("IMC_Shared"), TEXT("IMC_Driver"), TEXT("IMC_Gunner"), TEXT("IMC_Commander"), TEXT("IMC_VR_Widget") };
+	const TCHAR* ContextNames[] = { TEXT("IMC_Shared"), TEXT("IMC_Driver"), TEXT("IMC_Gunner"), TEXT("IMC_Commander"), TEXT("IMC_VR_Widget"), TEXT("IMC_HostVR") };
 
 	UInputMappingContext* LoadContext(const TCHAR* Name)
 	{

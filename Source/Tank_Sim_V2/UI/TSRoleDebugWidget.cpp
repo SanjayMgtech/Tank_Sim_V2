@@ -835,7 +835,8 @@ FString UTSRoleDebugWidget::DescribeLocalPlayer() const
 		*PS->GetPlayerName(),
 		*UTSTypeUtils::TeamIdToString(PS->GetTeamId()),
 		*UTSTypeUtils::CrewRoleToString(PS->GetCrewRole()),
-		PS->IsHost() ? TEXT("host (flat)") : (PS->GetPlayMode() == ETSPlayMode::VR ? TEXT("VR") : TEXT("Desktop")),
+		PS->IsHost() ? (PS->GetPlayMode() == ETSPlayMode::VR ? TEXT("host (VR)") : TEXT("host (flat)"))
+			: (PS->GetPlayMode() == ETSPlayMode::VR ? TEXT("VR") : TEXT("Desktop")),
 		Tank ? *Tank->GetName() : TEXT("none"));
 }
 

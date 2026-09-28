@@ -2488,7 +2488,22 @@ unreal.log('empty-or-duplicate descriptions: %d' % bad)   # MUST be 0
 run: `grep -a "XR_ERROR" Saved/Logs/Tank_Sim_V2.log`. **Expected: no hits.** Any hit means the XR
 action system failed to build and no binding work can possibly help until it is fixed.
 
-### ✅ DESIGN CONFIRMED — the host is NOT crew and NOT VR (2026-09-08)
+### ⚠ SUPERSEDED 2026-09-28 — the host now HAS a VR mode (still not crew)
+The host still holds no team, seat or crew pawn, but it now has a play mode like everyone else:
+`ATSHostCameraPawn` on a flat screen, `ATSHostVRPawn` in a headset (`ATSGameMode::HostVRCameraPawnClass`,
+swapped by `SwapHostPawnFor`). The VR host flies on the sticks (left = fly along head heading, right X =
+snap turn, right Y = climb, right grip = faster), and the controller's OWN lobby console and voice panel
+widgets are handed to two world-space `UWidgetComponent`s on the pawn (`RefreshHostPanelPlacement` /
+`PresentLobbyPanel`), clicked with a right-hand laser + right trigger, toggled with left Y. Left trigger
+is push-to-talk. Input is `IMC_HostVR` + `IA_Host*`, registered in `DefaultMappingContexts`.
+
+**VR is now automatic:** `ATSGameMode::bAutoSelectVRWhenHeadsetConnected` (default on) switches any
+player - crew or host - to VR when their client reports a headset (on the false->true TRANSITION only,
+so a player who picks Desktop keeps it). A report arriving before the player has a pawn only records the
+mode, because a listen-server host reports from BeginPlay inside Login, before it is designated host.
+Everything below about the host being flat-only is historical.
+
+### (historical) DESIGN CONFIRMED — the host is NOT crew and NOT VR (2026-09-08)
 Asked and answered by the user directly. The host is an admin/spectator: `TryAssignTeam` and
 `TryAssignRole` refuse `PS->IsHost()`, the host possesses `ATSHostCameraPawn`, and
 `ATSHostCameraPawn::NotifyControllerChanged` forces stereo off and clears `bLockToHmd`. **This is

@@ -80,6 +80,25 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew")
 	TSubclassOf<APawn> GetCrewPawnClassForMode(ETSPlayMode Mode) const;
 
+	// The host's free-roam body for a mode: HostCameraPawnClass on a flat screen, HostVRCameraPawnClass
+	// in a headset (falling back to the flat one when that is unset).
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Host")
+	TSubclassOf<APawn> GetHostPawnClassForMode(ETSPlayMode Mode) const;
+
+	// Server only. The owning client has just reported that a headset is connected. With
+	// bAutoSelectVRWhenHeadsetConnected on, this puts the player - crew or host - into VR, so a
+	// player who puts a headset on plays in it without anyone pressing "Play in VR". Only called on the
+	// transition from "no headset" to "headset": a player who then chooses Desktop keeps that choice.
+	void HandleHeadsetConnected(APlayerController* Player);
+
+private:
+	// Server only. The host holds one free-roam pawn at a time; switching mode spawns the other kind
+	// where the current one is, possesses it and destroys the old one. Unlike the crew pawns there is
+	// nothing to keep: the host pawn is only relevant to its owner and holds no state of its own.
+	void SwapHostPawnFor(APlayerController* Player);
+
+public:
+
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Lobby")
 	bool AreAllRolesFilled() const;
 
@@ -164,9 +183,20 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation")
 	int32 MaxTeams = 4;
 
-	// Free-roam camera possessed by the host. Defaults to ATSHostCameraPawn.
+	// Free-roam camera possessed by the host on a flat screen. Defaults to ATSHostCameraPawn.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Host")
 	TSubclassOf<APawn> HostCameraPawnClass;
+
+	// Free-roam camera possessed by the host in VR. Defaults to ATSHostVRPawn, which carries the same
+	// lobby console and voice panel on world-space panels. Unset falls back to HostCameraPawnClass.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Host")
+	TSubclassOf<APawn> HostVRCameraPawnClass;
+
+	// Every player whose machine reports a connected headset is put into VR automatically - crew
+	// members and the host alike - and a headset unplugged mid-match returns them to Desktop. Off
+	// makes VR purely opt-in again (the host's buttons, F2, TSPlayMode).
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew")
+	bool bAutoSelectVRWhenHeadsetConnected = true;
 
 	// The crew pawn Blueprint for each play mode. Both are left NULL in C++ on purpose: they are
 	// Blueprint data (RULE 2), and an unset one falls back to DefaultPawnClass rather than to a raw

@@ -8,6 +8,7 @@
 #include "InputCoreTypes.h"
 #include "Core/TSTypes.h"
 #include "Engine/NetSerialization.h"
+#include "Player/TSHostVRPawn.h"
 #include "TSTankPlayerController.generated.h"
 
 class ATSCrewPawn;
@@ -283,6 +284,11 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Debug")
 	void ShowRoleDebugWidget(bool bShow);
+
+	// Re-places the host's lobby console and voice panel for the body the host now has: the viewport
+	// on the flat free camera, ATSHostVRPawn's world-space panels in a headset. Called by both host
+	// pawns once their display mode is applied.
+	void RefreshHostPanelPlacement();
 
 	// The Commander's instrument screen (radar + hull/turret attitude + periscope feed). Shown for a
 	// local Commander on a gameplay map, removed the moment they are no longer one.
@@ -641,9 +647,18 @@ protected:
 	// makes this player a Commander.
 	void RefreshCommanderScreen();
 
-	// True when this player is about to render in a headset: assigned Play in VR, not the host, and a
-	// usable HMD present. Screen-space widgets must stay off in that case and only that case.
+	// True when this player is about to render in a headset: assigned Play in VR and a usable HMD
+	// present. Includes the host - whose panels move onto world-space panels rather than disappearing.
 	bool WillPlayInVR() const;
+
+	// Viewport on a flat screen, the VR host pawn's world-space panel in a headset.
+	void PresentLobbyPanel(UUserWidget* Widget, int32 ZOrder, ETSHostVRPanel Panel);
+	void UnmountFromHostVRPawn(UUserWidget* Widget);
+	bool IsMountedOnHostVRPawn(const UUserWidget* Widget) const;
+
+	// The VR host pawn currently holding our panels. Weak: it is destroyed on a mode switch, and the
+	// panels have to be taken back from it before the desktop pawn puts them in the viewport.
+	TWeakObjectPtr<ATSHostVRPawn> MountedHostVRPawn;
 
 private:
 	ATSTankPlayerState* GetTankPlayerState() const;

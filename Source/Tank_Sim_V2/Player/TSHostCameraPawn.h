@@ -23,14 +23,19 @@ public:
 
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
-	// The host is a match admin on a FLAT SCREEN, never a VR participant, even when a headset is
-	// plugged into the same machine. Possession therefore switches stereo off rather than
-	// leaving whatever the previous pawn set - a listen-server host that had been a crew member
-	// before, or a host who simply has a headset connected, would otherwise be dropped into a
-	// stereo free-cam it cannot fly.
+	// This is the host's FLAT-SCREEN body. The host picks Desktop or VR like every other player
+	// (ETSPlayMode); in VR it possesses ATSHostVRPawn instead. Possession therefore switches stereo
+	// off rather than leaving whatever the previous pawn set - a host coming back from the VR host
+	// pawn, or one with a headset merely plugged in, would otherwise be dropped into a stereo
+	// free-cam it cannot fly - and tells the controller to put the host panels back on the screen.
 	virtual void NotifyControllerChanged() override;
 
 protected:
+	// Runs one tick after local possession, outside the possession call stack: switching stereo
+	// rebuilds the viewport, which is unsafe mid-possession (see ATSVRPawn / CLAUDE.md). The base is
+	// the flat path; ATSHostVRPawn overrides it to switch stereo ON.
+	virtual void ApplyHostDisplayModeDeferred();
+
 	// Explicit camera (rather than relying on APawn::CalcCamera's eye-height fallback) so designers
 	// have a component to tune post-process/FOV on. bLockToHmd is cleared on possession: head
 	// tracking can still be live while stereo is off, and a free-cam that swings around with a
