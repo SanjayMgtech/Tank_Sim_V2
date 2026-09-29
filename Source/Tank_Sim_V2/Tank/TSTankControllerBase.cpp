@@ -599,16 +599,44 @@ void ATSTankControllerBase::ApplyViewMeshVisionMode(FName ComponentName, ETSVisi
 
 void ATSTankControllerBase::ResolveCommanderCameraSocket()
 {
+	// Compare the PLAIN name, not the FName. A component renamed in the Components panel after it was
+	// added keeps its original template name with a number on it - the VK1602's socket is stored as
+	// 'CommanderCameraSocket_0', i.e. FName("CommanderCameraSocket", 1) - so an exact FName compare
+	// never matches the name the designer actually sees.
+	const FString WantedName = CommanderCameraSocketName.ToString();
+	USceneComponent* Found = nullptr;
+
 	TArray<USceneComponent*> SceneComponents;
 	GetComponents<USceneComponent>(SceneComponents);
 	for (USceneComponent* Component : SceneComponents)
 	{
-		if (Component && Component->GetFName() == CommanderCameraSocketName)
+		if (Component && !CommanderCameraSocketName.IsNone()
+			&& (Component->GetFName() == CommanderCameraSocketName || Component->GetFName().GetPlainNameString() == WantedName))
 		{
-			CommanderCameraSocket = Component;
-			CommanderCameraSocketRestRotation = Component->GetRelativeRotation().Quaternion();
-			return;
+			Found = Component;
+			break;
 		}
+	}
+
+	// Fallback: whatever the Commander's capture is parented to IS the socket by construction, so a
+	// later rename cannot break rotation. Not when that parent is the root - turning the root would
+	// turn the whole tank.
+	if (!Found)
+	{
+		const TObjectPtr<USceneCaptureComponent2D>* Capture = ResolvedCrewViewCaptures.Find(ETSCrewRole::Commander);
+		USceneComponent* Parent = (Capture && *Capture) ? (*Capture)->GetAttachParent() : nullptr;
+		if (Parent && Parent != GetRootComponent())
+		{
+			Found = Parent;
+		}
+	}
+
+	if (Found)
+	{
+		CommanderCameraSocket = Found;
+		CommanderCameraSocketRestRotation = Found->GetRelativeRotation().Quaternion();
+		UE_LOG(LogTankSim, Log, TEXT("[Tank] %s: Commander view rotates '%s'."), *GetName(), *Found->GetName());
+		return;
 	}
 
 	// Only matters on a tank that has a Commander capture at all. Loud rather than silent: a view that
