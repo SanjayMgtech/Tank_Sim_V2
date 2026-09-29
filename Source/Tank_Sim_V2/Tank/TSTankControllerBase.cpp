@@ -325,6 +325,7 @@ void ATSTankControllerBase::BeginPlay()
 	AttachTurretCrewSeats();
 	SyncInteriorMeshTickToPawn();
 	InitialiseCrewViewCaptures();
+	ResolveCommanderCameraSocket();
 
 	// Puts the warning lights into the state this tank spawned with - OFF unless the host had already
 	// put this team in danger before the tank existed. Runs on every machine.
@@ -594,6 +595,58 @@ void ATSTankControllerBase::ApplyViewMeshVisionMode(FName ComponentName, ETSVisi
 
 	UE_LOG(LogTankSim, Log, TEXT("%s: %s %s=%.0f on %d slot(s) of '%s'"),
 		Caller, *GetName(), *CommanderViewVisionParameter.ToString(), ParameterValue, Applied, *ViewMesh->GetName());
+}
+
+void ATSTankControllerBase::ResolveCommanderCameraSocket()
+{
+	TArray<USceneComponent*> SceneComponents;
+	GetComponents<USceneComponent>(SceneComponents);
+	for (USceneComponent* Component : SceneComponents)
+	{
+		if (Component && Component->GetFName() == CommanderCameraSocketName)
+		{
+			CommanderCameraSocket = Component;
+			CommanderCameraSocketRestRotation = Component->GetRelativeRotation().Quaternion();
+			return;
+		}
+	}
+
+	// Only matters on a tank that has a Commander capture at all. Loud rather than silent: a view that
+	// will not turn otherwise reads as "the key binding is broken".
+	if (CrewViewCaptureComponents.Contains(ETSCrewRole::Commander) && ResolvedCrewViewCaptures.Contains(ETSCrewRole::Commander))
+	{
+		UE_LOG(LogTankSim, Warning,
+			TEXT("[Tank] %s has no scene component named '%s' - the Commander's view cannot be rotated. ")
+			TEXT("Parent the Commander's SceneCaptureComponent2D to a scene component with that name."),
+			*GetName(), *CommanderCameraSocketName.ToString());
+	}
+}
+
+void ATSTankControllerBase::AddCommanderViewYaw(float DeltaYawDegrees)
+{
+	if (FMath::IsNearlyZero(DeltaYawDegrees))
+	{
+		return;
+	}
+
+	SetCommanderViewYaw(CommanderViewYaw + DeltaYawDegrees);
+}
+
+void ATSTankControllerBase::SetCommanderViewYaw(float YawDegrees)
+{
+	CommanderViewYaw = CommanderViewYawLimit > 0.f
+		? FMath::Clamp(YawDegrees, -CommanderViewYawLimit, CommanderViewYawLimit)
+		: FRotator::NormalizeAxis(YawDegrees);
+
+	if (!CommanderCameraSocket)
+	{
+		return;
+	}
+
+	// About the PARENT's vertical (pre-multiplied), not the socket's own axis: a cupola turns about
+	// the hull's up, and an authored downward tilt on the socket must sweep round rather than wobble.
+	const FQuat Spin(FVector::UpVector, FMath::DegreesToRadians(CommanderViewYaw));
+	CommanderCameraSocket->SetRelativeRotation(Spin * CommanderCameraSocketRestRotation);
 }
 
 ETSVisionMode ATSTankControllerBase::CycleCrewViewVisionMode()
@@ -1084,6 +1137,16 @@ float ATSTankControllerBase::GetTurretCompassHeading() const
 	return static_cast<float>(FRotator::ClampAxis(GetActorRotation().Yaw + Traverse));
 }
 
+float ATSTankControllerBase::GetCommanderViewCompassHeading() const
+{
+	if (!CommanderCameraSocket)
+	{
+		return GetTurretCompassHeading();
+	}
+
+	return static_cast<float>(FRotator::ClampAxis(CommanderCameraSocket->GetComponentRotation().Yaw));
+}
+
 void ATSTankControllerBase::UpdateCompassHeadings()
 {
 	// Only the tank the person at THIS machine is crewing may write: the collection is global to
@@ -1114,6 +1177,17 @@ void ATSTankControllerBase::UpdateCompassHeadings()
 
 	const bool bHull = Instance->SetScalarParameterValue(HullHeadingParameterName, GetHullCompassHeading());
 	const bool bTurret = Instance->SetScalarParameterValue(TurretHeadingParameterName, GetTurretCompassHeading());
+	// Optional: a collection without this scalar just leaves M_Commander_View on whatever it reads.
+	if (!CommanderHeadingParameterName.IsNone()
+		&& !Instance->SetScalarParameterValue(CommanderHeadingParameterName, GetCommanderViewCompassHeading())
+		&& !bWarnedCommanderHeadingParameterMissing)
+	{
+		bWarnedCommanderHeadingParameterMissing = true;
+		UE_LOG(LogTankSim, Warning,
+			TEXT("[Compass] %s: '%s' has no scalar named '%s' - the Commander view's compass will not follow the view."),
+			*GetName(), *CompassParameterCollection->GetName(), *CommanderHeadingParameterName.ToString());
+	}
+
 	if ((!bHull || !bTurret) && !bWarnedCompassParameterMissing)
 	{
 		bWarnedCompassParameterMissing = true;

@@ -1095,6 +1095,47 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View")
 	FName CommanderViewVisionParameter = TEXT("VisionMode");
 
+	// --- Commander view rotation (CommanderCameraSocket) -------------------------------------------
+	//
+	// The Commander's periscope camera is CommanderSceneCaptureComponent (-> RT_Commander ->
+	// M_Commander_View), parented in the tank Blueprint to a scene component named
+	// CommanderCameraSocket. Turning the view turns THAT socket about its parent's vertical axis, so
+	// the capture rides it and where it sits stays Blueprint data (RULE 8).
+	//
+	// Local only, like the vision filters: the capture renders only on the Commander's own machine
+	// and nothing visible hangs off the socket, so replicating it would buy nothing.
+
+	// Adds DeltaYawDegrees (positive = right) to the Commander view's yaw, clamped by
+	// CommanderViewYawLimit when that is non-zero.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew View|Commander")
+	void AddCommanderViewYaw(float DeltaYawDegrees);
+
+	// Sets the yaw outright, relative to the socket's authored rotation.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|Crew View|Commander")
+	void SetCommanderViewYaw(float YawDegrees);
+
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew View|Commander")
+	float GetCommanderViewYaw() const { return CommanderViewYaw; }
+
+	// Compass heading the Commander's camera faces, 0..360. Falls back to the turret heading when the
+	// tank has no CommanderCameraSocket.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Crew View|Compass")
+	float GetCommanderViewCompassHeading() const;
+
+	// Name of the scene component the Commander's capture is parented to. Blueprint data (RULE 8).
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View|Commander")
+	FName CommanderCameraSocketName = TEXT("CommanderCameraSocket");
+
+	// How far the view may turn either side of its authored direction, in degrees. 0 = no limit (a
+	// full 360 cupola).
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View|Commander", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float CommanderViewYawLimit = 0.f;
+
+	// Scalar in CompassParameterCollection that receives GetCommanderViewCompassHeading(), read by
+	// M_Commander_View's compass so it turns with the Commander's view rather than the turret.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Crew View|Compass")
+	FName CommanderHeadingParameterName = TEXT("CommanderHeading");
+
 	// --- Driver view filter (M_Driver_View) --------------------------------------------------------
 	//
 	// Same contract as the Commander's: the Driver's screen is a mesh (DriverScreen) wearing
@@ -1243,6 +1284,17 @@ private:
 	void ApplyTeamAlertState();
 	void UpdateWarningLights(float InDeltaSeconds);
 	void SetWarningLightSpin(float Degrees);
+
+	// CommanderCameraSocket, resolved at BeginPlay, and its authored relative rotation - the yaw is
+	// applied on top of it so a designer's tilt on the socket is kept.
+	UPROPERTY(Transient)
+	TObjectPtr<USceneComponent> CommanderCameraSocket;
+
+	FQuat CommanderCameraSocketRestRotation = FQuat::Identity;
+	float CommanderViewYaw = 0.f;
+	bool bWarnedCommanderHeadingParameterMissing = false;
+
+	void ResolveCommanderCameraSocket();
 
 	// Resolved once at BeginPlay from CrewViewCaptureComponents - the name lookup is not worth
 	// repeating every frame.

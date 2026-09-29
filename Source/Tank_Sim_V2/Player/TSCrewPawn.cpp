@@ -535,6 +535,12 @@ void ATSCrewPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	{
 		EIC->BindAction(IA_SwitchCommanderStation, ETriggerEvent::Started, this, &ATSCrewPawn::Input_SwitchCommanderStation);
 	}
+	// Triggered only: it is a RATE applied while held, and the rotation it produced should stay where
+	// the player left it on release - nothing is latched that a Completed binding would need to clear.
+	if (IA_RotateCommanderView)
+	{
+		EIC->BindAction(IA_RotateCommanderView, ETriggerEvent::Triggered, this, &ATSCrewPawn::Input_RotateCommanderView);
+	}
 	if (IA_Secondary) EIC->BindAction(IA_Secondary, ETriggerEvent::Started, this, &ATSCrewPawn::Input_Secondary);
 	if (IA_Menu) EIC->BindAction(IA_Menu, ETriggerEvent::Started, this, &ATSCrewPawn::Input_Menu);
 
@@ -624,6 +630,35 @@ void ATSCrewPawn::Input_SwitchCommanderStation(const FInputActionValue& Value)
 	{
 		PC->ToggleCommanderStation();
 	}
+}
+
+void ATSCrewPawn::Input_RotateCommanderView(const FInputActionValue& Value)
+{
+	// A parked pawn never drives anything, and only the Commander owns this camera. A/D and the right
+	// stick mean other things (or nothing) in the other seats.
+	if (!bCrewPawnActive)
+	{
+		return;
+	}
+
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	const ATSTankPlayerState* PS = GetCrewPlayerState();
+	if (!PC || !PC->IsLocalController() || !PS || PS->GetCrewRole() != ETSCrewRole::Commander)
+	{
+		return;
+	}
+
+	ATSTankControllerBase* Tank = GetAssignedTankController();
+	const UWorld* World = GetWorld();
+	if (!Tank || !World)
+	{
+		return;
+	}
+
+	// Triggered fires every frame the axis is held, so scale by the frame time: the rate must not
+	// depend on frame rate (a 120Hz headset would otherwise turn it ~1.7x faster than a 72Hz one).
+	const float Axis = Value.Get<float>();
+	Tank->AddCommanderViewYaw(Axis * CommanderViewRotateSpeed * World->GetDeltaSeconds());
 }
 
 void ATSCrewPawn::UpdateCommanderScreenInteraction()

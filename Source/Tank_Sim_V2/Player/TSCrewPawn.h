@@ -134,6 +134,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0", ClampMax = "89.0"))
 	float MaxAimPitch = 25.f;
 
+	// --- Commander view rotation -----------------------------------------------------------------
+	// IA_RotateCommanderView (Axis1D: A/D and Left/Right on a keyboard, the right stick's X in VR)
+	// turns the tank's CommanderCameraSocket left and right at this rate, in degrees per second.
+	// Only the local Commander's input does anything - see ATSTankControllerBase::AddCommanderViewYaw.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input", meta = (ClampMin = "0.0"))
+	float CommanderViewRotateSpeed = 60.f;
+
 	// --- Gunner stick slew (VR) -----------------------------------------------------------------
 	// In VR the head aims and ApplySeatViewDelta deliberately does nothing, so a thumbstick would be
 	// inert. Rather than rotate the camera - which fights the tracked pose and is a reliable way to
@@ -377,6 +384,11 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
 	TObjectPtr<UInputAction> IA_SwitchCommanderStation;
 
+	// Commander: turn the periscope camera (CommanderCameraSocket) left/right. Axis1D, mapped in
+	// IMC_Commander: A/D and Left/Right on a keyboard, *_Right_Thumbstick_X / Vive trackpad X in VR.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
+	TObjectPtr<UInputAction> IA_RotateCommanderView;
+
 	// --- Manual (VR hand) driving: active only for the local Driver in ETSDriveControlMode::Manual.
 	// Triggers are the PEDALS (a seated VR player has no feet on anything); grips take the LEVERS.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
@@ -545,6 +557,7 @@ private:
 	void Input_Primary(const FInputActionValue& Value);
 	void Input_PrimaryReleased(const FInputActionValue& Value);
 	void Input_SwitchCommanderStation(const FInputActionValue& Value);
+	void Input_RotateCommanderView(const FInputActionValue& Value);
 
 	// Turns the screen pointer on for a local Commander at the SCREEN station and for a local Driver
 	// (their in-world panel) - the mouse pointer on a desktop, the hand laser
