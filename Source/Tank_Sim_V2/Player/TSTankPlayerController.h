@@ -454,6 +454,14 @@ public:
 private:
 	void LogVRInputHeartbeat(float DeltaTime);
 
+	// The crew pawns' Blueprint graphs add screen-space crew/role HUDs (UTSHUDWidgetBase) to the
+	// viewport on every assignment change and never remove the old ones. In a headset a viewport
+	// widget floats in front of the face, and on any machine the copies stack. Twice a second: keep
+	// only the newest of each class, and collapse them while this player is in VR (restored on desktop).
+	void UpdateScreenSpaceCrewHUDs();
+	float CrewHUDSweepTimer = 0.f;
+	TArray<TWeakObjectPtr<UUserWidget>> CrewHUDsHiddenForVR;
+
 	float VRInputLogTimer = 0.f;
 	bool bVRInputWasNonZero = false;
 

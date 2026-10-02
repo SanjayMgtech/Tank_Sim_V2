@@ -1976,6 +1976,76 @@ void ATSTankPlayerController::PlayerTick(float DeltaTime)
 	Super::PlayerTick(DeltaTime);
 	LogVRInputHeartbeat(DeltaTime);
 	UpdateVoiceTransmitState(DeltaTime);
+
+	CrewHUDSweepTimer -= DeltaTime;
+	if (CrewHUDSweepTimer <= 0.f)
+	{
+		CrewHUDSweepTimer = 0.5f;
+		UpdateScreenSpaceCrewHUDs();
+	}
+}
+
+void ATSTankPlayerController::UpdateScreenSpaceCrewHUDs()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	// Polled, not event-driven: the HUDs are created by Blueprint graphs bound to the same assignment
+	// delegate as everything else, in no guaranteed order, so a one-shot pass can run before they exist.
+	TArray<UUserWidget*> Found;
+	UWidgetBlueprintLibrary::GetAllWidgetsOfClass(this, Found, UTSHUDWidgetBase::StaticClass(), /*TopLevelOnly=*/true);
+
+	// Viewport widgets owned by this player only. A UWidgetComponent's widget (the in-tank Commander
+	// screen) is top-level too but never in the viewport, so it is left alone. The screen-space
+	// Commander screen has its own VR gate (RefreshCommanderScreen) and is skipped here.
+	TMap<UClass*, UUserWidget*> Newest;
+	TArray<UUserWidget*> Mine;
+	for (UUserWidget* W : Found)
+	{
+		if (!W || !W->IsInViewport() || W->GetOwningPlayer() != this || W->IsA<UTSCommanderScreenWidget>())
+		{
+			continue;
+		}
+		Mine.Add(W);
+		UUserWidget*& NewestOfClass = Newest.FindOrAdd(W->GetClass());
+		// Object serial order stands in for creation order: a later CreateWidget gets a higher index.
+		if (!NewestOfClass || W->GetUniqueID() > NewestOfClass->GetUniqueID())
+		{
+			NewestOfClass = W;
+		}
+	}
+
+	for (UUserWidget* W : Mine)
+	{
+		if (Newest.FindRef(W->GetClass()) != W)
+		{
+			W->RemoveFromParent();
+		}
+	}
+
+	const bool bHide = WillPlayInVR() && !IsMatchHost();
+	for (const TPair<UClass*, UUserWidget*>& Pair : Newest)
+	{
+		UUserWidget* W = Pair.Value;
+		if (bHide && W->GetVisibility() != ESlateVisibility::Collapsed)
+		{
+			W->SetVisibility(ESlateVisibility::Collapsed);
+			CrewHUDsHiddenForVR.AddUnique(W);
+		}
+	}
+	if (!bHide && CrewHUDsHiddenForVR.Num() > 0)
+	{
+		for (const TWeakObjectPtr<UUserWidget>& Weak : CrewHUDsHiddenForVR)
+		{
+			if (UUserWidget* W = Weak.Get())
+			{
+				W->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+			}
+		}
+		CrewHUDsHiddenForVR.Reset();
+	}
 }
 
 void ATSTankPlayerController::LogVRInputHeartbeat(float DeltaTime)
