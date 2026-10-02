@@ -303,6 +303,13 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank Simulation|Commander")
 	TObjectPtr<class UTSVRPointerComponent> MousePointer;
 
+	// Per-hand finger pose + fingertip poke. Active only on the local VR crew pawn (UpdateVRHands).
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<class UTSVRHandComponent> LeftHandInteraction;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<class UTSVRHandComponent> RightHandInteraction;
+
 	// --- Enhanced Input assets - assign in a Blueprint subclass or the C++ defaults (Section 12) ---
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Input")
@@ -461,6 +468,48 @@ protected:
 	// While a lever is held, draw the hand ON its handle rather than wherever the controller is.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
 	bool bSnapHandToHeldLever = true;
+
+	// --- VR HANDS: finger pose and fingertip poke (UTSVRHandComponent) ----------------------------
+	// Controller sensors that animate the hands, in VRHandsMappingContext. Every action there must be
+	// bConsumeInput=false: the same keys drive the pedals, the guns and the lever grips.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<UInputMappingContext> VRHandsMappingContext;
+
+	// Above every role context, so it sees the keys first and passes them on (it consumes nothing).
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	int32 VRHandsMappingPriority = 10;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<UInputAction> IA_HandGripLeft;          // Axis1D, grip axis -> lower three fingers
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<UInputAction> IA_HandGripRight;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<UInputAction> IA_HandTriggerLeft;       // Axis1D, trigger axis -> index curl
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<UInputAction> IA_HandTriggerRight;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<UInputAction> IA_HandTriggerTouchLeft;  // Bool, finger on the trigger (off = pointing)
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<UInputAction> IA_HandTriggerTouchRight;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<UInputAction> IA_HandThumbTouchLeft;    // Bool, thumb on stick/face buttons (off = thumb up)
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	TObjectPtr<UInputAction> IA_HandThumbTouchRight;
+
+	// Haptic tick when a fingertip presses a panel (uses LeverHapticEffect). 0 = none.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float PokeHapticScale = 0.3f;
+
+	// Optical hand tracking: a thumb-index pinch works the lever under that hand, like the grip does.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
+	bool bPinchGrabsLevers = true;
 
 	// --- Firing FEEDBACK ---------------------------------------------------------------------------
 	// Haptics on the Gunner's controllers when they fire. Played locally on the INPUT, so it is
@@ -663,6 +712,14 @@ private:
 	FVector LeftHandMeshRestRelative = FVector::ZeroVector;
 	FVector RightHandMeshRestRelative = FVector::ZeroVector;
 	bool bWarnedNoGraspVariable = false;
+
+	// VR hands: switched on/off with the pawn's VR crew state, fed with controller sensors each tick.
+	void UpdateVRHands();
+	void HandleHandPoke(bool bPressed, bool bLeft);
+	void HandleHandPinch(bool bPinching, bool bLeft);
+	bool bVRHandsActive = false;
+	bool bLeftGripDown = false;
+	bool bRightGripDown = false;
 
 	// The tank whose interior levers this pawn is currently overriding, so the override is released
 	// on the right tank even after a seat change.

@@ -25,6 +25,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "Core/TSGameMode.h"
+#include "UI/TSVRHandComponent.h"
 #include "Core/TSTypes.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -131,7 +132,7 @@ namespace
 	const TCHAR* VRPawnClassPath = TEXT("/Game/TankSimulation/Player/BP_TSVRPawn.BP_TSVRPawn_C");
 	const TCHAR* DesktopPawnClassPath = TEXT("/Game/TankSimulation/Player/BP_TSDesktopPawn.BP_TSDesktopPawn_C");
 
-	const TCHAR* ContextNames[] = { TEXT("IMC_Shared"), TEXT("IMC_Driver"), TEXT("IMC_Gunner"), TEXT("IMC_Commander"), TEXT("IMC_VR_Widget"), TEXT("IMC_HostVR") };
+	const TCHAR* ContextNames[] = { TEXT("IMC_Shared"), TEXT("IMC_Driver"), TEXT("IMC_Gunner"), TEXT("IMC_Commander"), TEXT("IMC_VR_Widget"), TEXT("IMC_HostVR"), TEXT("IMC_VR_Hands") };
 
 	UInputMappingContext* LoadContext(const TCHAR* Name)
 	{
@@ -742,6 +743,35 @@ bool FTSManualDrivingFeedbackTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("leaving Manual drops the lever override"), Access::LeverOverride(Tank));
 
 	Fx.TearDown();
+	return true;
+}
+
+// ------------------------------------------------------------------------------------------------
+// VR hands - fingertip poke depth and finger curl. Pure.
+// ------------------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTSVRHandMathsTest,
+	"TankSim.VR.Hands.Maths",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTSVRHandMathsTest::RunTest(const FString& Parameters)
+{
+	const FVector P(100.f, 0.f, 0.f);
+	const FVector N(1.f, 0.f, 0.f);
+
+	// Approaching from +X (side +1): in front is negative, through the plane positive.
+	TestEqual(TEXT("3cm in front of the panel is -3"), UTSVRHandComponent::ComputePokeDepth(FVector(103, 5, 5), P, N, 1.f), -3.f, 1e-4f);
+	TestEqual(TEXT("0.5cm past the panel is +0.5"), UTSVRHandComponent::ComputePokeDepth(FVector(99.5f, 5, 5), P, N, 1.f), 0.5f, 1e-4f);
+	// The same tip from the other face reads mirrored, so a panel presses from whichever side the finger came.
+	TestEqual(TEXT("approach from -X mirrors the sign"), UTSVRHandComponent::ComputePokeDepth(FVector(99.5f, 5, 5), P, N, -1.f), -0.5f, 1e-4f);
+	// Sliding along the panel does not change depth.
+	TestEqual(TEXT("lateral motion leaves depth unchanged"), UTSVRHandComponent::ComputePokeDepth(FVector(99.5f, 50, -20), P, N, 1.f), 0.5f, 1e-4f);
+
+	const FVector Base(0, 0, 0), Mid(5, 0, 0);
+	TestEqual(TEXT("straight finger has no curl"), UTSVRHandComponent::ComputeFingerCurl(Base, Mid, FVector(10, 0, 0)), 0.f, 1e-4f);
+	TestEqual(TEXT("90 degree bend is 0.6 curl"), UTSVRHandComponent::ComputeFingerCurl(Base, Mid, FVector(5, 0, -5)), 0.6f, 1e-3f);
+	TestEqual(TEXT("tip folded back is a full curl"), UTSVRHandComponent::ComputeFingerCurl(Base, Mid, FVector(0, 0, -1)), 1.f, 1e-4f);
+	TestEqual(TEXT("degenerate joints are no curl"), UTSVRHandComponent::ComputeFingerCurl(Base, Base, FVector(1, 0, 0)), 0.f, 1e-4f);
 	return true;
 }
 

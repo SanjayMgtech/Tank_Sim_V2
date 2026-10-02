@@ -3967,3 +3967,47 @@ Consequences worth knowing before building client-side features:
   PlayerState is relevant to everyone.
 - Legacy NetDriver only. The project does not enable Iris, which ignores `IsNetRelevantFor`. If
   Iris is ever turned on, this has to move to an Iris net-object filter.
+
+## ✋ VR hands: fingertip poke, finger poses, hand tracking (2026-10-01)
+`UTSVRHandComponent` (`UI/TSVRHandComponent.{h,cpp}`), one per hand on `ATSCrewPawn`
+(`LeftHandInteraction` / `RightHandInteraction`, Slate users 5/6), live only on the local VR crew pawn
+(`UpdateVRHands`, from `UpdateAimTickEnabled`).
+- **Poke:** the index fingertip presses any `UWidgetComponent` by passing through its plane (press at
+  0.4cm past, release 1.2cm back out, cooldown 0.15s). Custom hit source, same reason as
+  `UTSVRPointerComponent`. Haptic tick on press (`PokeHapticScale`). Coexists with the laser pointers -
+  no trigger needed, so it also works for a Manual-mode Driver. Tuned in a headset (2026-10-01):
+  - **Auto-point** within `AutoPointDistance` (10cm) in front of a panel. Requiring the player to lift
+    the finger off the trigger to point made it unusable - the log showed the fingertip at the panel
+    centre with `canPoke=0` every time.
+  - **Press only from the viewer's face**, armed only after the tip was in front. The driver panel sits
+    nearer the face than the resting hands, so hands rise from BEHIND it.
+  - **Press point pinned** where the finger crossed the plane (panel-local, so a moving tank carries
+    it). Fingers go 3-7cm through and drift; a click needs the release on the same button.
+  - **Fingertip dot** on the panel (reuses the lever marker sphere + glow), shrinks as you approach,
+    green on press, ATTACHED to the panel.
+  - `[VRHands]` log once a second per hand: pose source, sensors, nearest panel, depth, pressed.
+- **Do NOT enlarge the panels by scale.** 1.6x and 1.2x were both tried and reverted: the DriverPanel
+  fills the periscope screen frame exactly and overflowed it (edges clipped). Make the buttons
+  bigger INSIDE the widget instead. CommanderScreen is still small (10x6cm) - user wants it revisited.
+- ⚠ **While a controller is held, Meta's runtime still reports hand JOINTS** (a synthesised hand around
+  the controller - `XR_EXT_hand_tracking_data_source`), and it is a permanent fist. Trusting it made
+  both hands read grasp=1/point=0 all session. Optical hand tracking is used only after the controller
+  sensors have been idle `ControllerIdleSecondsForHandTracking` (2s).
+- **Pose:** drives `ABP_MannequinsXR` `PoseAlphaGrasp/IndexCurl/Point/ThumbUp` from grip axis, trigger
+  axis and the capacitive trigger/thumb touch sensors (`IA_Hand*Left/Right` in `IMC_VR_Hands`, priority
+  10, every action `bConsumeInput=false` because the same keys drive pedals, guns and lever grips).
+- **Optical hand tracking** (Quest 3, controllers down): read with `GetHandTrackingState`; finger curls
+  drive the pose, the real `IndexTip` joint drives the poke, and a thumb-index **pinch** works a lever
+  like the grip. Needs `OpenXRHandTracking` (enabled) and, over Link, *Developer Runtime Features* on in
+  the Meta Quest Link app. Pedals have no hand-tracking equivalent.
+- **Lever markers flickered while driving** because they were placed at the socket's world location
+  from the pawn's tick, which runs before the tank's physics/anim - a frame behind a moving tank. They
+  are now ATTACHED to the lever socket (`FindLeverGrabMesh`) and hidden while that hand's grip is
+  closed. Any world-positioned marker on a moving vehicle has the same trap: attach, don't place.
+- Test: `TankSim.VR.Hands.Maths` (poke depth, finger curl). **Confirmed working in the headset by the
+  user** for the Driver panel and the Commander screen. Still owed: optical hand tracking over Link.
+- VR Preview is Standalone (no host, no seat). To test a seat: open WarZone, VR Preview, then run
+  `TSPlayMode vr`, `TSTeam A`, `TSRole Driver|Gunner|Commander`, `TSStartMatch` in the PIE world.
+
+NOTE: the project was renamed - it is `VAGANAM.uproject`, targets `VAGANAMEditor` / `VAGANAM`, log
+`Saved/Logs/VAGANAM.log`. Commands above that name `Tank_Sim_V2.uproject` need that substitution.

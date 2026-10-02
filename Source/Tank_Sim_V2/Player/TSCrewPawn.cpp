@@ -20,6 +20,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Components/WidgetInteractionComponent.h"
 #include "UI/TSVRPointerComponent.h"
+#include "UI/TSVRHandComponent.h"
 #include "Player/TSTankPlayerController.h"
 #include "Player/TSTankPlayerState.h"
 #include "Net/UnrealNetwork.h"
@@ -69,6 +70,20 @@ ATSCrewPawn::ATSCrewPawn()
 	MousePointer->PointerIndex = 4;
 	MousePointer->bAutoActivate = false;
 	MousePointer->PrimaryComponentTick.bStartWithTickEnabled = false;
+
+	// Fingertip poke + finger pose, one per hand. Their own Slate users (5, 6): BP_TSVRPawn's laser
+	// pointers hold 1 and 2, WidgetInteraction 0, MousePointer 4.
+	LeftHandInteraction = CreateDefaultSubobject<UTSVRHandComponent>(TEXT("LeftHandInteraction"));
+	LeftHandInteraction->SetupAttachment(LeftHand);
+	LeftHandInteraction->bIsLeftHand = true;
+	LeftHandInteraction->VirtualUserIndex = 5;
+	LeftHandInteraction->PointerIndex = 5;
+
+	RightHandInteraction = CreateDefaultSubobject<UTSVRHandComponent>(TEXT("RightHandInteraction"));
+	RightHandInteraction->SetupAttachment(RightHand);
+	RightHandInteraction->bIsLeftHand = false;
+	RightHandInteraction->VirtualUserIndex = 6;
+	RightHandInteraction->PointerIndex = 6;
 }
 
 ATSTankPlayerController* ATSCrewPawn::GetTankController() const
@@ -997,24 +1012,28 @@ void ATSCrewPawn::Input_PedalBrakeReleased(const FInputActionValue& Value)
 // Outside Manual mode the grip has no lever to miss, so it is just a fist.
 void ATSCrewPawn::Input_LeverGripLeftPressed(const FInputActionValue& Value)
 {
+	bLeftGripDown = true;
 	const bool bGrabbed = TryGrabLever(true);
 	SetHandGrasp(true, (bGrabbed || !IsLocalManualDriver()) ? 1.f : LeverMissGraspAlpha);
 }
 
 void ATSCrewPawn::Input_LeverGripLeftReleased(const FInputActionValue& Value)
 {
+	bLeftGripDown = false;
 	ReleaseLever(true);
 	SetHandGrasp(true, 0.f);
 }
 
 void ATSCrewPawn::Input_LeverGripRightPressed(const FInputActionValue& Value)
 {
+	bRightGripDown = true;
 	const bool bGrabbed = TryGrabLever(false);
 	SetHandGrasp(false, (bGrabbed || !IsLocalManualDriver()) ? 1.f : LeverMissGraspAlpha);
 }
 
 void ATSCrewPawn::Input_LeverGripRightReleased(const FInputActionValue& Value)
 {
+	bRightGripDown = false;
 	ReleaseLever(false);
 	SetHandGrasp(false, 0.f);
 }
@@ -1193,6 +1212,13 @@ USkeletalMeshComponent* ATSCrewPawn::FindHandMesh(bool bLeft) const
 
 void ATSCrewPawn::SetHandGrasp(bool bLeft, float Alpha)
 {
+	// With the VR hands live, they own the pose every frame - hand them the override instead, or it
+	// would be overwritten on the next tick. 0 hands control back to the analog grip.
+	if (UTSVRHandComponent* HandComp = bLeft ? LeftHandInteraction.Get() : RightHandInteraction.Get())
+	{
+		HandComp->SetGraspOverride(Alpha > 0.f ? Alpha : -1.f);
+	}
+
 	USkeletalMeshComponent* HandMesh = FindHandMesh(bLeft);
 	UAnimInstance* Anim = HandMesh ? HandMesh->GetAnimInstance() : nullptr;
 	if (!Anim || HandGraspPoseVariable.IsNone())
@@ -1307,9 +1333,15 @@ void ATSCrewPawn::UpdateLeverFeedback()
 		}
 
 		// The handle marker. Created on first need, and only here - so only on the local manual
-		// Driver's machine, where this runs. Absolute transform: it follows the socket, not the pawn.
-		if (bHasGrab && LeverGrabIndicatorMesh)
+		// Driver's machine, where this runs.
+		//
+		// ATTACHED to the lever socket, never re-placed from here. This tick runs before the tank's
+		// physics and animation, so a marker set to the socket's world location trailed the moving
+		// tank by a frame and visibly flickered while driving. Attached, it renders with the bone.
+		USkeletalMeshComponent* GrabMesh = (bHasGrab && LeverGrabIndicatorMesh) ? Tank->FindLeverGrabMesh(bLeft) : nullptr;
+		if (GrabMesh)
 		{
+			const FName GrabSocket = bLeft ? Tank->LeftLeverGrabSocket : Tank->RightLeverGrabSocket;
 			if (!Indicator)
 			{
 				Indicator = NewObject<UStaticMeshComponent>(this, bLeft ? TEXT("LeftLeverIndicator") : TEXT("RightLeverIndicator"));
@@ -1317,10 +1349,8 @@ void ATSCrewPawn::UpdateLeverFeedback()
 				Indicator->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 				Indicator->SetGenerateOverlapEvents(false);
 				Indicator->SetCastShadow(false);
-				Indicator->SetUsingAbsoluteLocation(true);
-				Indicator->SetUsingAbsoluteRotation(true);
+				// Size is in cm whatever the bone's scale (the lever bones carry x100).
 				Indicator->SetUsingAbsoluteScale(true);
-				Indicator->SetupAttachment(GetRootComponent());
 				Indicator->RegisterComponent();
 				const float MeshSize = FMath::Max(static_cast<float>(LeverGrabIndicatorMesh->GetBounds().BoxExtent.GetMax()) * 2.f, 1.f);
 				Indicator->SetWorldScale3D(FVector(LeverGrabIndicatorSize / MeshSize));
@@ -1330,8 +1360,15 @@ void ATSCrewPawn::UpdateLeverFeedback()
 					Indicator->SetMaterial(0, IndicatorMID);
 				}
 			}
-			Indicator->SetWorldLocation(Grab);
-			Indicator->SetVisibility(!bHeld);
+			if (Indicator->GetAttachParent() != GrabMesh || Indicator->GetAttachSocketName() != GrabSocket)
+			{
+				Indicator->AttachToComponent(GrabMesh, FAttachmentTransformRules(EAttachmentRule::SnapToTarget,
+					EAttachmentRule::SnapToTarget, EAttachmentRule::KeepWorld, false), GrabSocket);
+			}
+			// Hidden while this lever is held, and while this hand's grip is closed at all: a ball left
+			// showing inside a fist that missed reads as "I am holding it" when the grab never took.
+			const bool bGripClosed = bLeft ? bLeftGripDown : bRightGripDown;
+			Indicator->SetVisibility(!bHeld && !bGripClosed);
 			if (IndicatorMID)
 			{
 				IndicatorMID->SetVectorParameterValue(LeverGrabIndicatorColorParameter,
@@ -1405,6 +1442,94 @@ void ATSCrewPawn::UpdateAimTickEnabled()
 
 	// Same trigger points (assignment change, possession, parking) decide the Commander screen pointer.
 	UpdateCommanderScreenInteraction();
+	UpdateVRHands();
+}
+
+void ATSCrewPawn::UpdateVRHands()
+{
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	const bool bWant = bCrewPawnActive && PC && PC->IsLocalController() && GetSupportedPlayMode() == ETSPlayMode::VR;
+	if (bWant == bVRHandsActive)
+	{
+		return;
+	}
+	bVRHandsActive = bWant;
+
+	struct FSide { UTSVRHandComponent* Hand; bool bLeft; };
+	for (const FSide& Side : { FSide{ LeftHandInteraction.Get(), true }, FSide{ RightHandInteraction.Get(), false } })
+	{
+		if (!Side.Hand)
+		{
+			continue;
+		}
+		if (bWant)
+		{
+			Side.Hand->SetInputActions(
+				Side.bLeft ? IA_HandGripLeft.Get() : IA_HandGripRight.Get(),
+				Side.bLeft ? IA_HandTriggerLeft.Get() : IA_HandTriggerRight.Get(),
+				Side.bLeft ? IA_HandTriggerTouchLeft.Get() : IA_HandTriggerTouchRight.Get(),
+				Side.bLeft ? IA_HandThumbTouchLeft.Get() : IA_HandThumbTouchRight.Get());
+			// The fingertip dot reuses the lever marker's sphere and glow material.
+			Side.Hand->SetCursorAssets(LeverGrabIndicatorMesh, LeverGrabIndicatorMaterial, LeverGrabIndicatorColorParameter);
+			if (!Side.Hand->OnPoke.IsBoundToObject(this))
+			{
+				Side.Hand->OnPoke.AddUObject(this, &ATSCrewPawn::HandleHandPoke, Side.bLeft);
+				Side.Hand->OnPinch.AddUObject(this, &ATSCrewPawn::HandleHandPinch, Side.bLeft);
+			}
+		}
+		else
+		{
+			// Never park a hand mid-press, or the button stays down.
+			Side.Hand->ResetHand();
+		}
+		Side.Hand->SetActive(bWant);
+		Side.Hand->SetComponentTickEnabled(bWant);
+	}
+
+	if (ULocalPlayer* LocalPlayer = PC ? PC->GetLocalPlayer() : nullptr)
+	{
+		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
+		{
+			if (VRHandsMappingContext)
+			{
+				Subsystem->RemoveMappingContext(VRHandsMappingContext);
+				if (bWant)
+				{
+					Subsystem->AddMappingContext(VRHandsMappingContext, VRHandsMappingPriority);
+				}
+			}
+		}
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("[VRHands] %s hands %s (pose context %s)"), *GetName(),
+		bWant ? TEXT("ON") : TEXT("OFF"), *GetNameSafe(VRHandsMappingContext));
+}
+
+void ATSCrewPawn::HandleHandPoke(bool bPressed, bool bLeft)
+{
+	if (bPressed)
+	{
+		PlayHaptic(LeverHapticEffect, bLeft ? EControllerHand::Left : EControllerHand::Right, PokeHapticScale);
+	}
+}
+
+void ATSCrewPawn::HandleHandPinch(bool bPinching, bool bLeft)
+{
+	// Optical hands have no grip button: a pinch is the grip. Same handlers, so reach, haptics and the
+	// lever pose behave identically.
+	if (!bPinchGrabsLevers || !IsLocalManualDriver())
+	{
+		return;
+	}
+	const FInputActionValue Value(bPinching);
+	if (bLeft)
+	{
+		bPinching ? Input_LeverGripLeftPressed(Value) : Input_LeverGripLeftReleased(Value);
+	}
+	else
+	{
+		bPinching ? Input_LeverGripRightPressed(Value) : Input_LeverGripRightReleased(Value);
+	}
 }
 
 void ATSCrewPawn::Tick(float DeltaSeconds)

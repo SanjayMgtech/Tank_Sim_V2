@@ -926,6 +926,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Interior|Manual Driving")
 	bool GetLeverGrabLocation(bool bLeft, FVector& OutLocation) const;
 
+	// The skeletal mesh carrying that lever's grab socket (or bone), or null. Lets a marker ATTACH to
+	// the socket and ride the animated bone instead of being re-placed every tick a frame behind.
+	class USkeletalMeshComponent* FindLeverGrabMesh(bool bLeft) const;
+
 	// LOCAL ONLY, never replicated. While active, each interior lever shows the pull of the hand
 	// holding it instead of the net steering, unsmoothed. Two reasons it cannot come from the
 	// replicated CurrentDriveInput: steering is right-minus-left, so pulling both levers equally

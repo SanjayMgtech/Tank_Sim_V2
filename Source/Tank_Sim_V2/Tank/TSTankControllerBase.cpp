@@ -1121,25 +1121,34 @@ FVector ATSTankControllerBase::GetInteriorLeverLocation(bool bLeft) const
 
 bool ATSTankControllerBase::GetLeverGrabLocation(bool bLeft, FVector& OutLocation) const
 {
+	if (const USkeletalMeshComponent* MeshComp = FindLeverGrabMesh(bLeft))
+	{
+		OutLocation = MeshComp->GetSocketLocation(bLeft ? LeftLeverGrabSocket : RightLeverGrabSocket);
+		return true;
+	}
+	return false;
+}
+
+USkeletalMeshComponent* ATSTankControllerBase::FindLeverGrabMesh(bool bLeft) const
+{
 	const FName GrabSocket = bLeft ? LeftLeverGrabSocket : RightLeverGrabSocket;
 	if (GrabSocket.IsNone())
 	{
-		return false;
+		return nullptr;
 	}
 
 	// Searched rather than naming the interior component: the lever lives on whichever skeletal mesh
 	// the rigger put it on, and GetSocketLocation accepts a bone name as readily as a socket.
 	TArray<USkeletalMeshComponent*> Meshes;
 	GetComponents<USkeletalMeshComponent>(Meshes);
-	for (const USkeletalMeshComponent* MeshComp : Meshes)
+	for (USkeletalMeshComponent* MeshComp : Meshes)
 	{
 		if (MeshComp && MeshComp->DoesSocketExist(GrabSocket))
 		{
-			OutLocation = MeshComp->GetSocketLocation(GrabSocket);
-			return true;
+			return MeshComp;
 		}
 	}
-	return false;
+	return nullptr;
 }
 
 FRotator ATSTankControllerBase::GetMainGunAimRotation() const
