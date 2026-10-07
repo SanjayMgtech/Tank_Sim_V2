@@ -100,6 +100,11 @@ void UTSVRHandComponent::ReadInputActions()
 
 USkeletalMeshComponent* UTSVRHandComponent::FindHandMesh() const
 {
+	if (USkeletalMeshComponent* Override = HandMeshOverride.Get())
+	{
+		return Override;
+	}
+
 	// The hand mesh is a sibling under the same motion controller (BP_MannequinsXR on BP_TSVRPawn).
 	const USceneComponent* Parent = GetAttachParent();
 	if (!Parent)
@@ -550,8 +555,11 @@ void UTSVRHandComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		Target.Grasp = FMath::Max(Target.Grasp, GraspOverride);
 		if (GraspOverride >= 0.99f)
 		{
-			Target.Point = 0.f;   // a held lever wraps the whole hand, index included
+			// A held lever wraps the whole hand into a fist: index curled and thumb folded over,
+			// whatever the capacitive sensors say about where the real fingers are resting.
+			Target.Point = 0.f;
 			Target.IndexCurl = 1.f;
+			Target.ThumbUp = 0.f;
 		}
 	}
 	ApplyPose(DeltaTime, Target);

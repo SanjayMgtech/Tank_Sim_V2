@@ -169,6 +169,27 @@ int32 UTSUISubsystem::RemoveMenuWidgets()
 	return RemovedCount;
 }
 
+TArray<UUserWidget*> UTSUISubsystem::GetMenuWidgetsInViewport() const
+{
+	TArray<UUserWidget*> Result;
+
+	for (TObjectIterator<UUserWidget> It; It; ++It)
+	{
+		UUserWidget* Widget = *It;
+		if (!IsValid(Widget) || Widget->HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
+		{
+			continue;
+		}
+
+		if (Widget->IsInViewport() && BelongsToThisGameInstance(Widget) && IsMenuWidget(Widget))
+		{
+			Result.Add(Widget);
+		}
+	}
+
+	return Result;
+}
+
 // --- UI presentation routing --------------------------------------------------------------------
 
 ETSUIPresentationMode UTSUISubsystem::GetPresentationMode() const

@@ -21,6 +21,8 @@ class UTSRoleDebugWidget;
 class UTSSessionSubsystem;
 class UTSUISubsystem;
 class UUserWidget;
+class UInputMappingContext;
+class UWidgetComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FTSOnRoleRequestResult, ETSCrewRole, RequestedRole, bool, bAccepted);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FTSOnPlayModeRequestResult, ETSPlayMode, RequestedMode, bool, bAccepted, ETSPlayModeDenial, Reason);
@@ -667,6 +669,57 @@ protected:
 	// The VR host pawn currently holding our panels. Weak: it is destroyed on a mode switch, and the
 	// panels have to be taken back from it before the desktop pawn puts them in the viewport.
 	TWeakObjectPtr<ATSHostVRPawn> MountedHostVRPawn;
+
+	// --- Main menu in VR --------------------------------------------------------------------------
+	// The menu's Login / Session Browser widgets are created by the crew pawn Blueprint and added to
+	// the viewport, which a headset cannot see. While this player's UI is world-space on the menu map
+	// (UTSUISubsystem::ShouldUseWorldSpaceUI - in VR, or forced for review), the menu widget on screen
+	// is moved onto a panel in front of the head: the SAME instance, so every button handler the
+	// Blueprint bound keeps working. It goes back to the viewport on returning to the flat screen.
+	// Switch with PlayModeToggleKey (F2), or the controller's Menu button while in VR.
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Menu", meta = (ClampMin = "50.0"))
+	float MenuVRPanelDistance = 170.f;
+
+	// Below eye level, cm, so the panel reads like a screen on a desk rather than a wall at eye height.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Menu")
+	float MenuVRPanelHeightOffset = -15.f;
+
+	// Render resolution of the panel. The menu widgets are authored for a 16:9 screen.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Menu")
+	FVector2D MenuVRPanelDrawSize = FVector2D(1920.f, 1080.f);
+
+	// Width of the panel in the world, cm.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Menu", meta = (ClampMin = "20.0"))
+	float MenuVRPanelWidth = 200.f;
+
+	// Applied while the panel is up so the right trigger clicks through the crew pawn's laser - the
+	// crew pawn itself does not apply it on the menu. Soft, loaded on first use (RULE 2).
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Menu")
+	TSoftObjectPtr<UInputMappingContext> MenuVRWidgetMappingContext =
+		TSoftObjectPtr<UInputMappingContext>(FSoftObjectPath(TEXT("/Game/TankSimulation/Input/Contexts/IMC_VR_Widget.IMC_VR_Widget")));
+
+public:
+	// True while a menu widget is being shown on the VR panel.
+	UFUNCTION(BlueprintPure, Category = "Tank Simulation|Menu")
+	bool IsMenuShownInVR() const { return MenuWidgetOnVRPanel.IsValid(); }
+
+private:
+	// Polled on a short timer: the menu Blueprint swaps widgets (Login -> Session Browser) on its own,
+	// and stereo is switched by the pawn a tick after the play mode changes, so neither has an event
+	// this controller could listen to.
+	void UpdateMenuVRPresentation();
+	void ShowMenuOnVRPanel(UUserWidget* Widget);
+	void ReturnMenuToViewport();
+	void PlaceMenuVRPanelInFrontOfHead();
+	void SetMenuVRInputApplied(bool bApplied);
+
+	UPROPERTY(Transient)
+	TObjectPtr<UWidgetComponent> MenuVRPanel;
+
+	TWeakObjectPtr<UUserWidget> MenuWidgetOnVRPanel;
+	bool bMenuVRInputApplied = false;
+	FTimerHandle MenuVRPresenterTimerHandle;
 
 private:
 	ATSTankPlayerState* GetTankPlayerState() const;

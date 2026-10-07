@@ -469,15 +469,43 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
 	bool bSnapHandToHeldLever = true;
 
+	// While a lever is held, the hand mesh is ATTACHED to the lever's grab socket in the pose it had
+	// when it grabbed, instead of following the controller - a hand closed round a lever cannot spin
+	// about it when the wrist twists. Attached rather than placed each tick: placing it from the pawn's
+	// tick fought the motion controller's late update and lagged the lever bone, and it flickered
+	// (the same trap as the lever markers). It still tilts with the lever as it is pulled.
+	// Needs bSnapHandToHeldLever.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	bool bLockHeldHandToLever = true;
+
+	// The bone of the hand mesh that is put ON the lever's grab point when it is grabbed - the centre
+	// of the closed fist. The MannequinsXR hands carry weapon_l / weapon_r for exactly this (where
+	// the VR template seats a held object). Lining up the controller instead left the handle a few
+	// cm off the palm, because the hand mesh is offset from its controller. Falls back to the old
+	// controller gap when the bone does not exist.
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	FName LeftHandGripBone = TEXT("weapon_l");
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|Manual Driving|Feedback")
+	FName RightHandGripBone = TEXT("weapon_r");
+
 	// --- VR HANDS: finger pose and fingertip poke (UTSVRHandComponent) ----------------------------
 	// Controller sensors that animate the hands, in VRHandsMappingContext. Every action there must be
 	// bConsumeInput=false: the same keys drive the pedals, the guns and the lever grips.
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
 	TObjectPtr<UInputMappingContext> VRHandsMappingContext;
 
-	// Above every role context, so it sees the keys first and passes them on (it consumes nothing).
+	// BELOW every gameplay context, never above. In a headset the context priority is not only an
+	// Enhanced Input ordering: UE hands it to the OpenXR runtime (XR_EXT_active_action_set_priority,
+	// see FOpenXRInput::SyncActions), and the runtime routes a physical button ONLY to the
+	// highest-priority active context that binds it - bConsumeInput=false means nothing at that level.
+	// At 10 this context took the grips and triggers from IMC_Driver (lever grips, pedals), the
+	// gunner's trigger and the panel click; the hands animated while every one of those was dead.
+	// At 0 it ties with IMC_Shared and loses to the role (1), VR (2) and widget (3) contexts, so a
+	// gameplay button always reaches gameplay; the pose only animates from sensors no gameplay action
+	// uses (and lever grabs close the hand from code anyway).
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
-	int32 VRHandsMappingPriority = 10;
+	int32 VRHandsMappingPriority = 0;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank Simulation|VR Hands")
 	TObjectPtr<UInputAction> IA_HandGripLeft;          // Axis1D, grip axis -> lower three fingers
@@ -711,6 +739,22 @@ private:
 	bool bRightHandSnapped = false;
 	FVector LeftHandMeshRestRelative = FVector::ZeroVector;
 	FVector RightHandMeshRestRelative = FVector::ZeroVector;
+	FRotator LeftHandMeshRestRotation = FRotator::ZeroRotator;
+	FRotator RightHandMeshRestRotation = FRotator::ZeroRotator;
+	// Where the hand mesh was attached before bLockHeldHandToLever moved it onto the lever socket, so
+	// release can put it back on its controller.
+	TWeakObjectPtr<USceneComponent> LeftHandMeshParent;
+	TWeakObjectPtr<USceneComponent> RightHandMeshParent;
+	FName LeftHandMeshParentSocket = NAME_None;
+	FName RightHandMeshParentSocket = NAME_None;
+
+	// The hand mesh while it is attached to a lever - FindHandMesh looks under the controller, where
+	// it no longer is.
+	TWeakObjectPtr<USkeletalMeshComponent> LeftHandMeshOnLever;
+	TWeakObjectPtr<USkeletalMeshComponent> RightHandMeshOnLever;
+
+	// Puts a hand mesh that was drawn on a held lever back on its controller, in its rest pose.
+	void RestoreHandMeshFromLever(bool bLeft, USkeletalMeshComponent* HandMesh);
 	bool bWarnedNoGraspVariable = false;
 
 	// VR hands: switched on/off with the pawn's VR crew state, fed with controller sensors each tick.

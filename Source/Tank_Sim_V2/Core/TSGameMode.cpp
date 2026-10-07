@@ -403,6 +403,18 @@ void ATSGameMode::HandleHeadsetConnected(APlayerController* Player)
 		return;
 	}
 
+	// Not on the main menu. Switching stereo on there takes the menu away from the mouse and keyboard
+	// the player is sitting at; they opt in with the play-mode key instead (F2), which moves the menu
+	// onto a VR panel (ATSTankPlayerController::UpdateMenuVRPresentation). The headset is still
+	// recorded on the PlayerState, so that request is allowed, and the automatic switch still happens
+	// on arrival in the gameplay map - travel gives the player a fresh PlayerState that reports again.
+	if (!CanSpawnTeamTanks())
+	{
+		UE_LOG(LogTankSim, Log, TEXT("ATSGameMode: '%s' has a headset - staying on the flat main menu (press the play-mode key to use it in VR)."),
+			*PS->GetPlayerName());
+		return;
+	}
+
 	if (!Player->GetPawn())
 	{
 		// Not restarted yet. A listen-server host reports from its controller's BeginPlay, which runs

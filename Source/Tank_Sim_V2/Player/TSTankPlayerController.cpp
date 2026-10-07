@@ -47,6 +47,8 @@ void ATSTankPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(HeadsetPollTimerHandle);
 	GetWorldTimerManager().ClearTimer(TimedVoiceTransmitHandle);
+	GetWorldTimerManager().ClearTimer(MenuVRPresenterTimerHandle);
+	SetMenuVRInputApplied(false);
 
 	// Close the microphone on the way out. A controller torn down mid-transmission would otherwise
 	// leave the local voice engine keyed, and on a seamless travel the same controller comes back.
@@ -908,6 +910,177 @@ bool ATSTankPlayerController::IsMountedOnHostVRPawn(const UUserWidget* Widget) c
 	return VRHost && VRHost->IsWidgetMounted(Widget);
 }
 
+// --- Main menu in VR ---------------------------------------------------------------------------------
+
+void ATSTankPlayerController::UpdateMenuVRPresentation()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	const UTSUISubsystem* UI = GetUISubsystem();
+	const bool bWorldMenu = UI && IsOnMenuMap() && UI->ShouldUseWorldSpaceUI() && GetPawn();
+	if (!bWorldMenu)
+	{
+		ReturnMenuToViewport();
+		return;
+	}
+
+	// The panel holds one widget, and the menu only ever shows one at a time. Should a second ever
+	// appear, the newest wins and the log says so rather than silently hiding the other.
+	const TArray<UUserWidget*> OnScreen = UI->GetMenuWidgetsInViewport();
+	if (OnScreen.Num() > 1)
+	{
+		UE_LOG(LogTankSim, Warning, TEXT("[MenuVR] %d menu widgets on screen - the VR panel shows only '%s'."),
+			OnScreen.Num(), *GetNameSafe(OnScreen.Last()));
+	}
+	if (OnScreen.Num() > 0)
+	{
+		ShowMenuOnVRPanel(OnScreen.Last());
+	}
+}
+
+void ATSTankPlayerController::ShowMenuOnVRPanel(UUserWidget* Widget)
+{
+	APawn* MenuPawn = GetPawn();
+	if (!Widget || !MenuPawn)
+	{
+		return;
+	}
+
+	// One panel per pawn. A new pawn (the player was restarted) gets a fresh one.
+	const bool bNewPanel = !MenuVRPanel || MenuVRPanel->GetOwner() != MenuPawn;
+	if (bNewPanel)
+	{
+		if (MenuVRPanel)
+		{
+			MenuVRPanel->DestroyComponent();
+		}
+
+		MenuVRPanel = NewObject<UWidgetComponent>(MenuPawn);
+		MenuVRPanel->SetWidgetSpace(EWidgetSpace::World);
+		MenuVRPanel->SetDrawAtDesiredSize(false);
+		MenuVRPanel->SetDrawSize(MenuVRPanelDrawSize);
+		MenuVRPanel->SetPivot(FVector2D(0.5f, 0.5f));
+		MenuVRPanel->SetTwoSided(true);
+		MenuVRPanel->SetCastShadow(false);
+		// The laser traces Visibility and only accepts widget components; a panel that does not block
+		// it is visible but dead.
+		MenuVRPanel->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		MenuVRPanel->SetCollisionResponseToAllChannels(ECR_Ignore);
+		MenuVRPanel->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+		MenuVRPanel->SetGenerateOverlapEvents(false);
+		// World-fixed where it was summoned, not head-locked: a panel welded to the head is the classic
+		// way to make people sick.
+		MenuVRPanel->SetUsingAbsoluteLocation(true);
+		MenuVRPanel->SetUsingAbsoluteRotation(true);
+		MenuVRPanel->SetUsingAbsoluteScale(true);
+		MenuVRPanel->SetupAttachment(MenuPawn->GetRootComponent());
+		MenuVRPanel->RegisterComponent();
+		MenuVRPanel->SetWorldScale3D(FVector(MenuVRPanelWidth / FMath::Max(1.f, MenuVRPanelDrawSize.X)));
+		MenuVRPanel->SetOwnerPlayer(GetLocalPlayer());
+	}
+
+	const bool bWasShowing = MenuWidgetOnVRPanel.IsValid();
+	if (MenuWidgetOnVRPanel.Get() == Widget && !bNewPanel)
+	{
+		return;
+	}
+
+	// A widget cannot be in the viewport and in a widget component at once.
+	if (Widget->IsInViewport())
+	{
+		Widget->RemoveFromParent();
+	}
+	MenuVRPanel->SetWidget(Widget);
+	MenuVRPanel->SetVisibility(true);
+	MenuWidgetOnVRPanel = Widget;
+
+	if (!bWasShowing || bNewPanel)
+	{
+		PlaceMenuVRPanelInFrontOfHead();
+		SetMenuVRInputApplied(true);
+		ApplyInputModeForLocalState();
+	}
+
+	UE_LOG(LogTankSim, Log, TEXT("[MenuVR] '%s' is on the VR panel."), *Widget->GetName());
+}
+
+void ATSTankPlayerController::ReturnMenuToViewport()
+{
+	if (!MenuWidgetOnVRPanel.IsValid() && !bMenuVRInputApplied)
+	{
+		return;
+	}
+
+	UUserWidget* Widget = MenuWidgetOnVRPanel.Get();
+	if (MenuVRPanel)
+	{
+		MenuVRPanel->SetWidget(nullptr);
+		MenuVRPanel->SetVisibility(false);
+	}
+	MenuWidgetOnVRPanel.Reset();
+
+	// Only back onto THIS map's screen - a widget left over from the menu must not follow the player
+	// into a gameplay map (UTSUISubsystem sweeps those anyway).
+	if (Widget && IsOnMenuMap() && !Widget->IsInViewport())
+	{
+		Widget->AddToViewport();
+		UE_LOG(LogTankSim, Log, TEXT("[MenuVR] '%s' is back on the flat screen."), *Widget->GetName());
+	}
+
+	SetMenuVRInputApplied(false);
+	ApplyInputModeForLocalState();
+}
+
+void ATSTankPlayerController::PlaceMenuVRPanelInFrontOfHead()
+{
+	if (!MenuVRPanel)
+	{
+		return;
+	}
+
+	// The view point already includes the head pose (the pawn's camera follows the HMD).
+	FVector HeadLocation;
+	FRotator HeadRotation;
+	GetPlayerViewPoint(HeadLocation, HeadRotation);
+
+	const FRotator Facing(0.f, HeadRotation.Yaw, 0.f);
+	const FVector Location = HeadLocation + Facing.Vector() * MenuVRPanelDistance + FVector(0.f, 0.f, MenuVRPanelHeightOffset);
+
+	// A widget component shows its front along its +X axis, so turn it back to face the head.
+	MenuVRPanel->SetWorldLocationAndRotation(Location, FRotator(0.f, Facing.Yaw + 180.f, 0.f));
+}
+
+void ATSTankPlayerController::SetMenuVRInputApplied(bool bApplied)
+{
+	if (bMenuVRInputApplied == bApplied)
+	{
+		return;
+	}
+
+	const ULocalPlayer* LP = GetLocalPlayer();
+	UEnhancedInputLocalPlayerSubsystem* Subsystem = LP ? LP->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>() : nullptr;
+	UInputMappingContext* Context = MenuVRWidgetMappingContext.LoadSynchronous();
+	if (!Subsystem || !Context)
+	{
+		bMenuVRInputApplied = false;
+		return;
+	}
+
+	// Priority 3, the same slot the crew pawn uses for widget clicks, so the trigger clicks the panel.
+	if (bApplied)
+	{
+		Subsystem->AddMappingContext(Context, 3);
+	}
+	else
+	{
+		Subsystem->RemoveMappingContext(Context);
+	}
+	bMenuVRInputApplied = bApplied;
+}
+
 void ATSTankPlayerController::RefreshHostPanelPlacement()
 {
 	if (!IsLocalController())
@@ -1083,6 +1256,13 @@ void ATSTankPlayerController::BeginPlay()
 		GetWorldTimerManager().SetTimer(HeadsetPollTimerHandle, this,
 			&ATSTankPlayerController::ReportLocalHeadsetState,
 			FMath::Max(1.f, HeadsetPollIntervalSeconds), true);
+
+		// Only the menu map has anything to present; on a gameplay map it would never find a widget.
+		if (IsOnMenuMap())
+		{
+			GetWorldTimerManager().SetTimer(MenuVRPresenterTimerHandle, this,
+				&ATSTankPlayerController::UpdateMenuVRPresentation, 0.2f, true);
+		}
 
 #if !UE_BUILD_SHIPPING
 		// TSAuto* URL options, for unattended listen-server testing. 1.5s, repeating: on a client the

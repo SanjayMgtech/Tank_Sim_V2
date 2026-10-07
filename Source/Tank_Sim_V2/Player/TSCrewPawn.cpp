@@ -25,6 +25,8 @@
 #include "Player/TSTankPlayerState.h"
 #include "Net/UnrealNetwork.h"
 #include "Player/TSVRModeLibrary.h"
+#include "UI/TSUISubsystem.h"
+#include "Engine/GameInstance.h"
 #include "Tank/TSTankControllerBase.h"
 #include "Tank/TSTankWeaponComponent.h"
 #include "Tank_Sim_V2.h"
@@ -738,6 +740,21 @@ void ATSCrewPawn::Input_Grab(const FInputActionValue& Value)
 
 void ATSCrewPawn::Input_Menu(const FInputActionValue& Value)
 {
+	// On the main menu in a headset, the Menu button is the way back to the flat screen - the player
+	// cannot see the keyboard's play-mode key from inside the headset. VR only: Escape is bound to the
+	// same action, and must not send a desktop player into VR.
+	if (UTSVRModeLibrary::IsVRModeActive())
+	{
+		const UGameInstance* GameInstance = GetGameInstance();
+		const UTSUISubsystem* UI = GameInstance ? GameInstance->GetSubsystem<UTSUISubsystem>() : nullptr;
+		ATSTankPlayerController* PC = Cast<ATSTankPlayerController>(GetController());
+		if (UI && UI->IsCurrentMapMenuMap() && PC && PC->IsLocalController())
+		{
+			PC->TogglePlayMode();
+			return;
+		}
+	}
+
 	OnMenuPressed();
 }
 
@@ -1195,6 +1212,12 @@ void ATSCrewPawn::ResetManualDriving()
 
 USkeletalMeshComponent* ATSCrewPawn::FindHandMesh(bool bLeft) const
 {
+	// Held on a lever: it has been re-attached to the lever socket, not under the controller.
+	if (USkeletalMeshComponent* OnLever = (bLeft ? LeftHandMeshOnLever : RightHandMeshOnLever).Get())
+	{
+		return OnLever;
+	}
+
 	const UMotionControllerComponent* Hand = bLeft ? LeftHand.Get() : RightHand.Get();
 	if (!Hand)
 	{
@@ -1315,20 +1338,61 @@ void ATSCrewPawn::UpdateLeverFeedback()
 		// carried along as the lever moves.
 		if (USkeletalMeshComponent* HandMesh = FindHandMesh(bLeft))
 		{
+			FRotator& RestRotation = bLeft ? LeftHandMeshRestRotation : RightHandMeshRestRotation;
+
 			if (bHeld && bHasGrab && bSnapHandToHeldLever)
 			{
+				USkeletalMeshComponent* LeverMesh = bLockHeldHandToLever ? Tank->FindLeverGrabMesh(bLeft) : nullptr;
+				const FTransform HandTransform = Hand->GetComponentTransform();
+
 				if (!bSnapped)
 				{
 					RestRelative = HandMesh->GetRelativeLocation();
+					RestRotation = HandMesh->GetRelativeRotation();
 					bSnapped = true;
+
+					// Shift onto the handle, keeping the orientation the hand had as it closed: the fist's
+					// grip bone goes exactly on the grab point...
+					const FName GripBone = bLeft ? LeftHandGripBone : RightHandGripBone;
+					if (!GripBone.IsNone() && HandMesh->DoesSocketExist(GripBone))
+					{
+						const FVector Correction = Grab - HandMesh->GetSocketLocation(GripBone);
+						HandMesh->SetWorldLocation(HandMesh->GetComponentLocation() + Correction);
+						UE_LOG(LogTankSim, Log, TEXT("[ManualDrive] %s hand seated on the lever: '%s' moved %.1f cm onto the grab point."),
+							bLeft ? TEXT("Left") : TEXT("Right"), *GripBone.ToString(), Correction.Size());
+					}
+					else
+					{
+						HandMesh->SetWorldLocation(HandTransform.TransformPosition(RestRelative) + (Grab - HandTransform.GetLocation()));
+					}
+
+					// ...and hand it to the lever: from here the lever bone carries it at render time,
+					// so nothing places it per tick and nothing can make it flicker.
+					if (LeverMesh)
+					{
+						(bLeft ? LeftHandMeshParent : RightHandMeshParent) = HandMesh->GetAttachParent();
+						(bLeft ? LeftHandMeshParentSocket : RightHandMeshParentSocket) = HandMesh->GetAttachSocketName();
+						HandMesh->AttachToComponent(LeverMesh, FAttachmentTransformRules::KeepWorldTransform,
+							bLeft ? Tank->LeftLeverGrabSocket : Tank->RightLeverGrabSocket);
+						(bLeft ? LeftHandMeshOnLever : RightHandMeshOnLever) = HandMesh;
+
+						// The pose component finds the hand under the controller; tell it where it went,
+						// or the fingers freeze mid-close for as long as the lever is held.
+						if (UTSVRHandComponent* HandComp = bLeft ? LeftHandInteraction.Get() : RightHandInteraction.Get())
+						{
+							HandComp->SetHandMeshOverride(HandMesh);
+						}
+					}
 				}
-				const FTransform HandTransform = Hand->GetComponentTransform();
-				HandMesh->SetWorldLocation(HandTransform.TransformPosition(RestRelative) + (Grab - HandTransform.GetLocation()));
+
+				if (!LeverMesh)
+				{
+					HandMesh->SetWorldLocation(HandTransform.TransformPosition(RestRelative) + (Grab - HandTransform.GetLocation()));
+				}
 			}
 			else if (bSnapped)
 			{
-				HandMesh->SetRelativeLocation(RestRelative);
-				bSnapped = false;
+				RestoreHandMeshFromLever(bLeft, HandMesh);
 			}
 		}
 
@@ -1382,6 +1446,30 @@ void ATSCrewPawn::UpdateLeverFeedback()
 	}
 }
 
+void ATSCrewPawn::RestoreHandMeshFromLever(bool bLeft, USkeletalMeshComponent* HandMesh)
+{
+	if (HandMesh)
+	{
+		// Back onto the controller it came from, if it was moved to the lever.
+		USceneComponent* Parent = (bLeft ? LeftHandMeshParent : RightHandMeshParent).Get();
+		if (Parent && HandMesh->GetAttachParent() != Parent)
+		{
+			HandMesh->AttachToComponent(Parent, FAttachmentTransformRules::KeepWorldTransform,
+				bLeft ? LeftHandMeshParentSocket : RightHandMeshParentSocket);
+		}
+		HandMesh->SetRelativeLocationAndRotation(bLeft ? LeftHandMeshRestRelative : RightHandMeshRestRelative,
+			bLeft ? LeftHandMeshRestRotation : RightHandMeshRestRotation);
+	}
+
+	(bLeft ? LeftHandMeshOnLever : RightHandMeshOnLever).Reset();
+	(bLeft ? LeftHandMeshParent : RightHandMeshParent).Reset();
+	if (UTSVRHandComponent* HandComp = bLeft ? LeftHandInteraction.Get() : RightHandInteraction.Get())
+	{
+		HandComp->SetHandMeshOverride(nullptr);
+	}
+	(bLeft ? bLeftHandSnapped : bRightHandSnapped) = false;
+}
+
 void ATSCrewPawn::ClearLeverFeedback()
 {
 	for (int32 Side = 0; Side < 2; ++Side)
@@ -1392,7 +1480,7 @@ void ATSCrewPawn::ClearLeverFeedback()
 		{
 			if (USkeletalMeshComponent* HandMesh = FindHandMesh(bLeft))
 			{
-				HandMesh->SetRelativeLocation(bLeft ? LeftHandMeshRestRelative : RightHandMeshRestRelative);
+				RestoreHandMeshFromLever(bLeft, HandMesh);
 			}
 			bSnapped = false;
 		}

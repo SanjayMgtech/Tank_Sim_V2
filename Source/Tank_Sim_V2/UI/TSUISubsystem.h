@@ -54,6 +54,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
 	int32 RemoveMenuWidgets();
 
+	// The menu widgets of this GameInstance that are currently in the viewport, identified by the same
+	// rule RemoveMenuWidgets uses. ATSTankPlayerController moves these onto a world-space panel while a
+	// player is in VR on the menu map.
+	UFUNCTION(BlueprintCallable, Category = "Tank Simulation|UI")
+	TArray<UUserWidget*> GetMenuWidgetsInViewport() const;
+
 	UFUNCTION(BlueprintPure, Category = "Tank Simulation|UI")
 	bool IsMenuMap(const FString& MapName) const;
 

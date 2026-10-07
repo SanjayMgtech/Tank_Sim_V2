@@ -34,6 +34,12 @@ public class Tank_Sim_V2 : ModuleRules
 		// this matches Epic's own EOSVoiceChat.Build.cs.
 		PrivateIncludePathModuleNames.AddRange(new string[] { "VoiceChat" });
 
+		// Editor builds only: Tests/TSEditorPlayCommands.cpp starts Play > VR Preview from the console.
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.Add("UnrealEd");
+		}
+
 		// To include OnlineSubsystemSteam, add it to the plugins section in your uproject file with the Enabled attribute set to true
 	}
 }

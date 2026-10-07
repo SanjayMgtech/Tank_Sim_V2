@@ -48,6 +48,10 @@ public:
 	// Forces the grasp alpha (a held lever closes the fist). Negative = no override.
 	void SetGraspOverride(float Alpha) { GraspOverride = Alpha; }
 
+	// The hand mesh to pose while it is NOT under this component's motion controller - the crew pawn
+	// re-attaches it to a held lever's socket. nullptr returns to the usual sibling lookup.
+	void SetHandMeshOverride(USkeletalMeshComponent* Mesh) { HandMeshOverride = Mesh; }
+
 	// Stops any press in progress and returns the hand to an open pose. Used when the hand is parked.
 	void ResetHand();
 
@@ -182,6 +186,8 @@ private:
 	bool bTriggerTouched = false;
 	bool bThumbTouched = false;
 	float GraspOverride = -1.f;
+
+	TWeakObjectPtr<USkeletalMeshComponent> HandMeshOverride;
 
 	FHandPose DrawnPose;
 

@@ -4011,3 +4011,44 @@ Consequences worth knowing before building client-side features:
 
 NOTE: the project was renamed - it is `VAGANAM.uproject`, targets `VAGANAMEditor` / `VAGANAM`, log
 `Saved/Logs/VAGANAM.log`. Commands above that name `Tank_Sim_V2.uproject` need that substitution.
+
+## 🥽 Main menu in VR — flat by default, F2 / left Y to switch (2026-10-07)
+Reported from a packaged build: "if VR is connected I can't control the main menus as it's switched to
+VR view". Cause: the MainMenu map runs `BP_TSGameMode`, the controller reports its headset, and
+`HandleHeadsetConnected` put the player into VR **on the menu** - stereo on, while the Login / Session
+Browser widgets (created by the crew pawn Blueprint, `AddToViewport`) stayed screen-space: invisible in
+the headset and unusable from the desk.
+
+- **No automatic VR on a menu map.** `HandleHeadsetConnected` returns early when `!CanSpawnTeamTanks()`.
+  The headset is still recorded on the PlayerState, so a request is allowed, and the automatic switch
+  still happens on the gameplay map (travel gives a fresh PlayerState that reports again).
+- **Switch:** `PlayModeToggleKey` (F2) on the keyboard; in the headset the Menu action (Quest left Y,
+  `IMC_Shared`) toggles back to Desktop - VR only, because Escape is bound to the same action.
+  The menu keeps the SAME pawn (`EnsureCrewPawnsFor` does nothing on a menu map); the pawn re-applies
+  stereo from the play mode. Do NOT swap pawns on the menu: the menu flow's delegates are bound to it.
+- **VR menu = the same widget on a panel.** `ATSTankPlayerController::UpdateMenuVRPresentation` (0.2s
+  timer, menu map only) moves whichever menu widget is in the viewport (`UTSUISubsystem::
+  GetMenuWidgetsInViewport`, same rule as the sweep) onto a runtime `UWidgetComponent` in front of the
+  head while `ShouldUseWorldSpaceUI()`, and back to the viewport when it is not. Same instance, so every
+  Blueprint button binding keeps working; a Login -> Session Browser swap is picked up by the poll.
+  While up it applies `IMC_VR_Widget` (priority 3) so the right trigger clicks via `PointerRight`;
+  fingertip poke works as on any widget component. Placement/size: `MenuVRPanel*` on the controller.
+- **Test without a headset:** set `UTSUISubsystem.PresentationOverride = ForceWorld` in PIE. Verified:
+  Login -> panel (cursor off), clicking Login on the panel moved the Session Browser onto it, None ->
+  back to the viewport (cursor on); `TankSim.*` 13/13. **Owed a headset test:** panel distance/size feel,
+  trigger click and poke on the menu, and F2 / left Y in a packaged build.
+
+## ⛔ VR hand-pose context starved the lever grips, pedals and trigger actions (2026-10-07)
+Headset report: "grip ain't working" (Manual Driver, VK1602). The log showed `grip=1.00 trig=1.00` in the
+`[VRHands]` lines - the pose context received every press - while no `[ManualDrive]` grip line and no
+throttle ever appeared. Cause: **a mapping context's priority is not only an Enhanced Input ordering.**
+UE passes it to the OpenXR runtime as `XR_EXT_active_action_set_priority` (`FOpenXRInput::SyncActions`),
+and the runtime routes a physical input ONLY to the highest-priority active context that binds it.
+`bConsumeInput = false` does not exist at that level. `VRHandsMappingPriority = 10` ("above every role
+context ... it consumes nothing") therefore took the grips and triggers away from `IMC_Driver` (lever
+grips, pedals), the Gunner's trigger and the panel click (`IMC_VR_Widget`).
+
+Fix: `VRHandsMappingPriority = 0` - ties with `IMC_Shared`, below role (1), VR (2) and widget (3). Rule:
+**a cosmetic/observer context must sit at or below every gameplay context that shares its keys.** The
+hand pose now animates only from inputs no gameplay action uses; lever grabs still close the hand from
+code. Owed a headset test.
