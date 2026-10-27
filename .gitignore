@@ -41,9 +41,7 @@
 *.VC.db
 *.VC.opendb
 
-# Precompiled Assets
-SourceArt/**/*.png
-SourceArt/**/*.tga
+
 
 # Binary Files
 Binaries/*
@@ -75,7 +73,6 @@ Plugins/**/Intermediate/*
 DerivedDataCache/*
 
 # unwanted textures
-Content/YI_TankCollection/Textures/Ignore/
 *.sqlite
 *.json
 /Plugins/Monolith
