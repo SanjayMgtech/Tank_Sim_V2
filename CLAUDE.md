@@ -4052,3 +4052,21 @@ Fix: `VRHandsMappingPriority = 0` - ties with `IMC_Shared`, below role (1), VR (
 **a cosmetic/observer context must sit at or below every gameplay context that shares its keys.** The
 hand pose now animates only from inputs no gameplay action uses; lever grabs still close the hand from
 code. Owed a headset test.
+
+## 🎨 VK1602 interior swapped to the baked texture set (2026-10-27)
+`Tank_SkeletalMesh` on `BP_VK1602Leopard_Controller_Chaos` now uses
+`/Game/YI_TankCollection/Mesh/WW2_VK1602Leopard_Interior_Baked/Tank_Interior_Baked` (from
+`Interior_Baked.zip`) instead of `.../WW2_VK1602Leopard_Interior/Tank_New`. **The old mesh is untouched -
+rolling back is that one component property.**
+
+- Imported on the EXISTING `Tank_New_Skeleton`, so `ABP_VK1602Leopard_Interior` and the skeleton sockets
+  `LeverHandle_L/R` and `b_UpperSocket` carry over. `b_UpperSocket` is a SOCKET, not a bone - the VK
+  EventGraph snaps `GunnerSeat` onto it at BeginPlay, so it must exist on whatever mesh this component uses.
+- Verified identical to the old mesh: all 9 bones (hierarchy and ref pose, 0.000cm / 0.00deg), bounds, the
+  three sockets, and the world transform of all 14 components riding the interior (6 on `b_Upper`).
+- Material slots keep the old order. The 5 baked parts use `MI_Interior_*` on `M_InteriorBaked`
+  (BaseColor, Normal, ORM = R AO / G roughness / B metallic). Every other slot keeps the old material -
+  **slot 5 `metal_black` is `M_Driver_View`, the driver's periscope screen. Keep it on any re-import.**
+- Runtime: the AnimBP poses the new mesh (levers sit at the animated rest, ~20deg off bind pose); GunnerSeat
+  0.00cm from `b_UpperSocket`; `TankSim.*` 13/13. Owed a headset look: overall brightness (if it reads too
+  dark, the BaseColor may already contain AO - drop the ORM.R -> AO link in `M_InteriorBaked`).
