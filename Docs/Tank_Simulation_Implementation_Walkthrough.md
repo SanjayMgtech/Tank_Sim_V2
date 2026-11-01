@@ -8,6 +8,13 @@
 > says about Path B is still correct. `ATSGameMode::GetTankForTeam` now returns `APawn*`.
 > See [VR_Crew_Delivery_Plan.md](VR_Crew_Delivery_Plan.md).
 
+> **STATUS (2026-11-01): this file predates most of the current feature set. `CLAUDE.md` is the maintained source of truth.**
+> Since this was written the project added: separate Desktop and VR crew pawns (`ATSCrewPawn` base, `ETSPlayMode`, host-assigned or `TSPlayMode` / F2);
+> a Stick/Levers drive-control switch (`ETSDriveControlMode`) with Manual VR-hand driving (pedals on the triggers, levers on the grips, hand seated on the lever handle);
+> a Commander screen (radar, hull/turret attitude dial, vision modes); a crew intercom and command-net voice router; team-private PlayerState replication;
+> the VR main-menu panel; and a VR host pawn. The project was renamed `VAGANAM` (`VAGANAM.uproject`, targets `VAGANAMEditor` / `VAGANAM`, log `Saved/Logs/VAGANAM.log`).
+> Read the matching `CLAUDE.md` section before relying on anything below that touches those areas.
+
 A step-by-step, do-this-then-this guide to turn the compiled C++ framework into a playable 3-crew
 VR tank match in the Editor. Everything here is Editor/Blueprint work — none of it can be done as a
 text file, which is why it wasn't done automatically.

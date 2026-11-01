@@ -3,6 +3,13 @@
 Replaces the ad-hoc PIE probe testing used so far. Written after the `SessionCreation` merge
 brought in host-as-admin, the UI subsystem and the VR/UI content.
 
+> **STATUS (2026-11-01):** 13 automation tests now run green with one call:
+> `editor_query run_automation_tests {"prefix": "TankSim"}` (editor open, no PIE, no headset).
+> `TankSim.Permissions.{Matrix,CrewOccupancy,CrossTankDenial}`, `TankSim.Flow.HostTeamRoleTankSeat`, `TankSim.Net.TeamPrivacy`,
+> `TankSim.Voice.{Routing,ChannelPolicy}` and `TankSim.VR.{InputBindings,Hands.Maths,ManualDriving.{Mapping,LeverPull,Pipeline,Feedback}}`.
+> They cannot prove audio, stereo, smoothness or how a hand feels: the lever hand seating, the VR menu panel and optical hand tracking are headset-only checks.
+> Every test fixture must destroy its world in TearDown. See `CLAUDE.md`, "Automated VR tests" and "Voice".
+
 ---
 
 ## 1. Why the old approach has to change

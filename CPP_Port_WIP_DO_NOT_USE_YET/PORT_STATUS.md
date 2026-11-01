@@ -1,5 +1,9 @@
 # C++ Tank Controller Port — Status (branch: cpp-tank-controller-port)
 
+> **SUPERSEDED (2026-11-01): this is a record of the parked attempt-1 branch (`cpp-tank-controller-port`); do not build from it.**
+> The port restarted using reparent-only phases and is documented in `CLAUDE.md` (Phases 0-18, the per-tank override table, and the function-port procedure).
+> The per-tank values captured below remain useful as recovery data.
+
 ## Confirmed root cause of the last attempt's data loss
 
 Reparenting a Blueprint from a BP-SCS parent (`BP_TankController_Chaos_C`)

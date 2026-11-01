@@ -4,6 +4,13 @@ Unreal Engine C++ architecture, Blueprint integration, networking, UI, VR and vo
 
 > **Goal:** establish a stable framework so three developers can work in parallel. C++ owns contracts, authority, networking and permissions; the existing Blueprint tank remains responsible for tank-specific animation, weapon and movement execution.
 
+> **STATUS (2026-11-01): this file predates most of the current feature set. `CLAUDE.md` is the maintained source of truth.**
+> Since this was written the project added: separate Desktop and VR crew pawns (`ATSCrewPawn` base, `ETSPlayMode`, host-assigned or `TSPlayMode` / F2);
+> a Stick/Levers drive-control switch (`ETSDriveControlMode`) with Manual VR-hand driving (pedals on the triggers, levers on the grips, hand seated on the lever handle);
+> a Commander screen (radar, hull/turret attitude dial, vision modes); a crew intercom and command-net voice router; team-private PlayerState replication;
+> the VR main-menu panel; and a VR host pawn. The project was renamed `VAGANAM` (`VAGANAM.uproject`, targets `VAGANAMEditor` / `VAGANAM`, log `Saved/Logs/VAGANAM.log`).
+> Read the matching `CLAUDE.md` section before relying on anything below that touches those areas.
+
 ## 1. System Scope
 
 A multiplayer VR tank simulation where a session can contain multiple teams. Each team owns one tank. Each tank has three crew roles: Driver, Gunner and Commander. All three players operate the same tank actor through role-specific permissions.

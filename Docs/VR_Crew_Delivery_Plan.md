@@ -7,6 +7,11 @@ parallel workstream**. Written against the actual repository state on branch
 Read `CLAUDE.md` first — it is the operating manual for the Blueprint→C++ port and several of
 its hard rules constrain this plan.
 
+> **STATUS (2026-11-01): this plan has been largely delivered; it is kept as the record of the reasoning, not as a to-do list.**
+> Delivered: Blocker A (`ATSTank` removed) and Blocker B (crew pawns, not one shared Pawn), crew seating, the Gunner aim path, VR input (OpenXR action sets), Desktop and VR pawns per player,
+> Manual hand driving with grabbable levers, world-space UI (fingertip poke, VR menu panel), and the voice router.
+> The V0-V5 gates and the developer split are historical. `CLAUDE.md` holds the current design and the faults found on the way.
+
 ---
 
 ## 0. Start here: most of the C++ framework already exists
