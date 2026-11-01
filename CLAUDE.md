@@ -3359,6 +3359,24 @@ change cannot strand the override on the old tank.
 Owed a headset: whether 15cm reach, the 4cm marker, and the haptic strengths feel right. All are
 `EditDefaultsOnly` on `BP_TSVRPawn` / the tank - tune in Class Defaults, no rebuild.
 
+## ✋ Held hand is SEATED on the lever and ATTACHED to it (2026-10-07)
+Driver "hand placement on grip". Confirmed working in the headset by the user.
+- On grab, the hand mesh's **grip bone** (`LeftHandGripBone` / `RightHandGripBone`, default `weapon_l` /
+  `weapon_r` - both exist on `SK_MannequinsXR`, checked) is moved ONTO the lever's grab socket, keeping
+  the orientation the hand had as it closed. Lining up the controller instead left the handle a few cm
+  off the palm, because the hand mesh is offset from its controller. No such bone -> falls back to the old
+  controller-gap shift, silently.
+- With `bLockHeldHandToLever` (default on) the mesh is then **attached** to the lever socket
+  (`KeepWorldTransform`), so the lever bone carries it at render time. Placing it per tick from the pawn
+  lagged the lever and flickered - the same trap as the lever markers (attach, don't place). Release
+  re-attaches it under its controller and restores its rest relative transform (`RestoreHandMeshFromLever`).
+- While attached the mesh is no longer under the motion controller, so `FindHandMesh` checks
+  `Left/RightHandMeshOnLever` first, and `UTSVRHandComponent::SetHandMeshOverride` tells the pose component
+  where it went - without it the fingers freeze mid-close for as long as the lever is held.
+- A held lever forces a full fist: `Point=0`, `IndexCurl=1`, `ThumbUp=0`, whatever the sensors say.
+- All three properties are `EditDefaultsOnly` on `BP_TSVRPawn` - tune without a rebuild.
+- Not covered by `TankSim.*`: a transient world has no hand meshes, so the seating path is headset-only.
+
 ## ⛔ VR Gunner turret SPUN - head aim from a turret-mounted seat is a feedback loop (2026-09-10)
 Headset report: "gunner have rotation problem ... it keeps on spinning". Structural, not a typo:
 `UpdateGunnerAim` traced along the HEAD's forward vector, and the Gunner's seat rides the turret.
